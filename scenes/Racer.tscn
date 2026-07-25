@@ -1,33 +1,33 @@
-[gd_scene load_steps=11 format=3 uid="uid://5vb3gdxlbtm6"]
+[gd_scene format=3 uid="uid://5vb3gdxlbtm6"]
 
 [ext_resource type="Script" uid="uid://b4v752x20q2a" path="res://scripts/racer/RacerController.cs" id="1_racer"]
 [ext_resource type="Script" uid="uid://cg4iv4x4j64ar" path="res://scripts/racer/CameraRig.cs" id="2_camrig"]
-[ext_resource type="Script" path="res://scripts/vehicles/Wheel.cs" id="3_wheel"]
-[ext_resource type="Script" path="res://scripts/vehicles/EngineSound.cs" id="4_engsnd"]
+[ext_resource type="Script" uid="uid://dte1buip8dpqa" path="res://scripts/vehicles/Wheel.cs" id="3_wheel"]
+[ext_resource type="Script" uid="uid://bke5e763sybcn" path="res://scripts/vehicles/EngineSound.cs" id="4_engsnd"]
 [ext_resource type="PackedScene" uid="uid://b5k5d1jhmtfb0" path="res://assets/CC96/Body/CC96_Body_3.fbx" id="5_body"]
 [ext_resource type="PackedScene" uid="uid://cexe13v0biii5" path="res://assets/CC96/Rims/Rims3_L.fbx" id="6_rimL"]
 [ext_resource type="PackedScene" uid="uid://cujx6ptlxd24w" path="res://assets/CC96/Rims/Rims3_R.fbx" id="7_rimR"]
 [ext_resource type="AudioStream" uid="uid://dio25xn4f7s6f" path="res://assets/gevp/sounds/4000.wav" id="8_engwav"]
 
-[sub_resource type="BoxShape3D" id="Shape_body"]
-size = Vector3(1.2, 0.5, 2.6)
-
 [sub_resource type="Curve" id="Curve_torque"]
 _data = [Vector2(0, 0.494505), 0.0, 2.04495, 0, 0, Vector2(0.617978, 1), 0.0, 0.0, 0, 0, Vector2(1, 0.692308), -1.4839, 0.0, 0, 0]
 point_count = 3
 
-[node name="Racer" type="RigidBody3D" node_paths=PackedStringArray("FrontLeftWheel", "FrontRightWheel", "RearLeftWheel", "RearRightWheel")]
+[sub_resource type="BoxShape3D" id="Shape_body"]
+size = Vector3(1.2, 0.5, 2.6)
+
+[node name="Racer" type="RigidBody3D" unique_id=1098173407 node_paths=PackedStringArray("FrontLeftWheel", "FrontRightWheel", "RearLeftWheel", "RearRightWheel")]
 can_sleep = false
 script = ExtResource("1_racer")
 FrontLeftWheel = NodePath("WheelFL")
 FrontRightWheel = NodePath("WheelFR")
 RearLeftWheel = NodePath("WheelRL")
 RearRightWheel = NodePath("WheelRR")
+StabilityYawGroundMultiplier = 6.0
 MaxTorque = 400.0
 TorqueCurve = SubResource("Curve_torque")
 VariableTorqueSplit = true
 FrontVariableSplit = 0.5
-StabilityYawGroundMultiplier = 6.0
 VehicleMass = 1200.0
 CenterOfGravityHeightOffset = -0.25
 FrontDampingRatio = 0.6
@@ -36,64 +36,63 @@ BrakingGripMultiplier = 2.0
 FrontTireRadius = 0.4
 RearTireRadius = 0.4
 
-[node name="BodyModel" parent="." instance=ExtResource("5_body")]
-transform = Transform3D(0.03701957, 0, -0.99931455, 0, 1, 0, 0.99931455, 0, 0.03701957, 0, 0, 0)
+[node name="BodyModel" parent="." unique_id=381378014 instance=ExtResource("5_body")]
+transform = Transform3D(-4.371139e-08, 0, 1, 0, 1, 0, -1, 0, -4.371139e-08, 0, 0.4, -0.1)
 
-[node name="Collision" type="CollisionShape3D" parent="."]
+[node name="Collision" type="CollisionShape3D" parent="." unique_id=1227752201]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.6, 0)
 shape = SubResource("Shape_body")
 
-[node name="WheelFL" type="RayCast3D" parent="." node_paths=PackedStringArray("WheelNode")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.65, 0.475, -1)
+[node name="WheelFL" type="RayCast3D" parent="." unique_id=1070422898 node_paths=PackedStringArray("WheelNode")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.65, 0.475, -1.1)
 script = ExtResource("3_wheel")
 WheelNode = NodePath("WheelFLHub")
 
-[node name="WheelFLHub" type="Node3D" parent="WheelFL"]
+[node name="WheelFLHub" type="Node3D" parent="WheelFL" unique_id=2005797641]
 
-[node name="RimFL" parent="WheelFL/WheelFLHub" instance=ExtResource("6_rimL")]
-transform = Transform3D(-0.13653028, 0, -0.9906359, 0, 1, 0, 0.9906359, 0, -0.13653028, -0.00021237135, -0.21125305, -0.09112406)
+[node name="RimFL" parent="WheelFL/WheelFLHub" unique_id=1344968929 instance=ExtResource("6_rimL")]
+transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 0, 0, 0)
 
-[node name="WheelFR" type="RayCast3D" parent="." node_paths=PackedStringArray("WheelNode")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.65, 0.475, -1)
+[node name="WheelFR" type="RayCast3D" parent="." unique_id=1918792808 node_paths=PackedStringArray("WheelNode")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.65, 0.475, -1.1)
 script = ExtResource("3_wheel")
 WheelNode = NodePath("WheelFRHub")
 
-[node name="WheelFRHub" type="Node3D" parent="WheelFR"]
+[node name="WheelFRHub" type="Node3D" parent="WheelFR" unique_id=792764335]
 
-[node name="RimFR" parent="WheelFR/WheelFRHub" instance=ExtResource("7_rimR")]
-transform = Transform3D(0.007044571, 0, 0.9999752, 0, 1, 0, -0.9999752, 0, 0.007044571, -0.025887847, -0.26947236, -0.13907683)
+[node name="RimFR" parent="WheelFR/WheelFRHub" unique_id=505105242 instance=ExtResource("7_rimR")]
+transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 0, 0, 0)
 
-[node name="WheelRL" type="RayCast3D" parent="." node_paths=PackedStringArray("WheelNode")]
+[node name="WheelRL" type="RayCast3D" parent="." unique_id=1855873150 node_paths=PackedStringArray("WheelNode")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.65, 0.5, 1)
 script = ExtResource("3_wheel")
 WheelNode = NodePath("WheelRLHub")
 
-[node name="WheelRLHub" type="Node3D" parent="WheelRL"]
+[node name="WheelRLHub" type="Node3D" parent="WheelRL" unique_id=2137350578]
 
-[node name="RimRL" parent="WheelRL/WheelRLHub" instance=ExtResource("6_rimL")]
-transform = Transform3D(0.11399737, 0, 0.99348104, 0, 1, 0, -0.99348104, 0, 0.11399737, 0, -0.18641523, 0.035337687)
+[node name="RimRL" parent="WheelRL/WheelRLHub" unique_id=1281835724 instance=ExtResource("6_rimL")]
+transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 0, 0, 0)
 
-[node name="WheelRR" type="RayCast3D" parent="." node_paths=PackedStringArray("WheelNode")]
+[node name="WheelRR" type="RayCast3D" parent="." unique_id=152667777 node_paths=PackedStringArray("WheelNode")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.65, 0.5, 1)
 script = ExtResource("3_wheel")
 WheelNode = NodePath("WheelRRHub")
 
-[node name="WheelRRHub" type="Node3D" parent="WheelRR"]
+[node name="WheelRRHub" type="Node3D" parent="WheelRR" unique_id=1439235055]
 
-[node name="RimRR" parent="WheelRR/WheelRRHub" instance=ExtResource("7_rimR")]
-transform = Transform3D(0.0331417, 0, 0.9994507, 0, 1, 0, -0.9994507, 0, 0.0331417, 0, -0.19258446, -0.07182562)
+[node name="RimRR" parent="WheelRR/WheelRRHub" unique_id=509893854 instance=ExtResource("7_rimR")]
+transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 0, 0, 0)
 
-[node name="CameraRig" type="Node3D" parent="."]
+[node name="CameraRig" type="Node3D" parent="." unique_id=1816146576]
 script = ExtResource("2_camrig")
 
-[node name="Camera" type="Camera3D" parent="CameraRig"]
-transform = Transform3D(1, 0, 0, 0, 0.93969262, -0.34202015, 0, 0.34202015, 0.93969262, 0, 3, 6.5)
+[node name="Camera" type="Camera3D" parent="CameraRig" unique_id=1119680447]
+transform = Transform3D(1, 0, 0, 0, 0.9659258, 0.25881904, 0, -0.25881904, 0.9659258, 0, 5, 6.5)
 
-[node name="EngineSound" type="AudioStreamPlayer3D" parent="." node_paths=PackedStringArray("VehicleNode")]
+[node name="EngineSound" type="AudioStreamPlayer3D" parent="." unique_id=732790596 node_paths=PackedStringArray("VehicleNode")]
 stream = ExtResource("8_engwav")
-autoplay = true
 unit_size = 12.0
 max_db = -6.0
+autoplay = true
 script = ExtResource("4_engsnd")
 VehicleNode = NodePath("..")
-SampleRpm = 4000.0
