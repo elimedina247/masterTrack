@@ -1,7 +1,9 @@
-[gd_scene load_steps=6 format=3 uid="uid://dtg0bykxtt0m1"]
+[gd_scene load_steps=8 format=3 uid="uid://dtg0bykxtt0m1"]
 
 [ext_resource type="PackedScene" uid="uid://c0master0tile0st" path="res://scenes/tiles/StraightTile.tscn" id="1_tile"]
-[ext_resource type="PackedScene" uid="uid://c0master0racer0" path="res://scenes/Racer.tscn" id="2_racer"]
+[ext_resource type="PackedScene" uid="uid://5vb3gdxlbtm6" path="res://scenes/Racer.tscn" id="2_racer"]
+[ext_resource type="Script" path="res://scripts/ui/VehicleHud.cs" id="3_hud"]
+[ext_resource type="Script" path="res://scripts/vehicles/VehicleDebugOverlay.cs" id="4_vdebug"]
 
 [sub_resource type="ProceduralSkyMaterial" id="Sky_mat"]
 
@@ -75,3 +77,28 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 10, 0.1, 40)
 [node name="TestCar" parent="." instance=ExtResource("2_racer")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.8, 0)
 OwnerPeerId = 1
+
+[node name="HUD" type="CanvasLayer" parent="."]
+
+[node name="VehicleHud" type="Control" parent="HUD" node_paths=PackedStringArray("VehicleNode")]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("3_hud")
+VehicleNode = NodePath("../../TestCar")
+
+[node name="VehicleDebug" type="Control" parent="HUD" node_paths=PackedStringArray("VehicleNode")]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("4_vdebug")
+VehicleNode = NodePath("../../TestCar")
+ShowDebug = true

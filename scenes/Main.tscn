@@ -84,6 +84,11 @@ unique_name_in_owner = true
 layout_mode = 2
 text = "Test Drive (Solo)"
 
+[node name="BuildButton" type="Button" parent="Center/Panel/Margin/VBox" unique_id=75371501]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Build Mode (Solo)"
+
 [node name="StartButton" type="Button" parent="Center/Panel/Margin/VBox" unique_id=1773049270]
 unique_name_in_owner = true
 layout_mode = 2

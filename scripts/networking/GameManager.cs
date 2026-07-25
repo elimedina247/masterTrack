@@ -43,9 +43,42 @@ public partial class GameManager : Node
     /// <summary>Which peer is the Track Master (0 = none yet). Valid on all peers once set.</summary>
     public int TrackMasterPeerId { get; private set; }
 
+    /// <summary>
+    /// Role to use when the game is launched without a session. Roles are normally handed out
+    /// by the server, but both sides of an asymmetric game need to be reachable on their own
+    /// for testing, so the main menu sets this before loading straight into the world.
+    /// </summary>
+    public PlayerRole SoloRole { get; set; } = PlayerRole.Racer;
+
     public override void _Ready()
     {
         Instance = this;
+        ApplyCommandLineRole();
+    }
+
+    /// <summary>
+    /// Let a solo launch pick its side from the command line, so either half of the game can
+    /// be opened straight from an editor run or a script:
+    /// <code>godot res://scenes/Game.tscn -- --role=trackmaster</code>
+    /// Ignored entirely once a real session assigns roles.
+    /// </summary>
+    private void ApplyCommandLineRole()
+    {
+        foreach (string arg in OS.GetCmdlineUserArgs())
+        {
+            if (!arg.StartsWith("--role=", System.StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            string value = arg["--role=".Length..];
+            if (value.Equals("trackmaster", System.StringComparison.OrdinalIgnoreCase))
+                SoloRole = PlayerRole.TrackMaster;
+            else if (value.Equals("racer", System.StringComparison.OrdinalIgnoreCase))
+                SoloRole = PlayerRole.Racer;
+            else
+                GD.PushWarning($"[GameManager] Unknown --role value '{value}'. Use trackmaster or racer.");
+
+            GD.Print($"[GameManager] Solo role set from command line: {SoloRole}.");
+        }
     }
 
     /// <summary>

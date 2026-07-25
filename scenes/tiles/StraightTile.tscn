@@ -19,7 +19,7 @@ size = Vector2(0.4, 10)
 [sub_resource type="BoxShape3D" id="Shape_road"]
 size = Vector3(10, 0.2, 10)
 
-[node name="StraightTile" type="StaticBody3D"]
+[node name="StraightTile" type="StaticBody3D" groups=["Road"]]
 
 [node name="Surface" type="MeshInstance3D" parent="."]
 mesh = SubResource("Mesh_road")

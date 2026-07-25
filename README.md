@@ -71,8 +71,28 @@ The whole game is networked. Architecture notes so we keep this in mind while bu
 ### Godot building blocks we're using
 - **`ENetMultiplayerPeer`** — host / join transport (see `NetworkManager`).
 - **`MultiplayerAPI` + `[Rpc]` methods** — client → server intent, server → client events.
-- **`MultiplayerSpawner`** — replicate tiles and racer cars as they're created.
+- **`MultiplayerSpawner`** — replicate racer cars as they're created.
 - **`MultiplayerSynchronizer`** — sync transforms / state on replicated nodes.
+
+Tiles are deliberately **not** replicated as nodes. The server broadcasts a confirmed
+placement (a catalog index), and every peer rebuilds the same tile from it — the track is
+fully determined by the list of placements, so nothing about the geometry goes over the wire
+and a client can't place a tile by lying about its shape.
+
+---
+
+## Driving
+
+The car runs on a C# port of
+[Godot-Easy-Vehicle-Physics](https://github.com/DAShoe1/Godot-Easy-Vehicle-Physics) — a
+ray-cast rigid body with real suspension, a brush tire model, a clutch and gearbox, and a
+stack of driver assists. Godot's built-in `VehicleBody3D` is no longer used anywhere.
+
+Full write-up, tuning guide and the deviations from upstream:
+**[`docs/vehicle-physics.md`](docs/vehicle-physics.md)**.
+
+Surfaces are read from **node groups** — every drivable collider must be in `Road`, `Dirt`,
+`Grass` or `Ice`, and it has to be that node's *first* group.
 
 ---
 
@@ -80,24 +100,49 @@ The whole game is networked. Architecture notes so we keep this in mind while bu
 
 ```
 master-track/
-├── project.godot            # autoloads + main scene registered here
-├── masterTrack.csproj        # .NET / C# project
+├── project.godot                 # autoloads, input map, 120 Hz physics
+├── masterTrack.csproj            # .NET / C# project
+├── docs/
+│   └── vehicle-physics.md        # the ported physics: how to tune it, what changed
+├── assets/
+│   ├── CC96/                     # car body + rim meshes
+│   └── gevp/                     # engine sample + upstream licence/attribution
 ├── scenes/
-│   └── Main.tscn            # entry point: host / join menu
-├── scripts/
-│   ├── networking/
-│   │   ├── NetworkManager.cs # autoload: host/join, peer lifecycle
-│   │   └── GameManager.cs    # autoload: roles, rounds, game state
-│   ├── tiles/
-│   │   ├── TileHazard.cs     # enum of hazard types
-│   │   ├── TileData.cs       # data for a single tile (hazard + shape)
-│   │   └── TrackTile.cs      # a placed tile node
-│   ├── trackmaster/
-│   │   └── TrackMasterController.cs
-│   ├── racer/
-│   │   └── RacerController.cs
-│   └── ui/
-│       └── MainMenu.cs       # host / join buttons
+│   ├── Main.tscn                 # entry point: host / join / solo menu
+│   ├── Game.tscn                 # the match: track, racers, board view, HUD
+│   ├── Racer.tscn                # the car: rigid body + 4 raycast wheels
+│   └── TestArea.tscn             # scratch area for driving
+└── scripts/
+    ├── networking/
+    │   ├── NetworkManager.cs     # autoload: host/join, peer lifecycle
+    │   └── GameManager.cs        # autoload: roles, rounds, game state
+    ├── vehicles/                 # the ported vehicle physics
+    │   ├── Vehicle.cs            # body, motor, clutch, gearbox, assists — all tuning
+    │   ├── Wheel.cs              # one raycast wheel: suspension, tires, ABS
+    │   ├── Axle.cs               # a pair of wheels + their differential
+    │   ├── VehicleInput.cs       # input as a value + the action map
+    │   ├── VehicleDebugOverlay.cs# the tuning overlay
+    │   ├── SurfaceGroups.cs      # Road / Dirt / Grass / Ice group names
+    │   └── EngineSound.cs, WheelSmoke.cs, VehicleInputController.cs
+    ├── tiles/
+    │   ├── TileHazard.cs         # enum of hazard types
+    │   ├── TileData.cs           # data for a single tile (hazard + exit turn)
+    │   ├── TileCatalog.cs        # every tile type + grid <-> world helpers
+    │   ├── TrackDirection.cs     # N/E/S/W and the turn maths
+    │   ├── TrackGrid.cs          # the track model: cells, order, placement rules
+    │   ├── TrackController.cs    # authoritative track + placement replication
+    │   └── TrackTile.cs          # a placed tile; builds its own geometry
+    ├── trackmaster/
+    │   └── TrackMasterController.cs # board camera, ghost preview, placement
+    ├── racer/
+    │   ├── RacerController.cs    # the car: ownership + hazard warnings
+    │   └── CameraRig.cs          # third-person chase camera with free-look
+    ├── game/
+    │   └── Game.cs               # wires up whichever half this machine is playing
+    └── ui/
+        ├── MainMenu.cs           # host / join / solo buttons
+        ├── TilePalette.cs        # the Track Master's tile tray
+        └── VehicleHud.cs         # speed / rpm / gear
 ```
 
 ---
@@ -106,11 +151,47 @@ master-track/
 
 Requires **Godot 4.7 (.NET / Mono build)** and the **.NET 8 SDK**.
 
-1. Open `master-track/project.godot` in Godot 4.7 (.NET).
+1. Open `project.godot` in Godot 4.7 (.NET).
 2. Build the C# solution (Godot will prompt / press **Build** top-right).
-3. Press **Play**. The Main scene lets you **Host** or **Join** (`127.0.0.1` for local tests).
-4. Run a second instance (Godot: **Debug → Run Multiple Instances → 2+**) to test
-   host + client locally.
+3. Press **Play**. The menu gives you four ways in:
+   - **Test Drive (Solo)** — drive the car on the starting straight.
+   - **Build Mode (Solo)** — the Track Master's board on its own, for working on the builder.
+   - **Host** / **Join** — a real match (`127.0.0.1` for local tests).
+4. For host + client locally, run a second instance
+   (Godot: **Debug → Run Multiple Instances → 2+**).
+
+You can also jump straight to either side from the command line:
+
+```bash
+godot --path . res://scenes/Game.tscn -- --role=trackmaster
+```
+
+---
+
+## Building the track
+
+The track is a single connected path on a 10 m grid. Tiles are only ever added at the
+**head** — the next open cell the racers are driving toward — which is what makes "place tiles
+ahead of the racers" the game rather than free-form building. The head cell is marked on the
+board with a yellow pad and an arrow showing which way the track is running.
+
+**To place a tile:** pick one from the tray along the bottom and release the mouse over the
+highlighted cell. Dragging a tile out of the tray and letting go over the board, or clicking
+the tile and then clicking the board, both work. The ghost preview is green where the tile can
+go and red where it can't, and the status line says why.
+
+| | |
+|---|---|
+| Pan the board | Arrow keys, or drag with the middle mouse button |
+| Zoom | Mouse wheel |
+| Cancel the held tile | Right click |
+
+Tiles live in `TileCatalog`. Adding a new one is a single entry there plus a case in
+`TrackTile.BuildHazard` — the tray, the ghost and the geometry all pick it up automatically.
+
+`HairpinTurn` and `LoopAhead` aren't in the catalog yet: a hairpin exits back into the cell the
+track arrived from, and a loop needs vertical geometry, so both need multi-cell tiles that the
+grid doesn't model.
 
 ---
 
@@ -118,10 +199,13 @@ Requires **Godot 4.7 (.NET / Mono build)** and the **.NET 8 SDK**.
 
 - [x] Project scaffold + multiplayer connection layer
 - [x] Role assignment (Track Master vs Racer)
-- [ ] Tile hand / dealing system for the Track Master
-- [ ] Live tile placement + server validation + replication
-- [ ] Racer car controller (third person) with server reconciliation
-- [ ] "3 tiles ahead" hazard notification system
-- [ ] Hazard behaviors (Jump, Loop, Hairpin, ...)
+- [x] Racer car controller (third person) on ray-cast vehicle physics
+- [x] Track grid + tile catalog + procedural tile geometry
+- [x] Track Master board view: tile tray, drag-and-drop placement, ghost preview
+- [x] Live tile placement + server validation + replication
+- [x] "3 tiles ahead" hazard notification system
+- [ ] Server reconciliation / transform sync so racers see each other move
+- [ ] Tile hand / dealing system (the Track Master currently has every tile available)
+- [ ] Multi-cell tiles, to unlock Hairpin and Loop
 - [ ] Win / lose conditions and round flow
 - [ ] Lobby UI, player names, spectating

@@ -17,6 +17,7 @@ public partial class MainMenu : Control
     private Button _hostButton = null!;
     private Button _joinButton = null!;
     private Button _soloButton = null!;
+    private Button _buildButton = null!;
     private Button _startButton = null!;
     private Label _statusLabel = null!;
 
@@ -27,12 +28,14 @@ public partial class MainMenu : Control
         _hostButton = GetNode<Button>("%HostButton");
         _joinButton = GetNode<Button>("%JoinButton");
         _soloButton = GetNode<Button>("%SoloButton");
+        _buildButton = GetNode<Button>("%BuildButton");
         _startButton = GetNode<Button>("%StartButton");
         _statusLabel = GetNode<Label>("%StatusLabel");
 
         _hostButton.Pressed += OnHostPressed;
         _joinButton.Pressed += OnJoinPressed;
         _soloButton.Pressed += OnSoloPressed;
+        _buildButton.Pressed += OnBuildPressed;
         _startButton.Pressed += OnStartPressed;
 
         _startButton.Hide();
@@ -84,6 +87,14 @@ public partial class MainMenu : Control
     private void OnSoloPressed()
     {
         // No peer created -> Game.tscn detects solo mode and spawns one local car.
+        GameManager.Instance.SoloRole = PlayerRole.Racer;
+        GetTree().ChangeSceneToFile(GameScenePath);
+    }
+
+    /// <summary>Jump straight to the Track Master's board, so the builder can be worked on alone.</summary>
+    private void OnBuildPressed()
+    {
+        GameManager.Instance.SoloRole = PlayerRole.TrackMaster;
         GetTree().ChangeSceneToFile(GameScenePath);
     }
 
@@ -147,6 +158,7 @@ public partial class MainMenu : Control
         _hostButton.Disabled = true;
         _joinButton.Disabled = true;
         _soloButton.Disabled = true;
+        _buildButton.Disabled = true;
     }
 
     private void UnlockLobbyButtons()
@@ -154,6 +166,7 @@ public partial class MainMenu : Control
         _hostButton.Disabled = false;
         _joinButton.Disabled = false;
         _soloButton.Disabled = false;
+        _buildButton.Disabled = false;
         _startButton.Hide();
     }
 }
