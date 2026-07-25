@@ -58,13 +58,4 @@ public sealed class Axle
             spin += wheel.Spin;
         return spin / Wheels.Count;
     }
-
-    /// <summary>Worst longitudinal slip on the axle — what traction control watches.</summary>
-    public float GetMaxWheelSlipY()
-    {
-        float slip = 0.0f;
-        foreach (Wheel wheel in Wheels)
-            slip = Mathf.Max(slip, wheel.SlipVector.Y);
-        return slip;
-    }
 }

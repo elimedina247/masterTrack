@@ -94,11 +94,14 @@ Start here:
   *derived* from these. Set them before touching anything else.
 - **`CenterOfGravityHeightOffset`** — the single biggest lever on how much the car rolls and
   how easily it spins.
-- **`MaxTorque` + `TorqueCurve`** — power. The curve's X axis is `rpm / MaxRpm`.
+- **`MaxDriveForce` + `DriveCurve`** — power. The curve's X axis is `speed / TopSpeed`, and
+  `MaxDriveForce / VehicleMass` is the launch acceleration in m/s². Move
+  `LongitudinalGripRatio["Road"]` with it: what sets the car's character is the ratio between
+  the two, not either on its own.
 - **`CoefficientOfFriction["Road"]`** — overall grip.
-- **`FrontTorqueSplit` / `VariableTorqueSplit`** — 0 is RWD, 1 is FWD. The racer ships as RWD
-  that blends toward AWD when it detects slip, which is the arcade-friendly setup.
-- **Assists** — `SteeringSlipAssist`, `CountersteerAssist`, `TractionControlMaxSlip`,
+- **`FrontTorqueSplit` / `VariableTorqueSplit`** — 0 is RWD, 1 is FWD. The racer ships as
+  plain RWD (`VariableTorqueSplit` is off); turn it on to blend toward AWD under slip.
+- **Assists** — `SteeringSlipAssist`, `CountersteerAssist`, `TractionControlMaxWheelSpin`,
   `EnableStability`. Turn these down for a car that bites, up for one that flatters.
 
 **Physics tick rate must stay at 120 Hz or higher** (`project.godot` sets it). The overlay

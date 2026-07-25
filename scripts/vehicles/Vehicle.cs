@@ -100,8 +100,23 @@ public partial class Vehicle : RigidBody3D
     /// <summary>Front:rear brake split. Negative means "work it out from the spring rates".</summary>
     [Export] public float FrontBrakeBias { get; set; } = -1.0f;
 
-    /// <summary>Traction control ceiling on longitudinal slip. Negative disables it.</summary>
-    [Export] public float TractionControlMaxSlip { get; set; } = 8.0f;
+    /// <summary>
+    /// How much faster than the road the driven wheels may spin before traction control
+    /// starts cutting drive force, in m/s at the contact patch. Negative disables it.
+    ///
+    /// This is measured the same way as <see cref="FrontAbsSpinDifferenceThreshold"/> — a
+    /// wheel-vs-road speed difference — rather than as a slip ratio. It used to be compared
+    /// against <c>SlipVector.Y</c>, which is negative under wheelspin and never exceeds 1.0,
+    /// so the old ceiling of 8.0 could not be reached and traction control never once ran.
+    /// </summary>
+    [Export] public float TractionControlMaxWheelSpin { get; set; } = 8.0f;
+
+    /// <summary>
+    /// Wheelspin past <see cref="TractionControlMaxWheelSpin"/> at which traction control
+    /// reaches a full cut, in m/s. The cut ramps across this range instead of switching on,
+    /// because slamming drive force to zero lurches the car exactly when it is least settled.
+    /// </summary>
+    [Export] public float TractionControlFadeRange { get; set; } = 6.0f;
 
     /// <summary>How long the front ABS holds the brake off, in seconds.</summary>
     [ExportSubgroup("Front Axle")]
@@ -349,14 +364,18 @@ public partial class Vehicle : RigidBody3D
     /// Longitudinal grip as a ratio of lateral grip. Splitting the two is what lets the car be
     /// loose sideways without being loose under power.
     ///
-    /// Road is 0.65, which is the fishtail window for this car. Against the rear axle's
+    /// Road is 0.85, which is the fishtail window for this car. Against the rear axle's
     /// capacity under load, <see cref="MaxDriveForce"/> lands at roughly:
     ///
     /// <code>
-    ///   0.50 -> 132%   permanent wheelspin, the car is on ice and never straightens
-    ///   0.65 -> 101%   breaks loose on power, hooks up as weight transfers  &lt;-- here
-    ///   0.80 ->  82%   always hooks up, the back end will not step out at all
+    ///   0.65 -> 130%   permanent wheelspin, the car is on ice and never straightens
+    ///   0.85 -> 100%   breaks loose on power, hooks up as weight transfers  &lt;-- here
+    ///   1.00 ->  85%   always hooks up, the back end will not step out at all
     /// </code>
+    ///
+    /// These are for the racer's 11000 N and 1200 kg. This number tracks
+    /// <see cref="MaxDriveForce"/>: the ratio above is what matters, not the value here, so
+    /// if you change the power, move this to match or the car changes character.
     ///
     /// Sitting right at the limit is what makes the slide throttle-controllable rather than
     /// either permanent or impossible. Note this changes cornering grip too, even though
@@ -366,7 +385,7 @@ public partial class Vehicle : RigidBody3D
     /// </summary>
     [Export] public Godot.Collections.Dictionary<string, float> LongitudinalGripRatio { get; set; } = new()
     {
-        { SurfaceGroups.Road, 0.65f }, { SurfaceGroups.Dirt, 0.5f },
+        { SurfaceGroups.Road, 0.85f }, { SurfaceGroups.Dirt, 0.5f },
         { SurfaceGroups.Grass, 0.5f }, { SurfaceGroups.Ice, 0.5f },
     };
 
@@ -456,6 +475,9 @@ public partial class Vehicle : RigidBody3D
     public float TrueTorqueSplit { get; private set; }
     public bool IsBraking { get; private set; }
     public bool TcsActive { get; private set; }
+
+    /// <summary>Fraction of drive force traction control is currently letting through, 0..1.</summary>
+    public float TcsFactor { get; private set; } = 1.0f;
     public bool StabilityActive { get; private set; }
     public float StabilityYawTorque { get; private set; }
     public Vector3 StabilityTorqueVector { get; private set; } = Vector3.Zero;
@@ -481,6 +503,18 @@ public partial class Vehicle : RigidBody3D
 
     /// <summary>Stops the forward/reverse swap flickering while the brake is held at a stop.</summary>
     private float _directionSwapCooldown;
+
+    /// <summary>
+    /// How much of the countersteer assist is currently being let through, 0..1. It ramps
+    /// down toward <c>1 - |SteeringInput|</c> while the assist is pulling against the
+    /// driver's input and back to 1 when it isn't, so committing to the wheel makes the
+    /// assist release rather than fight.
+    ///
+    /// <b>This has to persist between steps.</b> It was previously a local re-initialised to
+    /// 1.0 every frame, which meant a single <c>SteeringSpeed * delta</c> step was the most it
+    /// could ever move — 0.965 at 120 Hz — and the release never happened at all.
+    /// </summary>
+    private float _steerCorrectionAmount = 1.0f;
 
     public override void _Ready()
     {
@@ -819,15 +853,15 @@ public partial class Vehicle : RigidBody3D
         else
             steerCorrection /= -MaxSteeringAngle;
 
-        // Keeps the correction from latching on when it fights the driver's input.
-        float steerCorrectionAmount = 1.0f;
+        // Keeps the correction from latching on when it fights the driver's input. The floor
+        // is 1 - |SteeringInput|, so the harder the player commits the further it backs off.
         if (VehicleMath.SignF(steeringAdjust + steerCorrection) != VehicleMath.SignF(SteeringInput)
-            && 1.0f - Mathf.Abs(SteeringInput) < steerCorrectionAmount)
-            steerCorrectionAmount = Mathf.Clamp(steerCorrectionAmount - SteeringSpeed * delta, 0.0f, 1.0f);
+            && 1.0f - Mathf.Abs(SteeringInput) < _steerCorrectionAmount)
+            _steerCorrectionAmount = Mathf.Clamp(_steerCorrectionAmount - SteeringSpeed * delta, 0.0f, 1.0f);
         else
-            steerCorrectionAmount = Mathf.Clamp(steerCorrectionAmount + SteeringSpeed * delta, 0.0f, 1.0f);
+            _steerCorrectionAmount = Mathf.Clamp(_steerCorrectionAmount + SteeringSpeed * delta, 0.0f, 1.0f);
 
-        steerCorrection *= steerCorrectionAmount;
+        steerCorrection *= _steerCorrectionAmount;
 
         TrueSteeringAmount = Mathf.Clamp(steeringAdjust + steerCorrection,
                                          -MaxSteeringAngle, MaxSteeringAngle);
@@ -908,19 +942,25 @@ public partial class Vehicle : RigidBody3D
 
         DriveForce = MaxDriveForce * Mathf.Max(available, 0.0f) * ThrottleAmount;
 
-        // Traction control: cut drive when the wheels are spinning far past the road speed.
-        if (TractionControlMaxSlip > 0.0f)
+        // Traction control: fade drive out as the driven wheels overrun the road speed.
+        // SpinVelocityDiff is signed by the wheel's direction of rotation, so multiplying by
+        // CurrentGear makes "spinning faster than the road" positive whichever way we're going.
+        if (TractionControlMaxWheelSpin > 0.0f)
         {
-            float slipY = 0.0f;
-            foreach (Axle axle in Axles)
-                slipY = Mathf.Max(slipY, axle.GetMaxWheelSlipY());
+            float wheelSpin = 0.0f;
+            foreach (Wheel wheel in DriveWheels)
+                wheelSpin = Mathf.Max(wheelSpin, wheel.SpinVelocityDiff * CurrentGear);
 
-            TcsActive = slipY > TractionControlMaxSlip;
-            if (TcsActive)
-                DriveForce = 0.0f;
+            float excess = wheelSpin - TractionControlMaxWheelSpin;
+            TcsFactor = excess <= 0.0f
+                ? 1.0f
+                : Mathf.Clamp(1.0f - excess / Mathf.Max(TractionControlFadeRange, 0.001f), 0.0f, 1.0f);
+            TcsActive = TcsFactor < 1.0f;
+            DriveForce *= TcsFactor;
         }
         else
         {
+            TcsFactor = 1.0f;
             TcsActive = false;
         }
 
