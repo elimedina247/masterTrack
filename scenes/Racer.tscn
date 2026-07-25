@@ -9,6 +9,9 @@
 [ext_resource type="PackedScene" uid="uid://cujx6ptlxd24w" path="res://assets/CC96/Rims/Rims3_R.fbx" id="7_rimR"]
 [ext_resource type="AudioStream" uid="uid://dio25xn4f7s6f" path="res://assets/gevp/sounds/4000.wav" id="8_engwav"]
 [ext_resource type="Script" uid="uid://kf2ch72spgs" path="res://scripts/vehicles/BodyLean.cs" id="9_bodylean"]
+[ext_resource type="Script" uid="uid://cej0x1p4uf7vb" path="res://scripts/vehicles/SkidMarks.cs" id="10_skid"]
+[ext_resource type="Script" uid="uid://mqs22yxgh46g" path="res://scripts/vehicles/TireSqueal.cs" id="11_squeal"]
+[ext_resource type="AudioStream" uid="uid://dgdniy4n8opr4" path="res://assets/gevp/sounds/tires_squal_loop.wav" id="12_squealwav"]
 
 [sub_resource type="Curve" id="Curve_drive"]
 _data = [Vector2(0, 1), 0.0, 0.0, 0, 0, Vector2(0.55, 0.9), 0.0, 0.0, 0, 0, Vector2(0.85, 0.45), -1.6, -1.6, 0, 0, Vector2(1, 0), -2.4, 0.0, 0, 0]
@@ -49,7 +52,7 @@ VehicleNode = NodePath("..")
 transform = Transform3D(-4.371139e-08, 0, 1, 0, 1, 0, -1, 0, -4.371139e-08, 0, 0.2, -0.1)
 
 [node name="Collision" type="CollisionShape3D" parent="." unique_id=1227752201]
-transform = Transform3D(1.1, 0, 0, 0, 1.1, 0, 0, 0, 1.1, 0, 0.4, 0)
+transform = Transform3D(1.1, 0, 0, 0, 1.1, 0, 0, 0, 1.1, 0, 0.5, 0)
 shape = SubResource("Shape_body")
 
 [node name="WheelFL" type="RayCast3D" parent="." unique_id=1070422898 node_paths=PackedStringArray("WheelNode")]
@@ -92,11 +95,21 @@ WheelNode = NodePath("WheelRRHub")
 [node name="RimRR" parent="WheelRR/WheelRRHub" unique_id=509893854 instance=ExtResource("7_rimR")]
 transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 0, 0, 0)
 
+[node name="SkidMarks" type="MeshInstance3D" parent="." unique_id=1471203588 node_paths=PackedStringArray("VehicleNode")]
+script = ExtResource("10_skid")
+VehicleNode = NodePath("..")
+
 [node name="CameraRig" type="Node3D" parent="." unique_id=1816146576]
 script = ExtResource("2_camrig")
 
 [node name="Camera" type="Camera3D" parent="CameraRig" unique_id=1119680447]
 transform = Transform3D(1, 0, 0, 0, 0.9659258, 0.25881904, 0, -0.25881904, 0.9659258, 0, 5, 6.5)
+
+[node name="TireSqueal" type="AudioStreamPlayer3D" parent="." unique_id=1904557311 node_paths=PackedStringArray("VehicleNode")]
+stream = ExtResource("12_squealwav")
+max_db = -3.0
+script = ExtResource("11_squeal")
+VehicleNode = NodePath("..")
 
 [node name="EngineSound" type="AudioStreamPlayer3D" parent="." unique_id=732790596 node_paths=PackedStringArray("VehicleNode")]
 stream = ExtResource("8_engwav")
