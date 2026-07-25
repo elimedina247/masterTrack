@@ -14,14 +14,18 @@ using Godot;
 namespace MasterTrack.Vehicles;
 
 /// <summary>
-/// A ray-cast rigid-body vehicle: suspension, brush-model tires, a motor with a torque
-/// curve, a clutch, a gearbox and a pile of driver assists. The body is a plain
-/// <see cref="RigidBody3D"/> — all the forces come from the four <see cref="Wheel"/>
-/// ray casts, which must be direct children of this node.
+/// A ray-cast rigid-body vehicle: suspension, brush-model tires, a speed-curve powertrain and
+/// a pile of driver assists. The body is a plain <see cref="RigidBody3D"/> — all the forces
+/// come from the four <see cref="Wheel"/> ray casts, which must be direct children of this node.
+///
+/// <b>There is no gearbox.</b> The source project's motor, clutch and transmission have been
+/// replaced by a single <see cref="DriveCurve"/> of force against road speed, which is how
+/// arcade racers usually do it — see docs/vehicle-physics.md. Drive torque still flows through
+/// the wheels rather than being applied to the body, so wheelspin and power-oversteer survive.
 ///
 /// Drive it by writing to <see cref="ThrottleInput"/>, <see cref="SteeringInput"/>,
-/// <see cref="BrakeInput"/>, <see cref="HandbrakeInput"/> and <see cref="ClutchInput"/>
-/// each physics step — see <see cref="VehicleInput"/> for the keyboard/pad sampler.
+/// <see cref="BrakeInput"/> and <see cref="HandbrakeInput"/> each physics step — see
+/// <see cref="VehicleInput"/> for the keyboard/pad sampler.
 ///
 /// Surfaces are identified by the *first node group* on whatever a wheel's ray cast hits,
 /// looked up in the tire dictionaries below. Road bodies therefore need to be in a "Road"
@@ -133,58 +137,52 @@ public partial class Vehicle : RigidBody3D
     /// <summary>Damping on rotation while airborne.</summary>
     [Export] public float StabilityUprightDamping { get; set; } = 1000.0f;
 
-    // ---------------------------------------------------------------- Motor
-
-    /// <summary>Peak motor torque in Nm.</summary>
-    [ExportGroup("Motor")]
-    [Export] public float MaxTorque { get; set; } = 300.0f;
-
-    [Export] public float MaxRpm { get; set; } = 7000.0f;
-    [Export] public float IdleRpm { get; set; } = 1000.0f;
-
-    /// <summary>Fraction of <see cref="MaxTorque"/> produced across the RPM range (X = rpm/max).</summary>
-    [Export] public Curve? TorqueCurve { get; set; }
-
-    /// <summary>Motor drag that scales with RPM.</summary>
-    [Export] public float MotorDrag { get; set; } = 0.005f;
+    // ---------------------------------------------------------------- Powertrain
 
     /// <summary>
-    /// Constant motor drag.
-    /// <b>Inert:</b> exposed upstream but never read by the physics — only the RPM-scaled
-    /// <see cref="MotorDrag"/> is applied. Left in for parity.
+    /// Drive force at the contact patch when <see cref="DriveCurve"/> reads 1.0, in newtons.
+    /// Divide by <see cref="VehicleMass"/> for the resulting acceleration in m/s².
     /// </summary>
-    [Export] public float MotorBrake { get; set; } = 10.0f;
+    [ExportGroup("Powertrain")]
+    [Export] public float MaxDriveForce { get; set; } = 12000.0f;
 
-    [Export] public float MotorMoment { get; set; } = 0.5f;
-
-    /// <summary>RPM the motor holds while launching from a stop.</summary>
-    [Export] public float ClutchOutRpm { get; set; } = 3000.0f;
-
-    /// <summary>Peak clutch torque as a ratio of <see cref="MaxTorque"/>.</summary>
-    [Export] public float MaxClutchTorqueRatio { get; set; } = 1.6f;
-
-    // ---------------------------------------------------------------- Gearbox
-
-    /// <summary>Forward gear ratios; the array length is the number of gears.</summary>
-    [ExportGroup("Gearbox")]
-    [Export] public float[] GearRatios { get; set; } = { 3.8f, 2.3f, 1.7f, 1.3f, 1.0f, 0.8f };
-
-    [Export] public float FinalDrive { get; set; } = 3.2f;
-    [Export] public float ReverseRatio { get; set; } = 3.3f;
-
-    /// <summary>Seconds an upshift takes.</summary>
-    [Export] public float ShiftTime { get; set; } = 0.3f;
-
-    [Export] public bool AutomaticTransmission { get; set; } = true;
+    /// <summary>Speed in m/s the drive curve is measured against. Multiply by 3.6 for km/h.</summary>
+    [Export] public float TopSpeed { get; set; } = 200.0f;
 
     /// <summary>
-    /// Minimum gap between automatic shifts, in milliseconds.
-    /// <b>Inert:</b> exposed upstream but never read — the automatic gearbox spaces shifts by
-    /// <see cref="ShiftTime"/> instead. Left in for parity.
+    /// Fraction of <see cref="MaxDriveForce"/> available across the speed range, where X is
+    /// <c>speed / TopSpeed</c>. This one curve replaces the motor, clutch and gearbox.
+    ///
+    /// A real drivetrain shapes force against speed via gearing; here that shape is authored
+    /// directly. Neither a flat force nor a linear ramp works on its own — flat force plus aero
+    /// drag can give punch or a sane top speed but not both, and a linear ramp bleeds away so
+    /// early the car feels like it gives up. A curve that holds near full force through the
+    /// midrange and then falls off is what reads as "fast" while still capping out.
+    ///
+    /// Ending at 0.0 makes <see cref="TopSpeed"/> a real ceiling rather than an asymptote.
     /// </summary>
-    [Export] public float AutomaticTimeBetweenShifts { get; set; } = 1000.0f;
+    [Export] public Curve? DriveCurve { get; set; }
 
-    [Export] public float GearInertia { get; set; } = 0.02f;
+    /// <summary>Top speed in reverse, in m/s.</summary>
+    [Export] public float ReverseTopSpeed { get; set; } = 25.0f;
+
+    /// <summary>Drive force in reverse, as a fraction of <see cref="MaxDriveForce"/>.</summary>
+    [Export] public float ReverseForceRatio { get; set; } = 0.45f;
+
+    /// <summary>
+    /// Rotational inertia the drive wheels are fighting, standing in for the motor and gearbox
+    /// that used to supply it. Higher resists wheelspin; lower lets the tires light up sooner.
+    ///
+    /// The old gearbox made this vary with the gear — inertia scales with the square of the
+    /// ratio, so it ran about 3.5 in first down to 0.6 in top. This sits mid-range: high enough
+    /// that the tires don't light up instantly off every corner, low enough that the rear can
+    /// still be provoked into stepping out. It also sets how *fast* a slide develops and
+    /// recovers — higher feels mushy and slow to react, lower feels twitchy.
+    /// </summary>
+    [Export] public float DrivetrainInertia { get; set; } = 1.5f;
+
+    /// <summary>Speed below which holding the brake swaps between forward and reverse, in m/s.</summary>
+    [Export] public float DirectionSwapSpeed { get; set; } = 2.0f;
 
     // ---------------------------------------------------------------- Drivetrain
 
@@ -298,18 +296,35 @@ public partial class Vehicle : RigidBody3D
     /// <summary>How much tire force also acts as a torque about the wheel on the body.</summary>
     [Export] public float WheelToBodyTorqueMultiplier { get; set; } = 1.0f;
 
-    /// <summary>Tire stiffness per surface group; higher = more responsive.</summary>
+    /// <summary>
+    /// Tire stiffness per surface group; higher = the tire builds force over a smaller slip
+    /// angle, so the car answers the wheel more sharply.
+    /// </summary>
     [Export] public Godot.Collections.Dictionary<string, float> TireStiffnesses { get; set; } = new()
     {
         { SurfaceGroups.Road, 10.0f }, { SurfaceGroups.Dirt, 0.5f },
         { SurfaceGroups.Grass, 0.5f }, { SurfaceGroups.Ice, 0.3f },
     };
 
-    /// <summary>Grip multiplier per surface group.</summary>
+    /// <summary>
+    /// Grip multiplier per surface group. This is the single biggest handling number.
+    ///
+    /// Road is 1.8 rather than the source project's arcade value of 3.0, because Master Track
+    /// wants cars that slide. Two reasons it matters:
+    ///
+    /// - <b>Drifting.</b> The rear has to be able to let go and stay gone. At 3.0 the tires
+    ///   simply never saturate at any speed the track allows.
+    /// - <b>Not rolling over.</b> Rollover threshold is geometry: half-track / CoG height.
+    ///   Grip above that number means the car tips before it slides, every time. Mass makes no
+    ///   difference to this — it cancels out of both sides.
+    ///
+    /// Keep an eye on the two together: if you raise this, raise the track width or lower the
+    /// centre of gravity to match, or the car will start flipping again.
+    /// </summary>
     [Export] public Godot.Collections.Dictionary<string, float> CoefficientOfFriction { get; set; } = new()
     {
-        { SurfaceGroups.Road, 3.0f }, { SurfaceGroups.Dirt, 2.4f },
-        { SurfaceGroups.Grass, 2.0f }, { SurfaceGroups.Ice, 0.6f },
+        { SurfaceGroups.Road, 1.8f }, { SurfaceGroups.Dirt, 1.5f },
+        { SurfaceGroups.Grass, 1.1f }, { SurfaceGroups.Ice, 0.45f },
     };
 
     /// <summary>Rolling resistance multiplier per surface group.</summary>
@@ -319,17 +334,39 @@ public partial class Vehicle : RigidBody3D
         { SurfaceGroups.Grass, 4.0f }, { SurfaceGroups.Ice, 0.8f },
     };
 
-    /// <summary>Bonus grip proportional to lateral slip. Stops long slides; can feel unrealistic.</summary>
+    /// <summary>
+    /// Bonus grip proportional to lateral slip — the more the tire slides, the harder it grips
+    /// back. Effectively an anti-slide assist: it keeps a slide from running away, at the cost
+    /// of fighting the player when they're deliberately holding an angle.
+    /// </summary>
     [Export] public Godot.Collections.Dictionary<string, float> LateralGripAssist { get; set; } = new()
     {
         { SurfaceGroups.Road, 0.05f }, { SurfaceGroups.Dirt, 0.0f },
         { SurfaceGroups.Grass, 0.0f }, { SurfaceGroups.Ice, 0.0f },
     };
 
-    /// <summary>Longitudinal grip as a ratio of lateral grip; lets a car spin up without losing cornering.</summary>
+    /// <summary>
+    /// Longitudinal grip as a ratio of lateral grip. Splitting the two is what lets the car be
+    /// loose sideways without being loose under power.
+    ///
+    /// Road is 0.65, which is the fishtail window for this car. Against the rear axle's
+    /// capacity under load, <see cref="MaxDriveForce"/> lands at roughly:
+    ///
+    /// <code>
+    ///   0.50 -> 132%   permanent wheelspin, the car is on ice and never straightens
+    ///   0.65 -> 101%   breaks loose on power, hooks up as weight transfers  &lt;-- here
+    ///   0.80 ->  82%   always hooks up, the back end will not step out at all
+    /// </code>
+    ///
+    /// Sitting right at the limit is what makes the slide throttle-controllable rather than
+    /// either permanent or impossible. Note this changes cornering grip too, even though
+    /// <see cref="CoefficientOfFriction"/> is untouched: the brush model shares one friction
+    /// budget between the two axes, so a rear wheel that is spinning has less grip sideways.
+    /// That coupling <i>is</i> the fishtail.
+    /// </summary>
     [Export] public Godot.Collections.Dictionary<string, float> LongitudinalGripRatio { get; set; } = new()
     {
-        { SurfaceGroups.Road, 0.5f }, { SurfaceGroups.Dirt, 0.5f },
+        { SurfaceGroups.Road, 0.65f }, { SurfaceGroups.Dirt, 0.5f },
         { SurfaceGroups.Grass, 0.5f }, { SurfaceGroups.Ice, 0.5f },
     };
 
@@ -363,8 +400,6 @@ public partial class Vehicle : RigidBody3D
 
     // ---------------------------------------------------------------- Runtime state
 
-    private const float AngularVelocityToRpm = 60.0f / Mathf.Tau;
-
     public readonly List<Wheel> WheelArray = new();
     public readonly List<Axle> Axles = new();
     public Axle FrontAxle { get; private set; } = null!;
@@ -385,9 +420,6 @@ public partial class Vehicle : RigidBody3D
     /// <summary>0..1 handbrake.</summary>
     public float HandbrakeInput;
 
-    /// <summary>0..1 clutch; 1 is fully disengaged.</summary>
-    public float ClutchInput;
-
     // ---- Derived state, safe to read for HUD / effects / debug ----
 
     public bool IsVehicleReady { get; private set; }
@@ -396,7 +428,6 @@ public partial class Vehicle : RigidBody3D
     /// <summary>Speed in m/s. Multiply by 3.6 for km/h.</summary>
     public float Speed { get; private set; }
 
-    public float MotorRpm { get; private set; }
     public float SteeringAmount { get; private set; }
 
     /// <summary>Steering after the <see cref="SteeringExponent"/> curve, before assists.</summary>
@@ -406,20 +437,24 @@ public partial class Vehicle : RigidBody3D
     public float TrueSteeringAmount { get; private set; }
     public float ThrottleAmount { get; private set; }
     public float BrakeAmount { get; private set; }
-    public float ClutchAmount { get; private set; }
 
-    /// <summary>0 = neutral, -1 = reverse, 1..n = forward gears.</summary>
-    public int CurrentGear { get; private set; }
+    /// <summary>
+    /// Direction of travel: 1 forward, -1 reverse. There is no gearbox — this only picks which
+    /// way drive force is applied. Kept as an int so input mapping and the HUD read naturally.
+    /// </summary>
+    public int CurrentGear { get; private set; } = 1;
 
-    public int RequestedGear { get; private set; }
+    /// <summary>Drive force currently reaching the contact patch, in newtons.</summary>
+    public float DriveForce { get; private set; }
+
+    /// <summary>Drive torque handed to the axles this step, in Nm.</summary>
     public float TorqueOutput { get; private set; }
-    public float ClutchTorque { get; private set; }
-    public float MaxClutchTorque { get; private set; }
+
+    /// <summary>How far into the speed range the car is, 0..1. Drives the fake-gear audio.</summary>
+    public float SpeedFraction { get; private set; }
+
     public float TrueTorqueSplit { get; private set; }
     public bool IsBraking { get; private set; }
-    public bool MotorIsRedline { get; private set; }
-    public bool IsShifting { get; private set; }
-    public bool IsUpShifting { get; private set; }
     public bool TcsActive { get; private set; }
     public bool StabilityActive { get; private set; }
     public float StabilityYawTorque { get; private set; }
@@ -437,15 +472,15 @@ public partial class Vehicle : RigidBody3D
 
     private Vector3 _previousGlobalPosition = Vector3.Zero;
     private float _driveAxlesInertia;
-    private float _completeShiftDeltaTime;
-    private float _lastShiftDeltaTime;
     private float _averageDriveWheelRadius;
     private float _currentTorqueSplit;
     private float _brakeForce;
     private float _maxBrakeForce;
     private float _handbrakeForce;
     private float _maxHandbrakeForce;
-    private bool _needClutch;
+
+    /// <summary>Stops the forward/reverse swap flickering while the brake is held at a stop.</summary>
+    private float _directionSwapCooldown;
 
     public override void _Ready()
     {
@@ -480,13 +515,7 @@ public partial class Vehicle : RigidBody3D
             return;
         }
 
-        if (TorqueCurve == null)
-        {
-            // The original hard-crashes here. A flat curve is a much friendlier default and
-            // makes an unconfigured car obviously wrong rather than broken.
-            GD.PushWarning($"[Vehicle] {Name}: no TorqueCurve assigned; falling back to a flat curve.");
-            TorqueCurve = BuildFallbackTorqueCurve();
-        }
+        DriveCurve ??= BuildDefaultDriveCurve();
 
         WheelArray.Clear();
         Axles.Clear();
@@ -502,7 +531,6 @@ public partial class Vehicle : RigidBody3D
             FrontWeightDistribution, frontLeft, frontRight, rearLeft, rearRight);
         centerOfGravity.Y += CenterOfGravityHeightOffset;
         CenterOfMass = centerOfGravity;
-        MaxClutchTorque = MaxTorque * MaxClutchTorqueRatio;
 
         FrontAxle = new Axle { TorqueVectoring = FrontTorqueVectoring };
         FrontAxle.Wheels.Add(frontLeft);
@@ -692,9 +720,7 @@ public partial class Vehicle : RigidBody3D
         ProcessBraking(dt);
         ProcessSteering(dt);
         ProcessThrottle(dt);
-        ProcessMotor(dt);
-        ProcessClutch(dt);
-        ProcessTransmission();
+        ProcessDirection(dt);
         ProcessDrive(dt);
         ProcessForces(dt);
         ProcessStability();
@@ -827,182 +853,86 @@ public partial class Vehicle : RigidBody3D
                 ThrottleAmount = ThrottleInput;
         }
 
-        // Cut the throttle on the limiter and through a shift.
-        if (MotorIsRedline || IsShifting)
-            ThrottleAmount = 0.0f;
-
-        // Slip the clutch while shifting or lugging below idle.
-        ClutchAmount = _needClutch || IsShifting ? 1.0f : ClutchInput;
-    }
-
-    private void ProcessMotor(float delta)
-    {
-        float dragTorque = MotorRpm * MotorDrag;
-        TorqueOutput = GetTorqueAtRpm(MotorRpm) * ThrottleAmount;
-        TorqueOutput -= dragTorque * (1.0f + ClutchAmount * (1.0f - ThrottleAmount));
-
-        // Look ahead one step so the motor can't produce torque below idle or past the limiter.
-        float newRpm = MotorRpm + AngularVelocityToRpm * delta * TorqueOutput / MotorMoment;
-        MotorIsRedline = false;
-        if (newRpm > MaxRpm * 1.1f || newRpm <= IdleRpm)
-        {
-            TorqueOutput = 0.0f;
-            if (newRpm > MaxRpm * 1.1f)
-                MotorIsRedline = true;
-        }
-
-        MotorRpm += AngularVelocityToRpm * delta * (TorqueOutput - dragTorque) / MotorMoment;
-
-        if (MotorRpm < IdleRpm + 100.0f)
-            _needClutch = true;
-        else if (newRpm > Mathf.Max(ClutchOutRpm, IdleRpm))
-            _needClutch = false;
-
-        MotorRpm = Mathf.Max(MotorRpm, IdleRpm);
     }
 
     /// <summary>
-    /// Keeps the motor and the drivetrain closely coupled through the clutch, and pulls the
-    /// power when traction control decides the drive wheels are spinning too much.
+    /// Pick whether drive force pushes the car forward or backward. There is no gearbox, so
+    /// this is just a direction flag: hold the brake at walking pace and the car swaps, which
+    /// is how the geared version behaved and what players expect from an automatic.
     /// </summary>
-    private void ProcessClutch(float delta)
+    private void ProcessDirection(float delta)
     {
-        if (CurrentGear == 0)
+        _directionSwapCooldown = Mathf.Max(0.0f, _directionSwapCooldown - delta);
+
+        if (_directionSwapCooldown > 0.0f || BrakeInput <= 0.75f || Speed >= DirectionSwapSpeed)
             return;
 
-        float currentGearRatio = GetGearRatio(CurrentGear);
-        float driveInertia = MotorMoment
-                             + Mathf.Pow(Mathf.Abs(currentGearRatio), 2.0f) * GearInertia
-                             + _driveAxlesInertia;
-        float driveInertiaR = driveInertia / (currentGearRatio * currentGearRatio);
-        float reactionTorque = GetDriveWheelsReactionTorque() / currentGearRatio;
-        float speedDifference = MotorRpm / AngularVelocityToRpm - GetDrivetrainSpin() * currentGearRatio;
-        if (speedDifference < 0.0f)
-            speedDifference = -Mathf.Sqrt(-speedDifference);
+        // LocalVelocity.Z is negative moving forward, so only swap once the car has actually
+        // stopped going the way it currently points.
+        bool goingForward = LocalVelocity.Z < -0.1f;
+        bool goingBackward = LocalVelocity.Z > 0.1f;
 
-        float a = MotorMoment * driveInertiaR * speedDifference / delta;
-        float b = MotorMoment * reactionTorque;
-        float c = driveInertiaR * TorqueOutput;
-        float clutchFactor = 1.0f - ClutchAmount;
-        float tcsTorqueReduction = 0.0f;
+        if (CurrentGear == 1 && !goingForward)
+        {
+            CurrentGear = -1;
+            BrakeAmount = 0.0f;
+            _directionSwapCooldown = 0.4f;
+        }
+        else if (CurrentGear == -1 && !goingBackward)
+        {
+            CurrentGear = 1;
+            BrakeAmount = 0.0f;
+            _directionSwapCooldown = 0.4f;
+        }
+    }
 
-        ClutchTorque = (a - b + c) / (MotorMoment + driveInertiaR) * clutchFactor;
-        ClutchTorque = Mathf.Clamp(ClutchTorque,
-                                   -MaxClutchTorque * clutchFactor,
-                                   MaxClutchTorque * clutchFactor);
+    /// <summary>
+    /// Drive force straight off the curve, then converted to axle torque.
+    ///
+    /// Force is expressed at the contact patch rather than at a crankshaft, so the curve says
+    /// exactly what the player feels and the tuning stays honest: <c>MaxDriveForce / mass</c>
+    /// is the launch acceleration, and the curve is how that fades toward
+    /// <see cref="TopSpeed"/>. Turning it back into torque here means the differential, wheel
+    /// spin and tire model downstream are completely unchanged — the car can still light up
+    /// its rears and be driven on the throttle.
+    /// </summary>
+    private float ComputeDriveTorque()
+    {
+        bool reversing = CurrentGear == -1;
+        float ceiling = reversing ? ReverseTopSpeed : TopSpeed;
+        SpeedFraction = Mathf.Clamp(Speed / Mathf.Max(ceiling, 0.001f), 0.0f, 1.0f);
 
+        float available = DriveCurve?.SampleBaked(SpeedFraction) ?? 1.0f;
+        if (reversing)
+            available *= ReverseForceRatio;
+
+        DriveForce = MaxDriveForce * Mathf.Max(available, 0.0f) * ThrottleAmount;
+
+        // Traction control: cut drive when the wheels are spinning far past the road speed.
         if (TractionControlMaxSlip > 0.0f)
         {
             float slipY = 0.0f;
             foreach (Axle axle in Axles)
                 slipY = Mathf.Max(slipY, axle.GetMaxWheelSlipY());
 
-            if (slipY > TractionControlMaxSlip)
-            {
-                tcsTorqueReduction = TorqueOutput;
-                ClutchTorque = 0.0f;
-                TcsActive = true;
-            }
-            else
-            {
-                TcsActive = false;
-            }
+            TcsActive = slipY > TractionControlMaxSlip;
+            if (TcsActive)
+                DriveForce = 0.0f;
         }
-
-        float clutchReactionTorque = ClutchTorque + tcsTorqueReduction;
-        float newRpm = MotorRpm - AngularVelocityToRpm * delta * clutchReactionTorque / MotorMoment;
-        if (newRpm < IdleRpm)
-            newRpm = IdleRpm;
-        if (newRpm < IdleRpm + 100.0f)
-            _needClutch = true;
-        else if (newRpm > Mathf.Max(ClutchOutRpm, IdleRpm))
-            _needClutch = false;
-        if (newRpm > MaxRpm * 1.1f)
-            newRpm = MaxRpm * 1.1f;
-
-        MotorRpm = newRpm;
-    }
-
-    /// <summary>
-    /// Automatic gear selection. It compares the wheel speed the car is actually doing with
-    /// the speed it *would* be doing without slip, so spinning the tires doesn't force an
-    /// immediate upshift.
-    /// </summary>
-    private void ProcessTransmission()
-    {
-        if (IsShifting)
+        else
         {
-            if (DeltaTime > _completeShiftDeltaTime)
-                CompleteShift();
-            return;
+            TcsActive = false;
         }
 
-        if (!AutomaticTransmission)
-            return;
-
-        bool reversing = CurrentGear == -1;
-        float idealWheelSpin = Speed / _averageDriveWheelRadius;
-        float drivetrainSpin = GetDrivetrainSpin();
-        float realWheelSpin = drivetrainSpin * GetGearRatio(CurrentGear);
-        float currentIdealGearRpm = GearRatioAt(CurrentGear - 1) * FinalDrive * idealWheelSpin
-                                    * AngularVelocityToRpm;
-        float currentRealGearRpm = realWheelSpin * AngularVelocityToRpm;
-
-        if (!reversing)
-        {
-            float previousGearRpm = 0.0f;
-            if (CurrentGear - 1 > 0)
-                previousGearRpm = GetGearRatio(CurrentGear - 1)
-                                  * Mathf.Max(drivetrainSpin, idealWheelSpin) * AngularVelocityToRpm;
-
-            if (CurrentGear < GearRatios.Length)
-            {
-                if (CurrentGear > 0)
-                {
-                    if (currentIdealGearRpm > MaxRpm && DeltaTime - _lastShiftDeltaTime > ShiftTime)
-                        Shift(1);
-                    if (currentIdealGearRpm > MaxRpm * 0.8f && currentRealGearRpm > MaxRpm
-                        && DeltaTime - _lastShiftDeltaTime > ShiftTime)
-                        Shift(1);
-                }
-                else if (CurrentGear == 0 && MotorRpm > Mathf.Max(ClutchOutRpm, IdleRpm))
-                {
-                    Shift(1);
-                }
-            }
-
-            if (CurrentGear - 1 > 0 && CurrentGear > 1 && previousGearRpm < 0.75f * MaxRpm
-                && DeltaTime - _lastShiftDeltaTime > ShiftTime)
-                Shift(-1);
-        }
-
-        // Holding the brake at a standstill swaps between first and reverse.
-        if (Mathf.Abs(CurrentGear) <= 1 && BrakeInput > 0.75f)
-        {
-            if (!reversing)
-            {
-                if ((Speed < 1.0f || LocalVelocity.Z > 0.0f)
-                    && DeltaTime - _lastShiftDeltaTime > ShiftTime)
-                    Shift(-1);
-            }
-            else
-            {
-                if ((Speed < 1.0f || LocalVelocity.Z < 0.0f)
-                    && DeltaTime - _lastShiftDeltaTime > ShiftTime)
-                    Shift(1);
-            }
-        }
+        TorqueOutput = DriveForce * _averageDriveWheelRadius * CurrentGear;
+        return TorqueOutput;
     }
 
     private void ProcessDrive(float delta)
     {
-        float currentGearRatio = GetGearRatio(CurrentGear);
-        float driveTorque = 0.0f;
-        float driveInertia = MotorMoment + Mathf.Pow(currentGearRatio, 2.0f) * GearInertia;
+        float driveTorque = ComputeDriveTorque();
+        float driveInertia = DrivetrainInertia;
         bool isSlipping = GetIsAWheelSlipping();
-
-        if (CurrentGear != 0)
-            driveTorque = ClutchTorque * currentGearRatio;
 
         if (VariableTorqueSplit)
         {
@@ -1145,59 +1075,6 @@ public partial class Vehicle : RigidBody3D
         StabilityActive = isStabilityOn;
     }
 
-    // ---------------------------------------------------------------- Gearbox API
-
-    /// <summary>Shift by <paramref name="count"/> gears, but only in manual mode.</summary>
-    public void ManualShift(int count)
-    {
-        if (!AutomaticTransmission)
-            Shift(count);
-    }
-
-    private void Shift(int count)
-    {
-        if (IsShifting)
-            return;
-
-        RequestedGear = CurrentGear + count;
-
-        if (RequestedGear > GearRatios.Length || RequestedGear < -1)
-            return;
-
-        if (CurrentGear == 0)
-        {
-            // Coming out of neutral is instant; there's no drive to interrupt.
-            CompleteShift();
-            return;
-        }
-
-        _completeShiftDeltaTime = DeltaTime + ShiftTime;
-        ClutchAmount = 1.0f;
-        IsShifting = true;
-        if (count > 0)
-            IsUpShifting = true;
-    }
-
-    private void CompleteShift()
-    {
-        if (CurrentGear == -1)
-            BrakeAmount = 0.0f;
-
-        if (RequestedGear < CurrentGear)
-        {
-            // Blip the revs toward where the new gear wants them on a downshift.
-            float wheelSpin = Speed / _averageDriveWheelRadius;
-            float requestedGearRpm = GearRatioAt(RequestedGear - 1) * FinalDrive * wheelSpin
-                                     * AngularVelocityToRpm;
-            MotorRpm = Mathf.Lerp(MotorRpm, requestedGearRpm, 0.5f);
-        }
-
-        CurrentGear = RequestedGear;
-        _lastShiftDeltaTime = DeltaTime;
-        IsShifting = false;
-        IsUpShifting = false;
-    }
-
     // ---------------------------------------------------------------- Queries
 
     public int GetWheelContactCount()
@@ -1231,50 +1108,6 @@ public partial class Vehicle : RigidBody3D
             driveSpin += wheel.Spin;
 
         return driveSpin / DriveWheels.Count;
-    }
-
-    private float GetDriveWheelsReactionTorque()
-    {
-        float reactionTorque = 0.0f;
-        foreach (Wheel wheel in DriveWheels)
-            reactionTorque += wheel.ForceVector.Y * wheel.TireRadius;
-        return reactionTorque;
-    }
-
-    public float GetGearRatio(int gear)
-    {
-        if (gear > 0)
-            return GearRatioAt(gear - 1) * FinalDrive;
-        if (gear == -1)
-            return -ReverseRatio * FinalDrive;
-        return 0.0f;
-    }
-
-    /// <summary>
-    /// Indexes <see cref="GearRatios"/> the way GDScript arrays do, wrapping negative
-    /// indices around to the end. The transmission code relies on that: in neutral or
-    /// reverse it computes a gear RPM from index -1 or -2 before deciding whether to use it.
-    /// </summary>
-    private float GearRatioAt(int index)
-    {
-        int count = GearRatios.Length;
-        if (count == 0)
-            return 0.0f;
-
-        int i = index < 0 ? count + index : index;
-        if (i < 0 || i >= count)
-            return 0.0f;
-
-        return GearRatios[i];
-    }
-
-    public float GetTorqueAtRpm(float lookupRpm)
-    {
-        if (TorqueCurve == null)
-            return 0.0f;
-
-        float rpmFactor = Mathf.Clamp(lookupRpm / MaxRpm, 0.0f, 1.0f);
-        return TorqueCurve.SampleBaked(rpmFactor) * MaxTorque;
     }
 
     private float GetMaxSteeringSlipAngle()
@@ -1343,12 +1176,21 @@ public partial class Vehicle : RigidBody3D
         wheel.Toe = toe;
     }
 
-    /// <summary>A flat 100%-torque curve, used only when none was assigned.</summary>
-    private static Curve BuildFallbackTorqueCurve()
+    /// <summary>
+    /// The drive curve used when none was authored: full force off the line, still near full
+    /// through the midrange, then falling to nothing at <see cref="TopSpeed"/>.
+    ///
+    /// The long flat section is what makes a car read as fast — force that starts bleeding away
+    /// immediately feels like it's giving up. Reaching exactly 0 at the end makes the top speed
+    /// a real ceiling instead of something the car creeps toward forever.
+    /// </summary>
+    private static Curve BuildDefaultDriveCurve()
     {
         var curve = new Curve();
         curve.AddPoint(new Vector2(0.0f, 1.0f));
-        curve.AddPoint(new Vector2(1.0f, 1.0f));
+        curve.AddPoint(new Vector2(0.55f, 0.9f));
+        curve.AddPoint(new Vector2(0.85f, 0.45f));
+        curve.AddPoint(new Vector2(1.0f, 0.0f));
         return curve;
     }
 }

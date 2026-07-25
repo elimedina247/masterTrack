@@ -8,10 +8,11 @@
 [ext_resource type="PackedScene" uid="uid://cexe13v0biii5" path="res://assets/CC96/Rims/Rims3_L.fbx" id="6_rimL"]
 [ext_resource type="PackedScene" uid="uid://cujx6ptlxd24w" path="res://assets/CC96/Rims/Rims3_R.fbx" id="7_rimR"]
 [ext_resource type="AudioStream" uid="uid://dio25xn4f7s6f" path="res://assets/gevp/sounds/4000.wav" id="8_engwav"]
+[ext_resource type="Script" uid="uid://kf2ch72spgs" path="res://scripts/vehicles/BodyLean.cs" id="9_bodylean"]
 
-[sub_resource type="Curve" id="Curve_torque"]
-_data = [Vector2(0, 0.494505), 0.0, 2.04495, 0, 0, Vector2(0.617978, 1), 0.0, 0.0, 0, 0, Vector2(1, 0.692308), -1.4839, 0.0, 0, 0]
-point_count = 3
+[sub_resource type="Curve" id="Curve_drive"]
+_data = [Vector2(0, 1), 0.0, 0.0, 0, 0, Vector2(0.55, 0.9), 0.0, 0.0, 0, 0, Vector2(0.85, 0.45), -1.6, -1.6, 0, 0, Vector2(1, 0), -2.4, 0.0, 0, 0]
+point_count = 4
 
 [sub_resource type="BoxShape3D" id="Shape_body"]
 size = Vector3(1.2, 0.5, 2.6)
@@ -23,28 +24,36 @@ FrontLeftWheel = NodePath("WheelFL")
 FrontRightWheel = NodePath("WheelFR")
 RearLeftWheel = NodePath("WheelRL")
 RearRightWheel = NodePath("WheelRR")
-StabilityYawGroundMultiplier = 6.0
-MaxTorque = 400.0
-TorqueCurve = SubResource("Curve_torque")
-VariableTorqueSplit = true
+StabilityYawEngageAngle = 0.1
+StabilityYawStrength = 2.0
+StabilityYawGroundMultiplier = 4.0
+MaxDriveForce = 8000.0
+TopSpeed = 55.6
+DriveCurve = SubResource("Curve_drive")
+ReverseTopSpeed = 12.0
 FrontVariableSplit = 0.5
 VehicleMass = 1200.0
-CenterOfGravityHeightOffset = -0.25
+CenterOfGravityHeightOffset = 0.0
 FrontDampingRatio = 0.6
 RearDampingRatio = 0.6
 BrakingGripMultiplier = 2.0
-FrontTireRadius = 0.4
-RearTireRadius = 0.4
+FrontTireRadius = 0.24
+RearTireRadius = 0.24
+CoefficientOfDrag = 0.1
 
-[node name="BodyModel" parent="." unique_id=381378014 instance=ExtResource("5_body")]
-transform = Transform3D(-4.371139e-08, 0, 1, 0, 1, 0, -1, 0, -4.371139e-08, 0, 0.4, -0.1)
+[node name="BodyRig" type="Node3D" parent="." unique_id=475243367 node_paths=PackedStringArray("VehicleNode")]
+script = ExtResource("9_bodylean")
+VehicleNode = NodePath("..")
+
+[node name="BodyModel" parent="BodyRig" unique_id=381378014 instance=ExtResource("5_body")]
+transform = Transform3D(-4.371139e-08, 0, 1, 0, 1, 0, -1, 0, -4.371139e-08, 0, 0.2, -0.1)
 
 [node name="Collision" type="CollisionShape3D" parent="." unique_id=1227752201]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.6, 0)
+transform = Transform3D(1.1, 0, 0, 0, 1.1, 0, 0, 0, 1.1, 0, 0.4, 0)
 shape = SubResource("Shape_body")
 
 [node name="WheelFL" type="RayCast3D" parent="." unique_id=1070422898 node_paths=PackedStringArray("WheelNode")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.65, 0.475, -1.1)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.65, 0.315, -1.05)
 script = ExtResource("3_wheel")
 WheelNode = NodePath("WheelFLHub")
 
@@ -54,7 +63,7 @@ WheelNode = NodePath("WheelFLHub")
 transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 0, 0, 0)
 
 [node name="WheelFR" type="RayCast3D" parent="." unique_id=1918792808 node_paths=PackedStringArray("WheelNode")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.65, 0.475, -1.1)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.65, 0.315, -1.05)
 script = ExtResource("3_wheel")
 WheelNode = NodePath("WheelFRHub")
 
@@ -64,7 +73,7 @@ WheelNode = NodePath("WheelFRHub")
 transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 0, 0, 0)
 
 [node name="WheelRL" type="RayCast3D" parent="." unique_id=1855873150 node_paths=PackedStringArray("WheelNode")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.65, 0.5, 1)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.65, 0.34, 1)
 script = ExtResource("3_wheel")
 WheelNode = NodePath("WheelRLHub")
 
@@ -74,7 +83,7 @@ WheelNode = NodePath("WheelRLHub")
 transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 0, 0, 0)
 
 [node name="WheelRR" type="RayCast3D" parent="." unique_id=152667777 node_paths=PackedStringArray("WheelNode")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.65, 0.5, 1)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.65, 0.34, 1)
 script = ExtResource("3_wheel")
 WheelNode = NodePath("WheelRRHub")
 

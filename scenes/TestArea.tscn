@@ -1,9 +1,9 @@
 [gd_scene load_steps=8 format=3 uid="uid://dtg0bykxtt0m1"]
 
-[ext_resource type="PackedScene" uid="uid://c0master0tile0st" path="res://scenes/tiles/StraightTile.tscn" id="1_tile"]
+[ext_resource type="Script" path="res://scripts/game/PhysicsTestArea.cs" id="1_area"]
 [ext_resource type="PackedScene" uid="uid://5vb3gdxlbtm6" path="res://scenes/Racer.tscn" id="2_racer"]
-[ext_resource type="Script" path="res://scripts/ui/VehicleHud.cs" id="3_hud"]
-[ext_resource type="Script" path="res://scripts/vehicles/VehicleDebugOverlay.cs" id="4_vdebug"]
+[ext_resource type="Script" uid="uid://c8mksia3gxe7k" path="res://scripts/ui/VehicleHud.cs" id="3_hud"]
+[ext_resource type="Script" uid="uid://dpuyf56gq5foi" path="res://scripts/vehicles/VehicleDebugOverlay.cs" id="4_vdebug"]
 
 [sub_resource type="ProceduralSkyMaterial" id="Sky_mat"]
 
@@ -17,65 +17,17 @@ ambient_light_source = 3
 tonemap_mode = 2
 
 [node name="TestArea" type="Node3D"]
+script = ExtResource("1_area")
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
 environment = SubResource("Env")
 
 [node name="Sun" type="DirectionalLight3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 0.707107, -0.707107, 0, 0.707107, 0.707107, 0, 10, 0)
+transform = Transform3D(0.866025, -0.353553, 0.353553, 0, 0.707107, 0.707107, -0.5, -0.612372, 0.612372, 0, 40, 0)
 shadow_enabled = true
 
-[node name="SpawnGrid" type="Node3D" parent="."]
-
-[node name="S00" parent="SpawnGrid" instance=ExtResource("1_tile")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -10, 0.1, 0)
-
-[node name="S10" parent="SpawnGrid" instance=ExtResource("1_tile")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.1, 0)
-
-[node name="S20" parent="SpawnGrid" instance=ExtResource("1_tile")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 10, 0.1, 0)
-
-[node name="S01" parent="SpawnGrid" instance=ExtResource("1_tile")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -10, 0.1, 10)
-
-[node name="S11" parent="SpawnGrid" instance=ExtResource("1_tile")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.1, 10)
-
-[node name="S21" parent="SpawnGrid" instance=ExtResource("1_tile")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 10, 0.1, 10)
-
-[node name="Runway" type="Node3D" parent="."]
-
-[node name="R00" parent="Runway" instance=ExtResource("1_tile")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -10, 0.1, 20)
-
-[node name="R10" parent="Runway" instance=ExtResource("1_tile")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.1, 20)
-
-[node name="R20" parent="Runway" instance=ExtResource("1_tile")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 10, 0.1, 20)
-
-[node name="R01" parent="Runway" instance=ExtResource("1_tile")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -10, 0.1, 30)
-
-[node name="R11" parent="Runway" instance=ExtResource("1_tile")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.1, 30)
-
-[node name="R21" parent="Runway" instance=ExtResource("1_tile")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 10, 0.1, 30)
-
-[node name="R02" parent="Runway" instance=ExtResource("1_tile")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -10, 0.1, 40)
-
-[node name="R12" parent="Runway" instance=ExtResource("1_tile")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.1, 40)
-
-[node name="R22" parent="Runway" instance=ExtResource("1_tile")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 10, 0.1, 40)
-
 [node name="TestCar" parent="." instance=ExtResource("2_racer")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.8, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.15, 60)
 OwnerPeerId = 1
 
 [node name="HUD" type="CanvasLayer" parent="."]
@@ -101,4 +53,3 @@ grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("4_vdebug")
 VehicleNode = NodePath("../../TestCar")
-ShowDebug = true

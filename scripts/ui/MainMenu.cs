@@ -12,6 +12,9 @@ public partial class MainMenu : Control
 {
     private const string GameScenePath = "res://scenes/Game.tscn";
 
+    /// <summary>The physics playground: open tarmac, grass, a bump strip and one of every tile.</summary>
+    private const string TestAreaScenePath = "res://scenes/TestArea.tscn";
+
     private LineEdit _ipEdit = null!;
     private LineEdit _portEdit = null!;
     private Button _hostButton = null!;
@@ -84,11 +87,13 @@ public partial class MainMenu : Control
         }
     }
 
+    /// <summary>
+    /// Drop straight into the physics playground. It brings its own car and HUD, so there's no
+    /// role or networking to set up — it's purely for feeling out how the car drives.
+    /// </summary>
     private void OnSoloPressed()
     {
-        // No peer created -> Game.tscn detects solo mode and spawns one local car.
-        GameManager.Instance.SoloRole = PlayerRole.Racer;
-        GetTree().ChangeSceneToFile(GameScenePath);
+        GetTree().ChangeSceneToFile(TestAreaScenePath);
     }
 
     /// <summary>Jump straight to the Track Master's board, so the builder can be worked on alone.</summary>

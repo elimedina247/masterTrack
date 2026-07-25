@@ -13,24 +13,23 @@ namespace MasterTrack.Vehicles;
 [GlobalClass]
 public partial class VehicleInputController : Node
 {
-    /// <summary>The vehicle to drive. Required.</summary>
-    [Export] public Vehicle? VehicleNode { get; set; }
+	/// <summary>The vehicle to drive. Required.</summary>
+	[Export] public Vehicle? VehicleNode { get; set; }
 
-    /// <summary>Which input actions to read. Defaults to the racer_* actions.</summary>
-    [Export] public VehicleInputActions Actions { get; set; } = new();
+	/// <summary>Which input actions to read. Defaults to the racer_* actions.</summary>
+	[Export] public VehicleInputActions Actions { get; set; } = new();
 
-    public override void _Ready()
-    {
-        if (VehicleNode == null)
-            GD.PushError($"[VehicleInputController] {Name} has no VehicleNode assigned; nothing to drive.");
-    }
+	public override void _Ready()
+	{
+		if (VehicleNode == null)
+			GD.PushError($"[VehicleInputController] {Name} has no VehicleNode assigned; nothing to drive.");
+	}
 
-    public override void _PhysicsProcess(double delta)
-    {
-        if (VehicleNode == null)
-            return;
+	public override void _PhysicsProcess(double delta)
+	{
+		if (VehicleNode == null)
+			return;
 
-        VehicleInputState.Sample(Actions).ApplyTo(VehicleNode, Actions);
-        Actions.ProcessGearboxActions(VehicleNode);
-    }
+		VehicleInputState.Sample(Actions).ApplyTo(VehicleNode, Actions);
+	}
 }

@@ -4,10 +4,12 @@ using MasterTrack.Vehicles;
 namespace MasterTrack.UI;
 
 /// <summary>
-/// Speed / RPM / gear readout for the car the local player is driving, in the spirit of the
-/// source project's demo GUI. Builds its own labels so it can be dropped into any scene with
-/// nothing to wire up, and shows the gearbox mode because the transmission toggle is easy to
-/// hit by accident.
+/// Speed readout for the car the local player is driving. Builds its own label so it can be
+/// dropped into any scene with nothing to wire up.
+///
+/// Speed only, deliberately. The car has no gearbox — the revs and gear number the engine note
+/// sweeps through are computed backwards from road speed (see <see cref="FakeGearbox"/>), so
+/// showing them would just be a second speedometer dressed up as a drivetrain.
 /// </summary>
 [GlobalClass]
 public partial class VehicleHud : Control
@@ -16,8 +18,7 @@ public partial class VehicleHud : Control
     [Export] public Vehicle? VehicleNode { get; set; }
 
     private Label _speed = null!;
-    private Label _rpm = null!;
-    private Label _gear = null!;
+    private Label _direction = null!;
 
     public override void _Ready()
     {
@@ -29,8 +30,7 @@ public partial class VehicleHud : Control
         AddChild(box);
 
         _speed = AddLabel(box, 32);
-        _rpm = AddLabel(box, 20);
-        _gear = AddLabel(box, 20);
+        _direction = AddLabel(box, 20);
 
         Refresh();
     }
@@ -53,21 +53,13 @@ public partial class VehicleHud : Control
         if (VehicleNode == null || !IsInstanceValid(VehicleNode))
         {
             _speed.Text = "";
-            _rpm.Text = "";
-            _gear.Text = "";
+            _direction.Text = "";
             return;
         }
 
         _speed.Text = $"{Mathf.Round(VehicleNode.Speed * 3.6f)} km/h";
-        _rpm.Text = $"{Mathf.Round(VehicleNode.MotorRpm)} rpm";
-        _gear.Text = $"Gear: {GearLabel(VehicleNode.CurrentGear)}" +
-                     (VehicleNode.AutomaticTransmission ? "  (auto)" : "  (manual)");
-    }
 
-    private static string GearLabel(int gear) => gear switch
-    {
-        -1 => "R",
-        0 => "N",
-        _ => gear.ToString(),
-    };
+        // Reverse is the one bit of "gear" that's real — it genuinely flips the drive force.
+        _direction.Text = VehicleNode.CurrentGear == -1 ? "REVERSE" : "";
+    }
 }

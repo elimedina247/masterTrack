@@ -167,6 +167,13 @@ public partial class Wheel : RayCast3D
         // origin sits on the body's surface — so rule the car out explicitly.
         AddException(parentVehicle);
 
+        // If a hard landing ever drives the ray origin below the surface, a ray that ignores
+        // hits from inside reports nothing, the spring force drops to zero and the car settles
+        // onto its chassis with no way back — the suspension can never see the ground again.
+        // Detecting the hit instead reports zero distance, which bottoms the spring out and
+        // lets the bump stop push the car back up.
+        HitFromInside = true;
+
         MaxSpringLength = SpringLength;
         ApplySurface(SurfaceType);
     }

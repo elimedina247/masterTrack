@@ -70,13 +70,20 @@ public partial class TrackController : Node3D
             return;
         }
 
+        // The Track Master is normally the host, so this would be an RPC to ourselves —
+        // and Godot does not deliver a self-targeted RpcId to a method declared
+        // CallLocal = false. Go straight to the authoritative path rather than round-trip
+        // through the network layer.
+        if (Multiplayer.IsServer())
+        {
+            AuthorizeAndBroadcast(catalogIndex, Multiplayer.GetUniqueId());
+            return;
+        }
+
         RpcId(1, MethodName.ServerPlaceTile, catalogIndex);
     }
 
-    /// <summary>
-    /// Server only. Check the sender is the Track Master and the tile is legal where it would
-    /// land, then broadcast the confirmed placement.
-    /// </summary>
+    /// <summary>Server only. A remote peer is asking to place a tile.</summary>
     [Rpc(MultiplayerApi.RpcMode.AnyPeer, CallLocal = false,
          TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
     private void ServerPlaceTile(int catalogIndex)
@@ -84,23 +91,34 @@ public partial class TrackController : Node3D
         if (!NetworkManager.Instance.IsHost)
             return;
 
-        int sender = Multiplayer.GetRemoteSenderId();
-        if (sender != GameManager.Instance.TrackMasterPeerId)
+        AuthorizeAndBroadcast(catalogIndex, Multiplayer.GetRemoteSenderId());
+    }
+
+    /// <summary>
+    /// Server only. Check the requester really is the Track Master and that the tile is legal
+    /// where it would land, then broadcast the confirmed placement.
+    ///
+    /// Takes the requester's id rather than reading it from the multiplayer API, because this
+    /// runs both for a remote request and for the host asking on its own behalf.
+    /// </summary>
+    private void AuthorizeAndBroadcast(int catalogIndex, int senderId)
+    {
+        if (senderId != GameManager.Instance.TrackMasterPeerId)
         {
-            GD.PushWarning($"[Track] Peer {sender} tried to place a tile but is not the Track Master.");
+            GD.PushWarning($"[Track] Peer {senderId} tried to place a tile but is not the Track Master.");
             return;
         }
 
         TileDefinition? definition = TileCatalog.At(catalogIndex);
         if (definition == null)
         {
-            GD.PushWarning($"[Track] Peer {sender} requested unknown tile index {catalogIndex}.");
+            GD.PushWarning($"[Track] Peer {senderId} requested unknown tile index {catalogIndex}.");
             return;
         }
 
         if (!Grid.CanPlace(Grid.HeadCell, definition.ToTileData(), out string reason))
         {
-            GD.PushWarning($"[Track] Rejected {definition.DisplayName} from peer {sender}: {reason}");
+            GD.PushWarning($"[Track] Rejected {definition.DisplayName} from peer {senderId}: {reason}");
             return;
         }
 

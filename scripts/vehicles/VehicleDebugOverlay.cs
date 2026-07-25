@@ -119,11 +119,10 @@ public partial class VehicleDebugOverlay : Control
                 Text("Steering Input", new Vector2(10, 120), Colors.Gray);
                 Text("Assisted Steering Input", new Vector2(10, 140), Colors.White);
                 Text("Throttle Input", new Vector2(10, 160), Colors.Green);
-                Text("Engine Torque Output", new Vector2(10, 180), Colors.Aqua);
-                Text("Drivetrain Torque Output", new Vector2(10, 200), Colors.DeepSkyBlue);
+                Text("Drive Force", new Vector2(10, 180), Colors.Aqua);
+                Text("Speed / Top Speed", new Vector2(10, 200), Colors.DeepSkyBlue);
                 Text("Brake Input", new Vector2(10, 220), Colors.Red);
-                Text("Clutch Input", new Vector2(10, 240), Colors.Yellow);
-                Text("Handbrake Input", new Vector2(10, 260), Colors.Orange);
+                Text("Handbrake Input", new Vector2(10, 240), Colors.Orange);
                 break;
 
             case "Drivetrain":
@@ -162,12 +161,15 @@ public partial class VehicleDebugOverlay : Control
 
         // A row of 0..1 bars beside the car: each gets a black "full scale" backing line.
         Vector3 barOrigin = cog + basis.X * 1.5f;
+        float driveFraction = vehicle.MaxDriveForce > 0.0f
+            ? vehicle.DriveForce / vehicle.MaxDriveForce
+            : 0.0f;
+
         Bar(barOrigin, basis, vehicle.ThrottleAmount, Colors.Green, 0.0f);
-        Bar(barOrigin, basis, vehicle.TorqueOutput / vehicle.MaxTorque, Colors.Aqua, 2.0f);
-        Bar(barOrigin, basis, vehicle.ClutchTorque / vehicle.MaxTorque, Colors.DeepSkyBlue, 4.0f);
+        Bar(barOrigin, basis, driveFraction, Colors.Aqua, 2.0f);
+        Bar(barOrigin, basis, vehicle.SpeedFraction, Colors.DeepSkyBlue, 4.0f);
         Bar(barOrigin, basis, vehicle.BrakeAmount, Colors.Red, 6.0f);
-        Bar(barOrigin, basis, vehicle.ClutchAmount, Colors.Yellow, 8.0f);
-        Bar(barOrigin, basis, vehicle.HandbrakeInput, Colors.Orange, 10.0f);
+        Bar(barOrigin, basis, vehicle.HandbrakeInput, Colors.Orange, 8.0f);
     }
 
     private void Bar(Vector3 origin, Basis basis, float value, Color color, float screenOffsetX)

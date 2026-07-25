@@ -28,8 +28,12 @@ public partial class Game : Node3D
 
     private const string RacerScenePath = "res://scenes/Racer.tscn";
 
-    /// <summary>Where racers line up. Sits on the starting straight the track builds itself.</summary>
-    [Export] public Vector3 StartLine = new(0, 1, 32);
+    /// <summary>
+    /// Where racers line up, on the starting straight the track builds itself. Only just above
+    /// the road: the suspension has ~0.15 m of travel, so dropping a car in from any height
+    /// bottoms it out on landing.
+    /// </summary>
+    [Export] public Vector3 StartLine = new(0, 0.15f, 32);
 
     /// <summary>Gap between racers across the width of the road, in metres.</summary>
     [Export] public float RacerSpacing = 3.0f;
