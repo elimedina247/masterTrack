@@ -1,0 +1,96 @@
+[gd_scene format=3 uid="uid://5vb3gdslh3u6"]
+
+[ext_resource type="Script" uid="uid://d0khse0mqmhk" path="res://scripts/ui/MainMenu.cs" id="1_menu"]
+
+[node name="Main" type="Control" unique_id=659739511]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_menu")
+
+[node name="Center" type="CenterContainer" parent="." unique_id=303739856]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Panel" type="PanelContainer" parent="Center" unique_id=657794177]
+layout_mode = 2
+
+[node name="Margin" type="MarginContainer" parent="Center/Panel" unique_id=406368849]
+layout_mode = 2
+theme_override_constants/margin_left = 24
+theme_override_constants/margin_top = 24
+theme_override_constants/margin_right = 24
+theme_override_constants/margin_bottom = 24
+
+[node name="VBox" type="VBoxContainer" parent="Center/Panel/Margin" unique_id=1281229835]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="Title" type="Label" parent="Center/Panel/Margin/VBox" unique_id=1241470159]
+layout_mode = 2
+theme_override_font_sizes/font_size = 32
+text = "MASTER TRACK"
+horizontal_alignment = 1
+
+[node name="IpRow" type="HBoxContainer" parent="Center/Panel/Margin/VBox" unique_id=313505521]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="IpLabel" type="Label" parent="Center/Panel/Margin/VBox/IpRow" unique_id=1468370662]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Host IP"
+
+[node name="IpEdit" type="LineEdit" parent="Center/Panel/Margin/VBox/IpRow" unique_id=1668980981]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+text = "127.0.0.1"
+
+[node name="PortRow" type="HBoxContainer" parent="Center/Panel/Margin/VBox" unique_id=1374334631]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="PortLabel" type="Label" parent="Center/Panel/Margin/VBox/PortRow" unique_id=1555839441]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Port"
+
+[node name="PortEdit" type="LineEdit" parent="Center/Panel/Margin/VBox/PortRow" unique_id=1922247094]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+text = "8910"
+
+[node name="HostButton" type="Button" parent="Center/Panel/Margin/VBox" unique_id=2087039390]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Host"
+
+[node name="JoinButton" type="Button" parent="Center/Panel/Margin/VBox" unique_id=1342171038]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Join"
+
+[node name="SoloButton" type="Button" parent="Center/Panel/Margin/VBox" unique_id=75371500]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Test Drive (Solo)"
+
+[node name="StartButton" type="Button" parent="Center/Panel/Margin/VBox" unique_id=1773049270]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Start Match"
+
+[node name="StatusLabel" type="Label" parent="Center/Panel/Margin/VBox" unique_id=27891283]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Host or join to begin."
+horizontal_alignment = 1

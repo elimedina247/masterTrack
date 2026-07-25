@@ -1,0 +1,32 @@
+[gd_scene load_steps=6 format=3 uid="uid://c0master0tile0st"]
+
+[sub_resource type="StandardMaterial3D" id="Mat_road"]
+albedo_color = Color(0.4, 0.4, 0.4, 1)
+roughness = 0.9
+
+[sub_resource type="BoxMesh" id="Mesh_road"]
+material = SubResource("Mat_road")
+size = Vector3(10, 0.2, 10)
+
+[sub_resource type="StandardMaterial3D" id="Mat_line"]
+albedo_color = Color(0.05, 0.05, 0.05, 1)
+roughness = 0.9
+
+[sub_resource type="PlaneMesh" id="Mesh_line"]
+material = SubResource("Mat_line")
+size = Vector2(0.4, 10)
+
+[sub_resource type="BoxShape3D" id="Shape_road"]
+size = Vector3(10, 0.2, 10)
+
+[node name="StraightTile" type="StaticBody3D"]
+
+[node name="Surface" type="MeshInstance3D" parent="."]
+mesh = SubResource("Mesh_road")
+
+[node name="CenterLine" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.11, 0)
+mesh = SubResource("Mesh_line")
+
+[node name="Collision" type="CollisionShape3D" parent="."]
+shape = SubResource("Shape_road")

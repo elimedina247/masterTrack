@@ -1,0 +1,77 @@
+[gd_scene load_steps=6 format=3 uid="uid://dtg0bykxtt0m1"]
+
+[ext_resource type="PackedScene" uid="uid://c0master0tile0st" path="res://scenes/tiles/StraightTile.tscn" id="1_tile"]
+[ext_resource type="PackedScene" uid="uid://c0master0racer0" path="res://scenes/Racer.tscn" id="2_racer"]
+
+[sub_resource type="ProceduralSkyMaterial" id="Sky_mat"]
+
+[sub_resource type="Sky" id="Sky"]
+sky_material = SubResource("Sky_mat")
+
+[sub_resource type="Environment" id="Env"]
+background_mode = 2
+sky = SubResource("Sky")
+ambient_light_source = 3
+tonemap_mode = 2
+
+[node name="TestArea" type="Node3D"]
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Env")
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.707107, -0.707107, 0, 0.707107, 0.707107, 0, 10, 0)
+shadow_enabled = true
+
+[node name="SpawnGrid" type="Node3D" parent="."]
+
+[node name="S00" parent="SpawnGrid" instance=ExtResource("1_tile")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -10, 0.1, 0)
+
+[node name="S10" parent="SpawnGrid" instance=ExtResource("1_tile")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.1, 0)
+
+[node name="S20" parent="SpawnGrid" instance=ExtResource("1_tile")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 10, 0.1, 0)
+
+[node name="S01" parent="SpawnGrid" instance=ExtResource("1_tile")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -10, 0.1, 10)
+
+[node name="S11" parent="SpawnGrid" instance=ExtResource("1_tile")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.1, 10)
+
+[node name="S21" parent="SpawnGrid" instance=ExtResource("1_tile")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 10, 0.1, 10)
+
+[node name="Runway" type="Node3D" parent="."]
+
+[node name="R00" parent="Runway" instance=ExtResource("1_tile")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -10, 0.1, 20)
+
+[node name="R10" parent="Runway" instance=ExtResource("1_tile")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.1, 20)
+
+[node name="R20" parent="Runway" instance=ExtResource("1_tile")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 10, 0.1, 20)
+
+[node name="R01" parent="Runway" instance=ExtResource("1_tile")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -10, 0.1, 30)
+
+[node name="R11" parent="Runway" instance=ExtResource("1_tile")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.1, 30)
+
+[node name="R21" parent="Runway" instance=ExtResource("1_tile")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 10, 0.1, 30)
+
+[node name="R02" parent="Runway" instance=ExtResource("1_tile")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -10, 0.1, 40)
+
+[node name="R12" parent="Runway" instance=ExtResource("1_tile")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.1, 40)
+
+[node name="R22" parent="Runway" instance=ExtResource("1_tile")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 10, 0.1, 40)
+
+[node name="TestCar" parent="." instance=ExtResource("2_racer")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.8, 0)
+OwnerPeerId = 1

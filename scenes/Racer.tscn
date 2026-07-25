@@ -1,0 +1,61 @@
+[gd_scene format=3 uid="uid://5vb3gdxlbtm6"]
+
+[ext_resource type="Script" uid="uid://b4v752x20q2a" path="res://scripts/racer/RacerController.cs" id="1_racer"]
+[ext_resource type="Script" uid="uid://cg4iv4x4j64ar" path="res://scripts/racer/CameraRig.cs" id="2_camrig"]
+[ext_resource type="PackedScene" uid="uid://b5k5d1jhmtfb0" path="res://assets/CC96/Body/CC96_Body_3.fbx" id="3_body"]
+[ext_resource type="PackedScene" uid="uid://cexe13v0biii5" path="res://assets/CC96/Rims/Rims3_L.fbx" id="4_rimL"]
+[ext_resource type="PackedScene" uid="uid://cujx6ptlxd24w" path="res://assets/CC96/Rims/Rims3_R.fbx" id="5_rimR"]
+
+[sub_resource type="BoxShape3D" id="Shape_body"]
+size = Vector3(1.3, 0.5, 2.6)
+
+[node name="Racer" type="VehicleBody3D" unique_id=210632241]
+mass = 400.0
+script = ExtResource("1_racer")
+
+[node name="BodyModel" parent="." unique_id=1051246738 instance=ExtResource("3_body")]
+transform = Transform3D(0.03701957, 0, -0.99931455, 0, 1, 0, 0.99931455, 0, 0.03701957, 0, 0, 0)
+
+[node name="Collision" type="CollisionShape3D" parent="." unique_id=1112667165]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.6, 0)
+shape = SubResource("Shape_body")
+
+[node name="WheelFL" type="VehicleWheel3D" parent="." unique_id=1657667952]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.65, 0.4, -1)
+use_as_traction = true
+use_as_steering = true
+wheel_radius = 0.4
+
+[node name="RimFL" parent="WheelFL" unique_id=1682197955 instance=ExtResource("4_rimL")]
+transform = Transform3D(-0.13653028, 0, -0.9906359, 0, 1, 0, 0.9906359, 0, -0.13653028, -0.00021237135, -0.21125305, -0.09112406)
+
+[node name="WheelFR" type="VehicleWheel3D" parent="." unique_id=51644116]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.65, 0.4, -1)
+use_as_traction = true
+use_as_steering = true
+wheel_radius = 0.4
+
+[node name="RimFR" parent="WheelFR" unique_id=314036643 instance=ExtResource("5_rimR")]
+transform = Transform3D(0.007044571, 0, 0.9999752, 0, 1, 0, -0.9999752, 0, 0.007044571, -0.025887847, -0.26947236, -0.13907683)
+
+[node name="WheelRL" type="VehicleWheel3D" parent="." unique_id=1960265425]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.65, 0.4, 1)
+use_as_traction = true
+wheel_radius = 0.4
+
+[node name="RimRL" parent="WheelRL" unique_id=41835841 instance=ExtResource("4_rimL")]
+transform = Transform3D(0.11399737, 0, 0.99348104, 0, 1, 0, -0.99348104, 0, 0.11399737, 0, -0.18641523, 0.035337687)
+
+[node name="WheelRR" type="VehicleWheel3D" parent="." unique_id=174572152]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.65, 0.4, 1)
+use_as_traction = true
+wheel_radius = 0.4
+
+[node name="RimRR" parent="WheelRR" unique_id=1461851296 instance=ExtResource("5_rimR")]
+transform = Transform3D(0.0331417, 0, 0.9994507, 0, 1, 0, -0.9994507, 0, 0.0331417, 0, -0.19258446, -0.07182562)
+
+[node name="CameraRig" type="Node3D" parent="." unique_id=2110942571]
+script = ExtResource("2_camrig")
+
+[node name="Camera" type="Camera3D" parent="CameraRig" unique_id=820531784]
+transform = Transform3D(-1, 4.37114e-08, -7.571037e-08, 0, 0.86602557, 0.5000001, 8.742278e-08, 0.5000001, -0.86602557, 0, 6, -6)

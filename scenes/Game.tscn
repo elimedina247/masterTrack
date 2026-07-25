@@ -1,0 +1,49 @@
+[gd_scene load_steps=9 format=3 uid="uid://c0master0game00"]
+
+[ext_resource type="Script" path="res://scripts/game/Game.cs" id="1_game"]
+[ext_resource type="PackedScene" uid="uid://c0master0racer0" path="res://scenes/Racer.tscn" id="2_racer"]
+
+[sub_resource type="ProceduralSkyMaterial" id="Sky_mat"]
+
+[sub_resource type="Sky" id="Sky"]
+sky_material = SubResource("Sky_mat")
+
+[sub_resource type="Environment" id="Env"]
+background_mode = 2
+sky = SubResource("Sky")
+ambient_light_source = 3
+tonemap_mode = 2
+
+[sub_resource type="StandardMaterial3D" id="Mat_ground"]
+albedo_color = Color(0.35, 0.45, 0.4, 1)
+
+[sub_resource type="PlaneMesh" id="Mesh_ground"]
+material = SubResource("Mat_ground")
+size = Vector2(500, 500)
+
+[sub_resource type="WorldBoundaryShape3D" id="Shape_ground"]
+
+[node name="Game" type="Node3D"]
+script = ExtResource("1_game")
+RacerScene = ExtResource("2_racer")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Env")
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.707107, -0.707107, 0, 0.707107, 0.707107, 0, 10, 0)
+shadow_enabled = true
+
+[node name="Ground" type="StaticBody3D" parent="."]
+
+[node name="Mesh" type="MeshInstance3D" parent="Ground"]
+mesh = SubResource("Mesh_ground")
+
+[node name="Collision" type="CollisionShape3D" parent="Ground"]
+shape = SubResource("Shape_ground")
+
+[node name="Racers" type="Node3D" parent="."]
+
+[node name="RacerSpawner" type="MultiplayerSpawner" parent="."]
+_spawnable_scenes = PackedStringArray("res://scenes/Racer.tscn")
+spawn_path = NodePath("../Racers")
