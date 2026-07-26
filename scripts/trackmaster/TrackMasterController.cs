@@ -1,4 +1,6 @@
+using System.Collections.Generic;
 using Godot;
+using MasterTrack.Racer;
 using MasterTrack.Tiles;
 
 namespace MasterTrack.TrackMaster;
@@ -16,10 +18,19 @@ namespace MasterTrack.TrackMaster;
 /// tell the game something it already knew, in the middle of a live race. Hovering a tile in
 /// the palette ghosts it onto the head; clicking places it there.
 ///
+/// What they have to place comes from <see cref="TileHand"/> — a row of slots that fills itself
+/// with weighted random tiles over time. The catalog is what exists in the game; the hand is
+/// what the Track Master can actually reach for right now.
+///
 /// Because placement no longer aims at anything, the camera is free to be a camera. It has two
 /// modes (see <see cref="BoardCameraMode"/>): by default it rides over the end of the track so
 /// the Track Master's work is always in frame without them touching it, and on the toggle it
 /// becomes a free-flying camera for going and looking at the race.
+///
+/// The board also carries a live marker per racer. From board altitude a car is a few pixels of
+/// grey, which is no use to someone whose whole job is judging whether the track is beating
+/// them — so each one gets a coloured chevron pointing the way it's travelling, drawn over
+/// everything and held at a constant on-screen size however far the camera is zoomed out.
 /// </summary>
 public partial class TrackMasterController : Node3D
 {
@@ -50,6 +61,23 @@ public partial class TrackMasterController : Node3D
 	/// <summary>Furthest zoom: high enough to see a long track's whole shape.</summary>
 	[Export] public float MaxCameraHeight { get; set; } = TrackTile.Size * 14.0f;
 
+	/// <summary>How many tiles the Track Master can have waiting at once.</summary>
+	[Export] public int HandSlots { get; set; } = 6;
+
+	/// <summary>
+	/// How many tiles are already in hand when the match starts. Without an opening hand the
+	/// Track Master spends the first <see cref="DealInterval"/> seconds with nothing to place
+	/// while the racers are already moving.
+	/// </summary>
+	[Export] public int StartingTiles { get; set; } = 3;
+
+	/// <summary>
+	/// Seconds between dealt tiles. This is the tap the whole role runs on: a leading racer
+	/// crosses a 40 m tile in about a second at speed, so anything much above that and the
+	/// track cannot be kept ahead of them from the hand alone.
+	/// </summary>
+	[Export] public float DealInterval { get; set; } = 3.0f;
+
 	/// <summary>Fraction of the current height added or removed per wheel notch.</summary>
 	[Export] public float ZoomStep { get; set; } = 0.12f;
 
@@ -65,6 +93,16 @@ public partial class TrackMasterController : Node3D
 	/// <summary>Radians of free-roam look per pixel of mouse movement.</summary>
 	[Export] public float FreeLookSensitivity { get; set; } = 0.005f;
 
+	/// <summary>How high above a car its board marker floats, in metres.</summary>
+	[Export] public float MarkerHeight { get; set; } = 3.0f;
+
+	/// <summary>
+	/// How often the board re-checks who is racing, in seconds. Cars arrive once at the start of
+	/// a match, so this doesn't need to be every frame — the markers themselves move every frame
+	/// regardless, which is the part that has to look live.
+	/// </summary>
+	[Export] public float MarkerRosterInterval { get; set; } = 0.5f;
+
 	/// <summary>Fired when the previewed tile changes, so the palette can say what will happen.</summary>
 	[Signal] public delegate void PreviewChangedEventHandler(bool valid, string reason);
 
@@ -72,8 +110,24 @@ public partial class TrackMasterController : Node3D
 	/// toggle button reads its label off this rather than tracking the mode itself.</summary>
 	[Signal] public delegate void CameraModeChangedEventHandler(int mode);
 
+	/// <summary>
+	/// Fired when the contents of the hand change — a tile dealt or spent. Deliberately not
+	/// fired for the deal clock ticking: the tray reads that off <see cref="Hand"/> itself
+	/// rather than being woken every frame to be told the same thing.
+	/// </summary>
+	[Signal] public delegate void HandChangedEventHandler();
+
 	/// <summary>Which way the board camera is currently being driven.</summary>
 	public BoardCameraMode CameraMode { get; private set; } = BoardCameraMode.Follow;
+
+	/// <summary>
+	/// The tiles waiting to be placed. Built on first use rather than in <c>_Ready</c>: the tray
+	/// reads it while building itself, and which of the two runs first is a question about where
+	/// the nodes sit in the scene — not something this should depend on.
+	/// </summary>
+	public TileHand Hand => _hand ??= new TileHand(HandSlots, DealInterval, StartingTiles);
+
+	private TileHand? _hand;
 
 	private Camera3D _camera = null!;
 	private Node3D _headMarker = null!;
@@ -101,6 +155,31 @@ public partial class TrackMasterController : Node3D
 
 	private static readonly Color ValidTint = new(0.35f, 1.0f, 0.45f);
 	private static readonly Color InvalidTint = new(1.0f, 0.35f, 0.35f);
+
+	/// <summary>One board marker and the car it belongs to.</summary>
+	private sealed class RacerMarker
+	{
+		public required RacerController Racer { get; init; }
+		public required Node3D Root { get; init; }
+	}
+
+	private readonly List<RacerMarker> _markers = new();
+	private float _rosterCountdown;
+
+	/// <summary>
+	/// Picked apart rather than pretty: the Track Master has to tell cars apart at a glance from
+	/// a long way up, so these are spread around the wheel and kept off the yellow the head
+	/// marker already owns.
+	/// </summary>
+	private static readonly Color[] RacerColors =
+	{
+		new(1.00f, 0.42f, 0.30f),
+		new(0.40f, 0.85f, 1.00f),
+		new(0.55f, 1.00f, 0.45f),
+		new(0.85f, 0.55f, 1.00f),
+		new(1.00f, 0.55f, 0.80f),
+		new(0.45f, 1.00f, 0.90f),
+	};
 
 	public override void _Ready()
 	{
@@ -136,15 +215,18 @@ public partial class TrackMasterController : Node3D
 	}
 
 	/// <summary>
-	/// Called by the palette when the Track Master clicks a tile. It can only go in one place,
-	/// so there is nothing to aim at — this is the whole placement gesture.
+	/// Called by the palette when the Track Master clicks a slot in their hand. The tile can
+	/// only go in one place, so there is nothing to aim at — this is the whole gesture.
+	///
+	/// The tile is only spent if it would actually land: an illegal placement says why and
+	/// leaves the hand alone rather than burning a slot the Track Master waited for.
 	/// </summary>
-	public void PlaceTile(int catalogIndex)
+	public void PlaceFromSlot(int slot)
 	{
 		if (Track == null)
 			return;
 
-		TileDefinition? definition = TileCatalog.At(catalogIndex);
+		TileDefinition? definition = TileCatalog.At(Hand.At(slot));
 		if (definition == null)
 			return;
 
@@ -156,12 +238,21 @@ public partial class TrackMasterController : Node3D
 			return;
 		}
 
+		int catalogIndex = Hand.Take(slot);
+
+		// The hand has closed up behind the spent tile, so whatever slid into this slot is
+		// what the cursor is now over. Set it before the placement, which walks the head
+		// forward and rebuilds the ghost off it.
+		_previewIndex = Hand.At(slot);
+
 		Track.RequestPlaceTile(catalogIndex);
+		EmitSignal(SignalName.HandChanged);
 	}
 
-	/// <summary>Called by the palette on hover: show this tile on the head before committing.</summary>
-	public void PreviewTile(int catalogIndex)
+	/// <summary>Called by the palette on hover: show a slot's tile on the head before committing.</summary>
+	public void PreviewSlot(int slot)
 	{
+		int catalogIndex = Hand.At(slot);
 		if (_previewIndex == catalogIndex)
 			return;
 
@@ -177,10 +268,145 @@ public partial class TrackMasterController : Node3D
 
 	public override void _Process(double delta)
 	{
+		if (Hand.Tick((float)delta))
+			EmitSignal(SignalName.HandChanged);
+
 		if (CameraMode == BoardCameraMode.Follow)
 			UpdateFollow((float)delta);
 		else
 			UpdateFreeRoam((float)delta);
+
+		UpdateRacerMarkers((float)delta);
+	}
+
+	// ---- Racer markers ----
+
+	/// <summary>
+	/// Keep a marker over every car. The roster is only re-read every
+	/// <see cref="MarkerRosterInterval"/> seconds — cars arrive once per match, and scanning the
+	/// group allocates — but the markers themselves are moved every frame, because "where are
+	/// they right now" is the entire question the board is being asked.
+	/// </summary>
+	private void UpdateRacerMarkers(float delta)
+	{
+		_rosterCountdown -= delta;
+		if (_rosterCountdown <= 0.0f)
+		{
+			_rosterCountdown = MarkerRosterInterval;
+			RefreshRacerRoster();
+		}
+
+		foreach (RacerMarker marker in _markers)
+			AimMarker(marker);
+	}
+
+	private void RefreshRacerRoster()
+	{
+		// Cars that have left, been freed, or are on their way out.
+		for (int i = _markers.Count - 1; i >= 0; i--)
+		{
+			RacerController racer = _markers[i].Racer;
+			if (IsInstanceValid(racer) && !racer.IsQueuedForDeletion())
+				continue;
+
+			_markers[i].Root.QueueFree();
+			_markers.RemoveAt(i);
+		}
+
+		foreach (Node node in GetTree().GetNodesInGroup(RacerController.GroupName))
+		{
+			if (node is not RacerController racer || HasMarkerFor(racer))
+				continue;
+
+			Color color = RacerColors[Mathf.Abs(racer.OwnerPeerId) % RacerColors.Length];
+			Node3D root = BuildRacerMarker(color,
+				racer.OwnerPeerId > 0 ? $"Racer {racer.OwnerPeerId}" : "Racer");
+			AddChild(root);
+
+			_markers.Add(new RacerMarker { Racer = racer, Root = root });
+		}
+	}
+
+	private bool HasMarkerFor(RacerController racer)
+	{
+		foreach (RacerMarker marker in _markers)
+		{
+			if (marker.Racer == racer)
+				return true;
+		}
+		return false;
+	}
+
+	private void AimMarker(RacerMarker marker)
+	{
+		marker.Root.Position = marker.Racer.GlobalPosition + new Vector3(0.0f, MarkerHeight, 0.0f);
+
+		// Yaw off the car's forward axis flattened onto the board, rather than its euler Y —
+		// a car that has rolled onto its roof reports euler angles that spin the marker around
+		// while the car is still pointing the same way down the track.
+		Vector3 forward = -marker.Racer.GlobalBasis.Z;
+		var flat = new Vector2(forward.X, forward.Z);
+		if (flat.LengthSquared() > 0.0001f)
+			marker.Root.Rotation = new Vector3(0.0f, Mathf.Atan2(-flat.X, -flat.Y), 0.0f);
+
+		// Constant on-screen size: at the closest zoom a fixed-size marker swamps the tile it's
+		// on, and at the furthest it disappears into a pixel.
+		float distance = _camera.GlobalPosition.DistanceTo(marker.Root.GlobalPosition);
+		marker.Root.Scale = Vector3.One * Mathf.Clamp(distance / CameraHeight, 0.35f, 3.0f);
+	}
+
+	/// <summary>
+	/// A chevron pointing along local -Z, the way the car is going, with the racer's name over
+	/// it. Drawn with depth testing off on purpose — a marker that hides behind a tile wall or
+	/// a descending tile goes missing exactly when the Track Master is aiming something at it.
+	/// </summary>
+	private static Node3D BuildRacerMarker(Color color, string label)
+	{
+		var root = new Node3D { Name = "RacerMarker" };
+
+		var material = new StandardMaterial3D
+		{
+			AlbedoColor = color,
+			ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+			NoDepthTest = true,
+		};
+
+		const float length = TrackTile.Size * 0.22f;
+		const float width = TrackTile.Size * 0.055f;
+		const float thickness = 0.4f;
+
+		root.AddChild(new MeshInstance3D
+		{
+			Mesh = new BoxMesh { Size = new Vector3(width, thickness, length), Material = material },
+			Position = new Vector3(0.0f, 0.0f, length * 0.25f),
+		});
+		root.AddChild(new MeshInstance3D
+		{
+			Mesh = new BoxMesh { Size = new Vector3(width, thickness, length * 0.6f), Material = material },
+			Position = new Vector3(-length * 0.19f, 0.0f, -length * 0.42f),
+			RotationDegrees = new Vector3(0.0f, -38.0f, 0.0f),
+		});
+		root.AddChild(new MeshInstance3D
+		{
+			Mesh = new BoxMesh { Size = new Vector3(width, thickness, length * 0.6f), Material = material },
+			Position = new Vector3(length * 0.19f, 0.0f, -length * 0.42f),
+			RotationDegrees = new Vector3(0.0f, 38.0f, 0.0f),
+		});
+
+		root.AddChild(new Label3D
+		{
+			Text = label,
+			Position = new Vector3(0.0f, 6.0f, 0.0f),
+			PixelSize = 0.04f,
+			FontSize = 96,
+			OutlineSize = 28,
+			Modulate = color,
+			OutlineModulate = new Color(0.0f, 0.0f, 0.0f, 0.85f),
+			Billboard = BaseMaterial3D.BillboardModeEnum.Enabled,
+			NoDepthTest = true,
+		});
+
+		return root;
 	}
 
 	// ---- Camera modes ----

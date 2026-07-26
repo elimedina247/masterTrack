@@ -26,6 +26,19 @@ public partial class TrackController : Node3D
     /// <summary>How many plain straights to lay down before the Track Master takes over.</summary>
     [Export] public int StartingStraightLength { get; set; } = 4;
 
+    /// <summary>
+    /// How far above the track a placed tile appears before it comes down, in metres. Three
+    /// cells up: high enough that a racer sees it coming from a way off, which is the point.
+    /// </summary>
+    [Export] public float TileFallHeight { get; set; } = TrackTile.Size * 3.0f;
+
+    /// <summary>
+    /// How fast a placed tile descends, in metres per second. Its own knob rather than a
+    /// duration, so the fall reads at a consistent speed whatever the drop height is — at the
+    /// defaults it works out to a five second descent, which is about one dealt tile's worth.
+    /// </summary>
+    [Export] public float TileFallSpeed { get; set; } = 24.0f;
+
     public TrackGrid Grid { get; } = new();
 
     /// <summary>Fired on every peer once a tile has landed.</summary>
@@ -46,8 +59,10 @@ public partial class TrackController : Node3D
     {
         Grid.BuildStartingStraight(StartCell, StartDirection, StartingStraightLength);
 
+        // No drop: the racers are already sitting on this straight, so it has to be under them
+        // from the first frame rather than descending onto their roofs.
         foreach (PlacedTile tile in Grid.Tiles)
-            SpawnTileNode(tile);
+            SpawnTileNode(tile, drop: false);
 
         EmitSignal(SignalName.TrackHeadChanged);
     }
@@ -151,12 +166,19 @@ public partial class TrackController : Node3D
         EmitSignal(SignalName.TrackHeadChanged);
     }
 
-    private void SpawnTileNode(PlacedTile tile)
+    /// <summary>
+    /// Build the node for a placed tile. <paramref name="drop"/> is what separates a tile the
+    /// Track Master just played — which falls in from above, so the racers see it arrive — from
+    /// the starting straight, which is simply the ground the race begins on.
+    /// </summary>
+    private void SpawnTileNode(PlacedTile tile, bool drop = true)
     {
         var node = new TrackTile { Name = $"Tile{tile.Index}" };
         // Added to the tree first so the geometry it builds enters the tree with it.
         AddChild(node);
-        node.Initialize(tile.Data, tile.Index, tile.Cell, tile.EntryDirection);
+        node.Initialize(tile.Data, tile.Index, tile.Cell, tile.EntryDirection,
+                        fallHeight: drop ? TileFallHeight : 0.0f,
+                        fallSpeed: TileFallSpeed);
     }
 
     /// <summary>World position at the centre of the next open cell.</summary>

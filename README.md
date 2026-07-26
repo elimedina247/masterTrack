@@ -62,8 +62,10 @@ The whole game is networked. Architecture notes so we keep this in mind while bu
 - **Track state is authoritative on the server.** Tile placements from the Track Master
   are *requests* the server confirms, then replicates to every peer so all clients see
   the same track fall into place.
-- **Racer movement:** client-side input, server-reconciled. Racers' transforms are
-  synchronized so everyone sees everyone.
+- **Racer movement:** each car is simulated only by the peer that owns it, which pushes its
+  pose 30 times a second through a `MultiplayerSynchronizer`. Everyone else holds that car
+  frozen kinematic and slides it toward the pose it was sent. Not yet server-reconciled: an
+  owner's word on where its own car is, is currently final.
 - **Hazard notifications** (the "3 tiles ahead" warning) are computed against the
   authoritative track and pushed to the relevant Racer.
 - **Roles are assigned by the server** at match start (one Track Master, rest Racers).
@@ -127,13 +129,14 @@ master-track/
     ├── tiles/
     │   ├── TileHazard.cs         # enum of hazard types
     │   ├── TileData.cs           # data for a single tile (hazard + exit turn)
-    │   ├── TileCatalog.cs        # every tile type + grid <-> world helpers
+    │   ├── TileCatalog.cs        # every tile type + weights, grid <-> world helpers
     │   ├── TrackDirection.cs     # N/E/S/W and the turn maths
     │   ├── TrackGrid.cs          # the track model: cells, order, placement rules
     │   ├── TrackController.cs    # authoritative track + placement replication
     │   └── TrackTile.cs          # a placed tile; builds its own geometry
     ├── trackmaster/
-    │   └── TrackMasterController.cs # board camera, ghost preview, placement
+    │   ├── TrackMasterController.cs # board camera, ghost preview, placement
+    │   └── TileHand.cs           # the dealt slots: weighted draw on a timer
     ├── racer/
     │   ├── RacerController.cs    # the car: ownership + hazard warnings
     │   └── CameraRig.cs          # third-person chase camera with free-look
@@ -177,11 +180,51 @@ ahead to react to). Tiles are only ever added at the
 ahead of the racers" the game rather than free-form building. The head cell is marked on the
 board with a yellow pad and an arrow showing which way the track is running.
 
-**To place a tile:** click it in the tray along the bottom. It goes straight onto the head —
-that's the only cell it could have gone in, so there's nothing to aim at and no second click.
-Hovering a tile in the tray ghosts it onto the head first: green if it can go there, red if it
-can't, with the status line saying why. Keep the mouse on one tile and click repeatedly to lay
-a run of them, the preview walking along the track as it grows.
+Every tile is one cell wide, but a tile that runs straight through covers
+`TileCatalog.StraightCells` of them along the direction of travel — three, so a straight is 120 m
+of road and a hazard gets a real run-up and run-out either side of it. Curves stay a single cell,
+because a corner *is* the cell.
+
+The **hairpin** is the exception to all of that: two cells side by side, entered up one and left
+down the other, so the racer comes out heading the way they came in with a barrier — the apex —
+between the two lanes. It goes down as one tile in one click rather than as two curves the Track
+Master has to line up, and it comes in a left and a right. Being the one tile whose footprint
+steps off the line it entered on, it's why `PlacedTile.CellsFor` describes a shape rather than a
+length; a right hairpin is `ExitTurn = 2` and a left one `-2`, which reverse the racer identically
+and differ only in which side the tile swings out to.
+
+A tile has to have room for its whole footprint: if the cells a long straight or a hairpin needs
+aren't all clear, the placement is refused the same way running the track back into itself is, and
+the ghost turns red with the reason in the status line.
+
+**The hand.** The Track Master doesn't get the whole catalog — they get a row of slots along
+the bottom that fills itself with random tiles, one every `DealInterval` seconds. They open with
+`StartingTiles` of them already in hand, so the race doesn't begin with an empty tray. Which tile
+comes up is weighted (`TileDefinition.Weight`, currently summing to 100 so each reads as a
+percentage). The countdown to the next one shows in the slot at the end of the row; when every
+slot is full the clock stops and nothing more arrives until something is spent. So the choice
+isn't *which tile is best here* — it's what to spend now and what to hold, while the racers eat
+track ahead of you.
+
+**To place a tile:** click it in the tray. It goes straight onto the head — that's the only cell
+it could have gone in, so there's nothing to aim at and no second click. Hovering a slot ghosts
+its tile onto the head first: green if it can go there, red if it can't, with the status line
+saying why. An illegal placement is refused without spending the tile. Spending one closes the
+hand up behind it, the way a hand of cards does.
+
+**The drop.** A placed tile appears `TileFallHeight` above the track and sinks into place at
+`TileFallSpeed` metres per second (both on `TrackController`, since every peer builds the tile
+and the racers are the ones meant to see it coming). The whole tile descends, collision and all,
+so it isn't track you can drive on until it lands — which puts a real clock on building far
+enough ahead. At the defaults that's 120 m at 24 m/s, a five second descent. The starting
+straight doesn't drop; the racers are already parked on it.
+
+**Watching the racers.** Every car carries a coloured chevron on the board, pointing the way
+it's travelling, labelled with whose it is. They're drawn over everything — a marker that hid
+behind a tile wall would go missing exactly when you were aiming something at it — and held at
+a constant on-screen size, so they stay findable from the closest zoom to the furthest. This is
+the feedback the whole role runs on: you're building a track hard enough to stop these cars, and
+you can't judge that from a board that doesn't show them.
 
 **The camera** has two modes, on a toggle button in the top right:
 
@@ -201,8 +244,9 @@ Toggling back to Following eases the camera home rather than cutting to it.
 | Look (free roam) | Hold right mouse |
 | Zoom / fly speed | Mouse wheel |
 
-Tiles live in `TileCatalog`. Adding a new one is a single entry there plus a case in
-`TrackTile.BuildHazard` — the tray, the ghost and the geometry all pick it up automatically.
+Tiles live in `TileCatalog`. Adding a new one is a single entry there — hazard, look, weight —
+plus a case in `TrackTile.BuildHazard`. The deal, the ghost and the geometry all pick it up
+automatically; the tray shows whatever the hand happens to hold.
 
 `HairpinTurn` and `LoopAhead` aren't in the catalog yet: a hairpin exits back into the cell the
 track arrived from, and a loop needs vertical geometry, so both need multi-cell tiles that the
@@ -219,7 +263,8 @@ grid doesn't model.
 - [x] Track Master board view: tile tray, drag-and-drop placement, ghost preview
 - [x] Live tile placement + server validation + replication
 - [x] "3 tiles ahead" hazard notification system
-- [ ] Server reconciliation / transform sync so racers see each other move
+- [x] Transform sync so racers see each other move, and the Track Master sees them all
+- [ ] Server reconciliation (today each owner's word on where its own car is, is final)
 - [ ] Tile hand / dealing system (the Track Master currently has every tile available)
 - [ ] Multi-cell tiles, to unlock Hairpin and Loop
 - [ ] Win / lose conditions and round flow

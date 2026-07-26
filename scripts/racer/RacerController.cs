@@ -10,8 +10,14 @@ namespace MasterTrack.Racer;
 /// rigid body with real suspension, a brush tire model, a gearbox and a stack of assists —
 /// so this class is only about *who* is driving and what they're told.
 ///
-/// Input is read locally by the owning peer for responsiveness; other peers see this car
-/// through a MultiplayerSynchronizer on its transform (next step).
+/// Input is read locally by the owning peer for responsiveness; every other peer sees this car
+/// through a MultiplayerSynchronizer carrying its pose. That's what puts the racers on the Track
+/// Master's board in real time, which the whole role depends on — they're trying to build a
+/// track hard enough to stop these cars, and they can't judge that from a static board.
+///
+/// A car is simulated on exactly one machine: its owner's. Everywhere else it's a puppet, frozen
+/// kinematic and slid toward the pose coming off the wire. Running the vehicle physics on a
+/// remote car would only produce a second, disagreeing version of it to fight the network.
 ///
 /// This controller also receives the "3 tiles ahead" hazard warning: when a tile lands three
 /// slots in front of this racer, the server calls <see cref="WarnHazard"/> on the owning
@@ -22,11 +28,40 @@ public partial class RacerController : Vehicle
 	/// <summary>How many tiles ahead the racer is warned about a landing tile.</summary>
 	public const int WarningLookahead = 3;
 
+	/// <summary>
+	/// Group every racer joins. The Track Master's board finds the cars through this rather than
+	/// a node path, so racers arriving by replication show up on the board without anything
+	/// having to be told about them.
+	/// </summary>
+	public const string GroupName = "racers";
+
 	/// <summary>Which peer owns/controls this car.</summary>
 	[Export] public int OwnerPeerId { get; set; }
 
 	/// <summary>Which input actions drive this car.</summary>
 	[Export] public VehicleInputActions Actions { get; set; } = new();
+
+	/// <summary>Replicated position, written by the owner and followed by everyone else.</summary>
+	[Export] public Vector3 NetPosition { get; set; }
+
+	/// <summary>
+	/// Replicated orientation. A quaternion rather than euler angles so a remote car can be
+	/// slerped through a barrel roll off a jump without the angles unwrapping the long way.
+	/// </summary>
+	[Export] public Quaternion NetRotation { get; set; } = Quaternion.Identity;
+
+	/// <summary>How quickly a remote car closes on its replicated pose, per second.</summary>
+	[Export] public float RemoteSmoothing { get; set; } = 18.0f;
+
+	/// <summary>
+	/// Past this far from the replicated pose a remote car cuts instead of sliding. Covers the
+	/// first update after spawning and any respawn, either of which would otherwise be a long
+	/// glide across the board.
+	/// </summary>
+	[Export] public float RemoteSnapDistance { get; set; } = 25.0f;
+
+	/// <summary>How often the owner pushes its pose, in seconds.</summary>
+	[Export] public float SyncInterval { get; set; } = 1.0f / 30.0f;
 
 	/// <summary>Track index the racer is currently on, tracked by the server.</summary>
 	public int CurrentTrackIndex { get; private set; }
@@ -35,6 +70,15 @@ public partial class RacerController : Vehicle
 
 	/// <summary>True on the machine whose player owns/controls this car.</summary>
 	public bool IsLocalPlayer => OwnerPeerId == Multiplayer.GetUniqueId();
+
+	/// <summary>
+	/// Real networked play. Solo runs on Godot's implicit offline peer, where there is nobody to
+	/// replicate to and every car is simulated locally exactly as it always was.
+	/// </summary>
+	private bool IsNetworked => Multiplayer.MultiplayerPeer is ENetMultiplayerPeer;
+
+	/// <summary>Somebody else's car on this machine: a puppet driven by the wire, not by physics.</summary>
+	private bool IsRemote => IsNetworked && !IsLocalPlayer;
 
 	public override void _Ready()
 	{
@@ -48,7 +92,29 @@ public partial class RacerController : Vehicle
 		if (OwnerPeerId == 0 && int.TryParse(Name, out int idFromName))
 			OwnerPeerId = idFromName;
 
-		// The owning peer is the movement authority for its own car.
+		// How the board finds this car. Everything else about the marker is the board's business.
+		AddToGroup(GroupName);
+
+		if (IsNetworked)
+		{
+			// Seed the pose before anyone can read it, so a remote copy has somewhere real to
+			// start from instead of the world origin.
+			NetPosition = GlobalPosition;
+			NetRotation = GlobalBasis.GetRotationQuaternion();
+
+			AddChild(BuildSynchronizer());
+
+			if (IsRemote)
+			{
+				// Kinematic rather than static: the pose is assigned rather than simulated, but
+				// the car should still shove anything it lands on.
+				FreezeMode = FreezeModeEnum.Kinematic;
+				Freeze = true;
+			}
+		}
+
+		// The owning peer is the movement authority for its own car. Recursive by default, so
+		// this covers the synchronizer added just above.
 		if (Multiplayer.MultiplayerPeer != null)
 			SetMultiplayerAuthority(OwnerPeerId);
 
@@ -56,17 +122,74 @@ public partial class RacerController : Vehicle
 		GetNodeOrNull<CameraRig>("CameraRig")?.SetActive(IsLocalPlayer);
 	}
 
-	public override void _PhysicsProcess(double delta)
+	/// <summary>
+	/// The pose channel. Built in code rather than authored into the scene so the property list
+	/// can't drift away from the fields it names — a typo'd path in a .tscn replicates nothing
+	/// and says nothing about it.
+	/// </summary>
+	private MultiplayerSynchronizer BuildSynchronizer()
 	{
-		// Only the owning peer reads input for its own car. Everyone else still runs the
-		// physics so the car doesn't freeze — it just coasts on its last inputs until
-		// transform replication lands.
-		if (IsLocalPlayer)
+		var config = new SceneReplicationConfig();
+
+		// Relative to the synchronizer's root path, which defaults to its parent — this car.
+		foreach (string property in new[] { ":NetPosition", ":NetRotation" })
 		{
-			VehicleInputState.Sample(Actions).ApplyTo(this, Actions);
+			config.AddProperty(property);
+			config.PropertySetSpawn(property, true);
+			// Always rather than OnChange: a moving car changes every frame anyway, and this
+			// keeps a dropped packet from leaving a remote copy parked.
+			config.PropertySetReplicationMode(property, SceneReplicationConfig.ReplicationMode.Always);
 		}
 
+		return new MultiplayerSynchronizer
+		{
+			Name = "PoseSync",
+			ReplicationConfig = config,
+			ReplicationInterval = SyncInterval,
+		};
+	}
+
+	public override void _PhysicsProcess(double delta)
+	{
+		// A remote car isn't driven, it's told. Running the vehicle simulation as well would
+		// just be a second opinion for the network to keep overruling.
+		if (IsRemote)
+		{
+			FollowNetworkPose((float)delta);
+			return;
+		}
+
+		// Only the owning peer reads input for its own car.
+		if (IsLocalPlayer)
+			VehicleInputState.Sample(Actions).ApplyTo(this, Actions);
+
 		base._PhysicsProcess(delta);
+
+		if (IsNetworked)
+		{
+			NetPosition = GlobalPosition;
+			NetRotation = GlobalBasis.GetRotationQuaternion();
+		}
+	}
+
+	/// <summary>
+	/// Slide this puppet toward the pose its owner last sent. Smoothed rather than assigned
+	/// outright because the pose arrives at <see cref="SyncInterval"/>, which is well under the
+	/// frame rate — snapping to each update is what makes networked cars look like they're
+	/// stuttering rather than driving.
+	/// </summary>
+	private void FollowNetworkPose(float delta)
+	{
+		if (GlobalPosition.DistanceSquaredTo(NetPosition) > RemoteSnapDistance * RemoteSnapDistance)
+		{
+			GlobalPosition = NetPosition;
+			GlobalBasis = new Basis(NetRotation);
+			return;
+		}
+
+		float t = 1.0f - Mathf.Exp(-RemoteSmoothing * delta);
+		GlobalPosition = GlobalPosition.Lerp(NetPosition, t);
+		GlobalBasis = new Basis(GlobalBasis.GetRotationQuaternion().Slerp(NetRotation, t));
 	}
 
 	/// <summary>

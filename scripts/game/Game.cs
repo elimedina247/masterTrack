@@ -16,11 +16,10 @@ namespace MasterTrack.Game;
 /// - <b>Track Master:</b> the top-down board, the tile tray, and no car at all.
 ///
 /// The host spawns a car per racer under <c>Racers</c> and the <see cref="MultiplayerSpawner"/>
-/// replicates them. Tiles are not replicated as nodes — every peer rebuilds the track from the
-/// confirmed placements (see <see cref="TrackController"/>).
-///
-/// Transform replication (a MultiplayerSynchronizer on each car) is the next step — today
-/// each player drives their own car; remote cars won't move on other screens yet.
+/// replicates them. Each car then carries its own pose over the wire (see
+/// <see cref="RacerController"/>), so every peer — the Track Master most of all — sees the
+/// racers moving in real time. Tiles are not replicated as nodes: every peer rebuilds the track
+/// from the confirmed placements (see <see cref="TrackController"/>).
 /// </summary>
 public partial class Game : Node3D
 {

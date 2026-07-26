@@ -18,15 +18,53 @@ public partial class TileData : Resource
     /// </summary>
     [Export] public int ExitTurn { get; set; }
 
+    /// <summary>
+    /// How many grid cells the tile runs for along the direction of travel. A turning tile is
+    /// always 1 — the turn happens inside a single cell — but a tile that runs straight through
+    /// can be as long as it likes, and every straight in <see cref="TileCatalog"/> is three.
+    ///
+    /// A hairpin ignores this: it is always one cell per leg, whatever is set here. See
+    /// <see cref="IsHairpin"/>.
+    ///
+    /// Clamped to at least 1: a tile of no length would occupy nothing and leave the head where
+    /// it already was, so the track would quietly stop growing.
+    /// </summary>
+    [Export]
+    public int CellLength
+    {
+        get => _cellLength;
+        set => _cellLength = Mathf.Max(1, value);
+    }
+
+    private int _cellLength = 1;
+
+    /// <summary>
+    /// Whether this tile doubles back on itself — a 180-degree turn, leaving the racer heading
+    /// the way they came in a lane one cell to the side. The only tile whose footprint steps off
+    /// the line it entered on.
+    /// </summary>
+    public bool IsHairpin => Mathf.Abs(ExitTurn) == 2;
+
+    /// <summary>
+    /// Which way the tile swings out: 1 to the right of the entry direction, -1 to the left.
+    ///
+    /// A U-turn reverses the racer whichever way round it goes — <c>Turn(2)</c> and
+    /// <c>Turn(-2)</c> land on the same direction — so for a hairpin the exit direction says
+    /// nothing about which side of the track it occupies. The sign of <see cref="ExitTurn"/> is
+    /// what carries that, which is why a right hairpin is 2 and a left one is -2.
+    /// </summary>
+    public int TurnSide => ExitTurn >= 0 ? 1 : -1;
+
     /// <summary>Path to the visual scene instanced when this tile is placed on the track.</summary>
     [Export] public string ScenePath { get; set; } = "";
 
     public TileData() { }
 
-    public TileData(TileHazard hazard, int exitTurn = 0, string scenePath = "")
+    public TileData(TileHazard hazard, int exitTurn = 0, int cellLength = 1, string scenePath = "")
     {
         Hazard = hazard;
         ExitTurn = exitTurn;
+        CellLength = cellLength;
         ScenePath = scenePath;
     }
 
@@ -39,11 +77,13 @@ public partial class TileData : Resource
     {
         ["hazard"] = (int)Hazard,
         ["exit_turn"] = ExitTurn,
+        ["cell_length"] = CellLength,
         ["scene_path"] = ScenePath,
     };
 
     public static TileData FromDict(Godot.Collections.Dictionary dict) => new(
         (TileHazard)(int)dict["hazard"],
         (int)dict["exit_turn"],
+        (int)dict["cell_length"],
         (string)dict["scene_path"]);
 }
