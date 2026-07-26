@@ -3,8 +3,8 @@
 [ext_resource type="Shader" uid="uid://ch2s84hdfhohe" path="res://shaders/sky.gdshader" id="1_sky"]
 
 [sub_resource type="Gradient" id="Grad_cloud_color"]
-offsets = PackedFloat32Array(0, 0.5, 1)
-colors = PackedColorArray(1, 1, 1, 1, 0.93, 0.95, 0.98, 1, 0.62, 0.68, 0.78, 1)
+offsets = PackedFloat32Array(0, 0.55, 1)
+colors = PackedColorArray(1, 1, 1, 1, 0.97, 0.99, 1, 1, 0.78, 0.87, 0.96, 1)
 
 [sub_resource type="GradientTexture2D" id="Tex_cloud_color"]
 gradient = SubResource("Grad_cloud_color")
@@ -13,12 +13,13 @@ height = 256
 fill_to = Vector2(0, 1)
 
 [sub_resource type="Gradient" id="Grad_cloud_mask"]
-offsets = PackedFloat32Array(0, 0.46, 0.66, 1)
+offsets = PackedFloat32Array(0, 0.5, 0.54, 1)
 colors = PackedColorArray(0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1)
 
 [sub_resource type="FastNoiseLite" id="Noise_clouds"]
-frequency = 0.004
-fractal_gain = 0.45
+frequency = 0.0022
+fractal_octaves = 3
+fractal_gain = 0.35
 
 [sub_resource type="NoiseTexture2D" id="Tex_clouds"]
 width = 1024
@@ -28,7 +29,7 @@ seamless = true
 
 [sub_resource type="Gradient" id="Grad_hdri"]
 offsets = PackedFloat32Array(0, 0.5, 1)
-colors = PackedColorArray(0.55, 0.68, 0.95, 1, 0.86, 0.89, 0.93, 1, 0.28, 0.31, 0.37, 1)
+colors = PackedColorArray(0.72, 0.84, 1, 1, 0.95, 0.96, 0.98, 1, 0.58, 0.66, 0.76, 1)
 
 [sub_resource type="GradientTexture2D" id="Tex_hdri"]
 gradient = SubResource("Grad_hdri")
@@ -37,8 +38,8 @@ height = 256
 fill_to = Vector2(0, 1)
 
 [sub_resource type="Gradient" id="Grad_sky"]
-offsets = PackedFloat32Array(0, 0.42, 0.5, 0.62, 1)
-colors = PackedColorArray(0.13, 0.29, 0.6, 1, 0.4, 0.61, 0.85, 1, 0.73, 0.83, 0.93, 1, 0.55, 0.66, 0.81, 1, 0.16, 0.24, 0.38, 1)
+offsets = PackedFloat32Array(0, 0.4, 0.5, 0.6, 1)
+colors = PackedColorArray(0.05, 0.32, 0.82, 1, 0.22, 0.62, 0.98, 1, 0.72, 0.92, 1, 1, 0.55, 0.8, 0.96, 1, 0.3, 0.55, 0.8, 1)
 
 [sub_resource type="GradientTexture2D" id="Tex_sky"]
 gradient = SubResource("Grad_sky")

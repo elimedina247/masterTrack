@@ -39,6 +39,17 @@ public partial class TileData : Resource
     private int _cellLength = 1;
 
     /// <summary>
+    /// How much higher the track is when the racer leaves this tile than when they entered it, in
+    /// cubes — <see cref="TileCatalog.HeightStep"/> metres each. Positive climbs, negative drops,
+    /// 0 is flat, which is everything but the ramps.
+    ///
+    /// The change is cumulative: the grid carries a running height, so a tile that climbs leaves
+    /// every tile after it up there until something brings the track back down. That is what makes
+    /// a ramp a ramp rather than a bump.
+    /// </summary>
+    [Export] public int HeightChange { get; set; }
+
+    /// <summary>
     /// Whether this tile doubles back on itself — a 180-degree turn, leaving the racer heading
     /// the way they came in a lane one cell to the side. The only tile whose footprint steps off
     /// the line it entered on.
@@ -60,11 +71,13 @@ public partial class TileData : Resource
 
     public TileData() { }
 
-    public TileData(TileHazard hazard, int exitTurn = 0, int cellLength = 1, string scenePath = "")
+    public TileData(TileHazard hazard, int exitTurn = 0, int cellLength = 1, int heightChange = 0,
+                    string scenePath = "")
     {
         Hazard = hazard;
         ExitTurn = exitTurn;
         CellLength = cellLength;
+        HeightChange = heightChange;
         ScenePath = scenePath;
     }
 
@@ -78,6 +91,7 @@ public partial class TileData : Resource
         ["hazard"] = (int)Hazard,
         ["exit_turn"] = ExitTurn,
         ["cell_length"] = CellLength,
+        ["height_change"] = HeightChange,
         ["scene_path"] = ScenePath,
     };
 
@@ -85,5 +99,6 @@ public partial class TileData : Resource
         (TileHazard)(int)dict["hazard"],
         (int)dict["exit_turn"],
         (int)dict["cell_length"],
+        (int)dict["height_change"],
         (string)dict["scene_path"]);
 }

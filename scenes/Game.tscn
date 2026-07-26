@@ -11,12 +11,18 @@
 [ext_resource type="Script" path="res://scripts/ui/SpeedLines.cs" id="9_lines"]
 [ext_resource type="Resource" path="res://resources/nitro_effects.tres" id="10_fx"]
 [ext_resource type="Sky" path="res://resources/sky.tres" id="11_sky"]
+[ext_resource type="Script" path="res://scripts/game/SkyScenery.cs" id="13_sky_scenery"]
 
 [sub_resource type="Environment" id="Env"]
 background_mode = 2
 sky = ExtResource("11_sky")
 ambient_light_source = 3
-tonemap_mode = 2
+ambient_light_energy = 1.5
+tonemap_mode = 0
+fog_enabled = true
+fog_light_color = Color(0.72, 0.92, 1, 1)
+fog_density = 0.0007
+fog_sky_affect = 0.0
 
 [node name="Game" type="Node3D" unique_id=653604701]
 script = ExtResource("1_game")
@@ -24,6 +30,9 @@ RacerScene = ExtResource("2_racer")
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=2077104838]
 environment = SubResource("Env")
+
+[node name="SkyScenery" type="Node3D" parent="." unique_id=884210377]
+script = ExtResource("13_sky_scenery")
 
 [node name="Sun" type="DirectionalLight3D" parent="." unique_id=1047906660]
 transform = Transform3D(0.866025, -0.353553, 0.353553, 0, 0.707107, 0.707107, -0.5, -0.612372, 0.612372, 0, 40, 0)

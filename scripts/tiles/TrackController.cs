@@ -176,11 +176,14 @@ public partial class TrackController : Node3D
         var node = new TrackTile { Name = $"Tile{tile.Index}" };
         // Added to the tree first so the geometry it builds enters the tree with it.
         AddChild(node);
-        node.Initialize(tile.Data, tile.Index, tile.Cell, tile.EntryDirection,
+        node.Initialize(tile.Data, tile.Index, tile.Cell, tile.EntryDirection, tile.EntryHeight,
                         fallHeight: drop ? TileFallHeight : 0.0f,
                         fallSpeed: TileFallSpeed);
     }
 
-    /// <summary>World position at the centre of the next open cell.</summary>
-    public Vector3 HeadWorldPosition => TileCatalog.CellToWorld(Grid.HeadCell);
+    /// <summary>
+    /// World position at the centre of the next open cell, at the elevation the next tile will
+    /// start from — so the board camera and the head marker climb with the track.
+    /// </summary>
+    public Vector3 HeadWorldPosition => TileCatalog.CellToWorld(Grid.HeadCell, Grid.HeadHeight);
 }

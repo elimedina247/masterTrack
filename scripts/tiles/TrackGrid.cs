@@ -17,6 +17,15 @@ public sealed class PlacedTile
     /// <summary>Position along the track from the start line. Drives the "3 tiles ahead" warning.</summary>
     public required int Index { get; init; }
 
+    /// <summary>
+    /// Elevation the racer enters at, in cubes above the ground plane. The tile's geometry is
+    /// built from here, so a ramp starts at this height and ends at <see cref="ExitHeight"/>.
+    /// </summary>
+    public required int EntryHeight { get; init; }
+
+    /// <summary>Elevation the racer leaves at. Same as <see cref="EntryHeight"/> unless a ramp.</summary>
+    public int ExitHeight => EntryHeight + Data.HeightChange;
+
     /// <summary>Direction a racer is travelling as they leave this tile.</summary>
     public TrackDirection ExitDirection => EntryDirection.Turn(Data.ExitTurn);
 
@@ -81,6 +90,11 @@ public sealed class PlacedTile
 /// Every cell it covers maps back to the same <see cref="PlacedTile"/>, so asking which tile a
 /// car is on works the same whether it's standing on the front of a long straight, the middle of
 /// it, or the far side of a hairpin.
+///
+/// The track also has elevation: <see cref="HeadHeight"/> is a running count of cubes climbed,
+/// which ramps move up and down. Cells stay two-dimensional even so, because two tiles are never
+/// allowed to share a cell whatever height they are at — the track may climb over its own
+/// neighbourhood but never over itself, which keeps "which tile is this car on" a flat lookup.
 /// </summary>
 public sealed class TrackGrid
 {
@@ -92,6 +106,13 @@ public sealed class TrackGrid
 
     /// <summary>Direction a racer will be travelling when they enter <see cref="HeadCell"/>.</summary>
     public TrackDirection HeadDirection { get; private set; } = TrackDirection.North;
+
+    /// <summary>
+    /// Elevation the next tile starts at, in cubes. Runs up and down as ramps are placed, and is
+    /// never allowed below 0 — the ground plane is the floor of the world, and a track that dug
+    /// underneath it would leave the racers driving through the dark.
+    /// </summary>
+    public int HeadHeight { get; private set; }
 
     /// <summary>Tiles in track order, from the start line onward.</summary>
     public IReadOnlyList<PlacedTile> Tiles => _ordered;
@@ -105,6 +126,7 @@ public sealed class TrackGrid
         _ordered.Clear();
         HeadCell = startCell;
         HeadDirection = startDirection;
+        HeadHeight = 0;
     }
 
     public PlacedTile? TileAt(Vector2I cell)
@@ -150,6 +172,12 @@ public sealed class TrackGrid
             return false;
         }
 
+        if (HeadHeight + data.HeightChange < 0)
+        {
+            reason = "The track is already on the ground — it can't go down from here.";
+            return false;
+        }
+
         reason = "";
         return true;
     }
@@ -172,6 +200,7 @@ public sealed class TrackGrid
             EntryDirection = HeadDirection,
             Data = data,
             Index = _ordered.Count,
+            EntryHeight = HeadHeight,
         };
 
         foreach (Vector2I occupied in tile.Cells)
@@ -180,6 +209,7 @@ public sealed class TrackGrid
 
         HeadDirection = tile.ExitDirection;
         HeadCell = tile.ExitCell + HeadDirection.Step();
+        HeadHeight = tile.ExitHeight;
 
         return tile;
     }

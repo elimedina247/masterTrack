@@ -1,19 +1,18 @@
-[gd_scene format=3 uid="uid://5vb3gdxlbtm6"]
+[gd_scene format=3]
 
 [ext_resource type="Script" uid="uid://b4v752x20q2a" path="res://scripts/racer/RacerController.cs" id="1_racer"]
 [ext_resource type="Script" uid="uid://cg4iv4x4j64ar" path="res://scripts/racer/CameraRig.cs" id="2_camrig"]
 [ext_resource type="Script" uid="uid://dte1buip8dpqa" path="res://scripts/vehicles/Wheel.cs" id="3_wheel"]
 [ext_resource type="Script" uid="uid://bke5e763sybcn" path="res://scripts/vehicles/EngineSound.cs" id="4_engsnd"]
-[ext_resource type="PackedScene" uid="uid://c634phxbwtt1f" path="res://assets/cars/Body/C_Cartoon_Body.fbx" id="5_body"]
-[ext_resource type="PackedScene" uid="uid://dyelhr5rjcm5l" path="res://assets/cars/Rims/C_Cartoon_Rim_L.fbx" id="6_rimL"]
-[ext_resource type="PackedScene" uid="uid://baqvgu83gc8oq" path="res://assets/cars/Rims/C_Cartoon_Rim_R.fbx" id="7_rimR"]
+[ext_resource type="PackedScene" uid="uid://b5k5d1jhmtfb0" path="res://assets/CC96/Body/CC96_Body_3.fbx" id="5_body"]
+[ext_resource type="PackedScene" uid="uid://cexe13v0biii5" path="res://assets/CC96/Rims/Rims3_L.fbx" id="6_rimL"]
+[ext_resource type="PackedScene" uid="uid://cujx6ptlxd24w" path="res://assets/CC96/Rims/Rims3_R.fbx" id="7_rimR"]
 [ext_resource type="AudioStream" uid="uid://dio25xn4f7s6f" path="res://assets/gevp/sounds/4000.wav" id="8_engwav"]
 [ext_resource type="Script" uid="uid://kf2ch72spgs" path="res://scripts/vehicles/BodyLean.cs" id="9_bodylean"]
 [ext_resource type="Script" uid="uid://cej0x1p4uf7vb" path="res://scripts/vehicles/SkidMarks.cs" id="10_skid"]
 [ext_resource type="Script" uid="uid://mqs22yxgh46g" path="res://scripts/vehicles/TireSqueal.cs" id="11_squeal"]
 [ext_resource type="AudioStream" uid="uid://dgdniy4n8opr4" path="res://assets/gevp/sounds/tires_squal_loop.wav" id="12_squealwav"]
 [ext_resource type="Script" uid="uid://cqcu0hi3lcv4l" path="res://scripts/vehicles/FlatShade.cs" id="13_flatshade"]
-[ext_resource type="Script" uid="uid://eq5bg7e2kp0x" path="res://scripts/vehicles/NitroFlame.cs" id="14_nitroflame"]
 
 [sub_resource type="Curve" id="Curve_drive"]
 _data = [Vector2(0, 1), 0.0, 0.0, 0, 0, Vector2(0.55, 0.9), 0.0, 0.0, 0, 0, Vector2(0.85, 0.45), -1.6, -1.6, 0, 0, Vector2(1, 0), -2.4, 0.0, 0, 0]
@@ -44,7 +43,7 @@ FrontDampingRatio = 0.6
 RearDampingRatio = 0.6
 BrakingGripMultiplier = 2.0
 FrontTireRadius = 0.24
-RearTireRadius = 0.36
+RearTireRadius = 0.24
 CoefficientOfDrag = 0.1
 
 [node name="FlatShade" type="Node" parent="." unique_id=610255931]
@@ -55,6 +54,7 @@ script = ExtResource("9_bodylean")
 VehicleNode = NodePath("..")
 
 [node name="BodyModel" parent="BodyRig" unique_id=381378014 instance=ExtResource("5_body")]
+transform = Transform3D(-4.371139e-08, 0, 1, 0, 1, 0, -1, 0, -4.371139e-08, 0, 0.2, -0.1)
 
 [node name="Collision" type="CollisionShape3D" parent="." unique_id=1227752201]
 transform = Transform3D(1.1, 0, 0, 0, 1.1, 0, 0, 0, 1.1, 0, 0.5, 0)
@@ -99,10 +99,6 @@ WheelNode = NodePath("WheelRRHub")
 
 [node name="RimRR" parent="WheelRR/WheelRRHub" unique_id=509893854 instance=ExtResource("7_rimR")]
 transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 0, 0, 0)
-
-[node name="NitroFlame" type="Node3D" parent="." unique_id=1660429712 node_paths=PackedStringArray("VehicleNode")]
-script = ExtResource("14_nitroflame")
-VehicleNode = NodePath("..")
 
 [node name="SkidMarks" type="MeshInstance3D" parent="." unique_id=1471203588 node_paths=PackedStringArray("VehicleNode")]
 script = ExtResource("10_skid")

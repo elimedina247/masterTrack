@@ -14,7 +14,7 @@ Two very different games happening at once, on the same track:
 - Plays a top-down, **board-game-like overview** of the track.
 - Their job: **build the racetrack in real time** as the Racers drive it.
 - Each round they are dealt a **hand of tiles**. Every tile carries a specific, visible
-  **hazard** — e.g. `Jump Ahead`, `Loop Ahead`, `Hairpin Turn`.
+  **hazard** — e.g. `Jump Ahead`, `Loop Ahead`, `Log Trap`, `Crushers`.
 - They place tiles ahead of the racers to slow them down, trap them, and thin the herd.
 - Goal: **defeat the Racers** — the track is their weapon.
 
@@ -128,12 +128,15 @@ master-track/
     │   └── EngineSound.cs, WheelSmoke.cs, VehicleInputController.cs
     ├── tiles/
     │   ├── TileHazard.cs         # enum of hazard types
-    │   ├── TileData.cs           # data for a single tile (hazard + exit turn)
+    │   ├── TileData.cs           # one tile's data: hazard, exit turn, length, height change
     │   ├── TileCatalog.cs        # every tile type + weights, grid <-> world helpers
     │   ├── TrackDirection.cs     # N/E/S/W and the turn maths
-    │   ├── TrackGrid.cs          # the track model: cells, order, placement rules
+    │   ├── TrackGrid.cs          # the track model: cells, order, height, placement rules
     │   ├── TrackController.cs    # authoritative track + placement replication
-    │   └── TrackTile.cs          # a placed tile; builds its own geometry
+    │   ├── TrackTile.cs          # a placed tile; builds its own geometry
+    │   ├── TrackTile.Hazards.cs  # the still hazards, and the impulse pads
+    │   ├── TrackTile.Moving.cs   # moving parts + the clock that drives them
+    │   └── TrackTile.Shapes.cs   # hairpin, ramps, loop: tiles that are their own shape
     ├── trackmaster/
     │   ├── TrackMasterController.cs # board camera, ghost preview, placement
     │   └── TileHand.cs           # the dealt slots: weighted draw on a timer
@@ -197,6 +200,32 @@ A tile has to have room for its whole footprint: if the cells a long straight or
 aren't all clear, the placement is refused the same way running the track back into itself is, and
 the ghost turns red with the reason in the status line.
 
+**Elevation.** The track climbs. `TrackGrid.HeadHeight` is a running count of cubes above the
+ground — a cube being `TileCatalog.HeightStep`, which is one cell on its side, 40 m — and the ramp
+tiles are the only things that change it. The change is cumulative, so everything placed after a
+climb is placed up there until something brings the track back down, and the board camera and head
+marker rise with it. Cells stay flat two-dimensional coordinates regardless: two tiles may never
+share a cell whatever height they're at, so the track can climb over its own neighbourhood but not
+over itself, and "which tile is this car on" stays a flat lookup. A ramp down is refused when the
+track is already on the ground, which means a ramp down in the hand is a tile you hold until
+you've climbed — the one card in the catalog whose legality depends on the shape of the track so
+far.
+
+Ramps are built as eight facets along a smoothstep profile rather than as one flat wedge, so the
+road is level where it meets its neighbours instead of meeting them at an 18° or 34° kerb. The
+price is that the middle is steeper than the average: 27° for one cube and 45° for two.
+
+**Moving hazards** (`TrackTile.Moving.cs`) are `AnimatableBody3D` parts driven in the physics step,
+which is what lets them shove a car rather than teleport through it. Their phase is deliberately
+per-peer: every part runs off its own tile's elapsed time, so two machines have the same log a
+fraction of a swing apart. That's the same bargain the game already takes on the cars — a racer is
+simulated by whoever owns it and only its pose is replicated — so each car is knocked about by its
+own owner's view of the hazard and everyone sees the consequence.
+
+**Nothing recovers a car that leaves the track.** There's no respawn, so the log trap (which has no
+barriers, by design) and the hole under the loop are both able to end someone's race outright. The
+hazards that could do that are weighted low for exactly that reason.
+
 **The hand.** The Track Master doesn't get the whole catalog — they get a row of slots along
 the bottom that fills itself with random tiles, one every `DealInterval` seconds. They open with
 `StartingTiles` of them already in hand, so the race doesn't begin with an empty tray. Which tile
@@ -244,13 +273,22 @@ Toggling back to Following eases the camera home rather than cutting to it.
 | Look (free roam) | Hold right mouse |
 | Zoom / fly speed | Mouse wheel |
 
-Tiles live in `TileCatalog`. Adding a new one is a single entry there — hazard, look, weight —
-plus a case in `TrackTile.BuildHazard`. The deal, the ghost and the geometry all pick it up
-automatically; the tray shows whatever the hand happens to hold.
+Tiles live in `TileCatalog` — 23 of them. Adding a new one is a single entry there — hazard, look,
+weight — plus a case in `TrackTile.BuildHazard`. The deal, the ghost and the geometry all pick it
+up automatically; the tray shows whatever the hand happens to hold. `TrackTile` is split into
+partials by kind: `.Hazards.cs` for the still ones, `.Moving.cs` for the ones with moving parts,
+`.Shapes.cs` for tiles that build their own geometry outright because the standard
+floor-walls-line-hazard assembly can't describe them.
 
-`HairpinTurn` and `LoopAhead` aren't in the catalog yet: a hairpin exits back into the cell the
-track arrived from, and a loop needs vertical geometry, so both need multi-cell tiles that the
-grid doesn't model.
+Two hazards act on the car with a force rather than by being in the way — the launch pads and the
+boost pads — and both do it from the tile's own side, through a trigger volume that hands the car
+an impulse. The loop does the same to hold a car on the inside of it. Nothing in `Vehicle.cs`
+needed changing to make any of them work; the only vehicle-side thing tiles use is the surface
+group on whatever the wheel ray hits, which is how the ice patch and the gravel bed get their grip.
+
+`LoopAhead` is now a real drivable loop. Still not in the catalog: nothing. The one shape the grid
+still can't express is a tile whose exit turns *and* whose footprint runs more than a cell, since
+`PlacedTile.CellsFor` assumes a long tile runs in the direction it was entered.
 
 ---
 

@@ -21,20 +21,36 @@ namespace MasterTrack.Game;
 public partial class PhysicsTestArea : Node3D
 {
 	/// <summary>
-	/// Half-extent of the tarmac pad, in metres. Wide enough to hold the whole tile row with
-	/// room to line each one up, so it grows with the tiles.
+	/// Minimum half-extent of the tarmac pad, in metres. A floor rather than the final size: the
+	/// pad is grown to reach under every tile in the layout, because a proving ground where half
+	/// the catalog hangs over the void is no use for driving onto anything.
 	/// </summary>
 	[Export] public float PadHalfSize { get; set; } = TileCatalog.TileSize * 7.5f;
 
 	/// <summary>Width of the grass apron along the +X edge of the pad.</summary>
 	[Export] public float GrassWidth { get; set; } = 120.0f;
 
-	/// <summary>Grid cell the tile row is centred on, in cells.</summary>
-	[Export] public int TileRowZCell { get; set; }
+	/// <summary>
+	/// Tiles per row. The catalog is long enough now that one row would be a two kilometre line
+	/// nobody is going to drive to the end of, so it wraps.
+	/// </summary>
+	[Export] public int TileColumns { get; set; } = 6;
 
-	/// <summary>Cells between each tile in the row, so 2 leaves a whole cell of clear tarmac
-	/// between neighbours.</summary>
-	[Export] public int TileCellStride { get; set; } = 2;
+	/// <summary>Cells between tile columns. Three, so there is a clear cell beside even a
+	/// two-cell-wide hairpin.</summary>
+	[Export] public int TileCellStride { get; set; } = 3;
+
+	/// <summary>Cells between tile rows: a three-cell tile, plus three cells of run-up to it.</summary>
+	[Export] public int TileRowStride { get; set; } = 6;
+
+	/// <summary>Widest and longest any tile in the catalog is, in cells. Hairpins are the wide
+	/// ones; the straight-through tiles are the long ones.</summary>
+	private const int WidestTileCells = 2;
+	private const int LongestTileCells = 3;
+
+	/// <summary>Pad half-extents, worked out from the layout in <see cref="Rebuild"/>.</summary>
+	private float _padHalfX;
+	private float _padHalfZ;
 
 	/// <summary>The car to respawn. Defaults to a sibling named <c>TestCar</c>.</summary>
 	[Export] public RigidBody3D? Car { get; set; }
@@ -83,9 +99,40 @@ public partial class PhysicsTestArea : Node3D
 		_generated = new Node3D { Name = GeneratedRootName };
 		AddChild(_generated);
 
+		// Sized before anything is built, because the pad has to reach under the tile layout and
+		// the layout is what decides how far that is.
+		MeasurePad();
+
 		BuildSurfaces();
-		BuildTileRow();
+		BuildTileGrid();
 		BuildBumpStrip();
+	}
+
+	/// <summary>Rows the tile layout needs to hold the whole catalog.</summary>
+	private int TileRows => (TileCatalog.All.Count + TileColumns - 1) / Mathf.Max(1, TileColumns);
+
+	/// <summary>Cell of the first column, so the grid straddles the origin.</summary>
+	private int FirstColumnCell => -((TileColumns - 1) * TileCellStride) / 2;
+
+	/// <summary>Cell of the first row.</summary>
+	private int FirstRowCell => -((TileRows - 1) * TileRowStride) / 2;
+
+	/// <summary>
+	/// Work out how much tarmac the tile layout needs under it. Tiles run north from their own
+	/// cell, and a hairpin swings a cell out to one side, so the extent is the grid plus room for
+	/// the biggest tile in each direction plus the run-up a racer needs to arrive at speed.
+	/// </summary>
+	private void MeasurePad()
+	{
+		int lastColumnCell = FirstColumnCell + (TileColumns - 1) * TileCellStride;
+		int lastRowCell = FirstRowCell + (TileRows - 1) * TileRowStride;
+
+		int spreadX = Mathf.Max(Mathf.Abs(FirstColumnCell), Mathf.Abs(lastColumnCell)) + WidestTileCells;
+		int spreadZ = Mathf.Max(Mathf.Abs(FirstRowCell - (LongestTileCells - 1)),
+								Mathf.Abs(lastRowCell)) + LongestTileCells;
+
+		_padHalfX = Mathf.Max(PadHalfSize, spreadX * TileCatalog.TileSize);
+		_padHalfZ = Mathf.Max(PadHalfSize, spreadZ * TileCatalog.TileSize);
 	}
 
 	public override void _UnhandledInput(InputEvent @event)
@@ -121,36 +168,44 @@ public partial class PhysicsTestArea : Node3D
 	private void BuildSurfaces()
 	{
 		AddSlab("RoadPad", SurfaceGroups.Road, RoadColor,
-				new Vector3(PadHalfSize * 2.0f, SlabThickness, PadHalfSize * 2.0f),
+				new Vector3(_padHalfX * 2.0f, SlabThickness, _padHalfZ * 2.0f),
 				new Vector3(0, SurfaceY - SlabThickness * 0.5f, 0));
 
 		// Butts straight up against the pad's +X edge, so you can put two wheels on the grass
 		// and feel the car go loose without leaving the ground.
 		AddSlab("GrassApron", SurfaceGroups.Grass, GrassColor,
-				new Vector3(GrassWidth, SlabThickness, PadHalfSize * 2.0f),
-				new Vector3(PadHalfSize + GrassWidth * 0.5f, SurfaceY - SlabThickness * 0.5f, 0));
+				new Vector3(GrassWidth, SlabThickness, _padHalfZ * 2.0f),
+				new Vector3(_padHalfX + GrassWidth * 0.5f, SurfaceY - SlabThickness * 0.5f, 0));
 
-		AddLabel("Grass →", new Vector3(PadHalfSize - 12.0f, 5.0f, -40.0f), GrassColor);
+		AddLabel("Grass →", new Vector3(_padHalfX - 12.0f, 5.0f, -40.0f), GrassColor);
 	}
 
-	/// <summary>One of every catalog tile, spaced out so each can be approached on its own.</summary>
-	private void BuildTileRow()
+	/// <summary>
+	/// One of every catalog tile, in a grid, each with clear tarmac in front of it to build speed
+	/// on. Rows rather than one long line: the catalog outgrew the line.
+	/// </summary>
+	private void BuildTileGrid()
 	{
-		int count = TileCatalog.All.Count;
-		int firstCell = -(count - 1) * TileCellStride / 2;
-
-		for (int i = 0; i < count; i++)
+		for (int i = 0; i < TileCatalog.All.Count; i++)
 		{
 			TileDefinition definition = TileCatalog.All[i];
-			var cell = new Vector2I(firstCell + i * TileCellStride, TileRowZCell);
+
+			var cell = new Vector2I(
+				FirstColumnCell + i % TileColumns * TileCellStride,
+				FirstRowCell + i / TileColumns * TileRowStride);
 
 			var tile = new TrackTile { Name = $"Tile_{definition.DisplayName.Replace(" ", "")}" };
 			_generated.AddChild(tile);
 			// Facing north, so the run-up is from +Z — the same way a racer meets it in a match.
-			tile.Initialize(definition.ToTileData(), i, cell, TrackDirection.North);
+			// Always from ground level: a ramp here climbs away from the pad rather than starting
+			// in the air, which is the only way to drive onto one from the tarmac.
+			tile.Initialize(definition.ToTileData(), i, cell, TrackDirection.North, entryHeight: 0);
 
+			// On the near side of the tile rather than over its middle, so the label is readable
+			// from the run-up and is not buried inside a loop or a ramp.
 			Vector3 world = TileCatalog.CellToWorld(cell);
-			AddLabel(definition.DisplayName, world + new Vector3(0, 6.0f, 0), definition.Accent);
+			AddLabel(definition.DisplayName,
+					 world + new Vector3(0.0f, 6.0f, TileCatalog.TileSize * 0.7f), definition.Accent);
 		}
 	}
 

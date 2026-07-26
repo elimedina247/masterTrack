@@ -581,6 +581,7 @@ public partial class TrackMasterController : Node3D
 		_ghost = new TrackTile { Name = "TileGhost" };
 		AddChild(_ghost);
 		_ghost.Initialize(definition.ToTileData(), -1, Track.Grid.HeadCell, Track.Grid.HeadDirection,
+						  Track.Grid.HeadHeight,
 						  isGhost: true, ghostTint: valid ? ValidTint : InvalidTint);
 	}
 

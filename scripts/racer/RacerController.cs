@@ -63,6 +63,22 @@ public partial class RacerController : Vehicle
 	/// <summary>How often the owner pushes its pose, in seconds.</summary>
 	[Export] public float SyncInterval { get; set; } = 1.0f / 30.0f;
 
+	/// <summary>
+	/// Whether the nitro is burning, as told to everyone else. Replicated alongside the pose.
+	///
+	/// A remote car is frozen and never simulated, so its own <see cref="Vehicle.IsNitroActive"/>
+	/// is permanently false — without this, every exhaust flame in a race would be invisible to
+	/// everyone but the driver making it.
+	/// </summary>
+	[Export] public bool NetNitro { get; set; }
+
+	/// <summary>
+	/// Whether this car is burning nitro, from whichever source is authoritative for it: its own
+	/// simulation if we are driving it, the replicated flag if someone else is. What the cosmetic
+	/// effects should read.
+	/// </summary>
+	public bool IsBoosting => IsRemote ? NetNitro : IsNitroActive;
+
 	/// <summary>Track index the racer is currently on, tracked by the server.</summary>
 	public int CurrentTrackIndex { get; private set; }
 
@@ -132,7 +148,7 @@ public partial class RacerController : Vehicle
 		var config = new SceneReplicationConfig();
 
 		// Relative to the synchronizer's root path, which defaults to its parent — this car.
-		foreach (string property in new[] { ":NetPosition", ":NetRotation" })
+		foreach (string property in new[] { ":NetPosition", ":NetRotation", ":NetNitro" })
 		{
 			config.AddProperty(property);
 			config.PropertySetSpawn(property, true);
@@ -169,6 +185,7 @@ public partial class RacerController : Vehicle
 		{
 			NetPosition = GlobalPosition;
 			NetRotation = GlobalBasis.GetRotationQuaternion();
+			NetNitro = IsNitroActive;
 		}
 	}
 

@@ -30,6 +30,43 @@ public enum TileHazard
 
     /// <summary>A gap the racer must clear or fall through.</summary>
     Gap,
+
+    // Everything below is appended rather than slotted in alphabetically: the hazard goes over
+    // the wire as its integer value, so inserting one in the middle would rename every tile a
+    // client already knows about.
+
+    /// <summary>A rolling log that sweeps across the road trying to shove racers off it.</summary>
+    LogTrap,
+
+    /// <summary>Sprung pads that fire whatever drives over them into the air.</summary>
+    LaunchPad,
+
+    /// <summary>The middle of the road falls away, leaving a ledge along each wall.</summary>
+    SplitTrack,
+
+    /// <summary>A climb. The track stays up there afterwards.</summary>
+    RampUp,
+
+    /// <summary>A descent, down to no lower than the ground.</summary>
+    RampDown,
+
+    /// <summary>Pads that slam the racer forward.</summary>
+    BoostPad,
+
+    /// <summary>Pistons that hammer down across the road on a timer.</summary>
+    Crusher,
+
+    /// <summary>A bladed arm sweeping round the middle of the road.</summary>
+    Spinner,
+
+    /// <summary>Staggered blocks that have to be weaved through.</summary>
+    Slalom,
+
+    /// <summary>A washboard of humps that throws the suspension around.</summary>
+    Whoops,
+
+    /// <summary>Loose gravel. Little grip and it drags the car down.</summary>
+    Gravel,
 }
 
 public static class TileHazardExtensions
@@ -45,6 +82,17 @@ public static class TileHazardExtensions
         TileHazard.Bottleneck => "Bottleneck",
         TileHazard.IcePatch => "Ice Patch",
         TileHazard.Gap => "Gap",
+        TileHazard.LogTrap => "Log Trap",
+        TileHazard.LaunchPad => "Launch Pads",
+        TileHazard.SplitTrack => "Split Track",
+        TileHazard.RampUp => "Ramp Up",
+        TileHazard.RampDown => "Ramp Down",
+        TileHazard.BoostPad => "Boost Pads",
+        TileHazard.Crusher => "Crushers",
+        TileHazard.Spinner => "Spinner",
+        TileHazard.Slalom => "Slalom",
+        TileHazard.Whoops => "Whoops",
+        TileHazard.Gravel => "Gravel Bed",
         _ => hazard.ToString(),
     };
 }

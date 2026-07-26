@@ -25,6 +25,11 @@ namespace MasterTrack.Tiles;
 ///
 /// Because the whole tile is derived from its data, every peer can build an identical copy
 /// from a replicated placement; nothing about the mesh needs to go over the wire.
+///
+/// Split across partials to keep this file about the tile itself: <c>TrackTile.Hazards.cs</c> for
+/// the still hazards, <c>TrackTile.Moving.cs</c> for the ones with moving parts, and
+/// <c>TrackTile.Shapes.cs</c> for tiles that build their own geometry outright because the
+/// assembly here cannot describe them.
 /// </summary>
 [GlobalClass]
 public partial class TrackTile : StaticBody3D
@@ -41,10 +46,6 @@ public partial class TrackTile : StaticBody3D
 	private const float WallThickness = Size * 0.045f;
 	private const float WallInset = Half - WallThickness * 0.5f;
 
-	/// <summary>Length of the hole in a <see cref="TileHazard.Gap"/> tile, along the direction
-	/// of travel. Car-scale: whether it can be cleared is a question of speed and gravity.</summary>
-	private const float GapLength = 6.0f;
-
 	/// <summary>
 	/// Length of this tile in metres, along the direction of travel. A multiple of
 	/// <see cref="Size"/>, set from <see cref="TileData.CellLength"/> when the tile is built.
@@ -56,13 +57,6 @@ public partial class TrackTile : StaticBody3D
 	/// <summary>Inset of the walls that run down the long sides, from the tile centre.</summary>
 	private float LengthInset => HalfLength - WallThickness * 0.5f;
 
-	/// <summary>
-	/// How much of the tile an <see cref="TileHazard.IcePatch"/> covers. Scales with the tile
-	/// rather than the car: ice is a surface, so on a longer tile it should be a longer sheet,
-	/// not the same short patch adrift in the middle of a straight.
-	/// </summary>
-	private float IceLength => Length * 0.5f;
-
 	/// <summary>Grid coordinate of this tile along the track (index from the start line).</summary>
 	[Export] public int TrackIndex { get; set; }
 
@@ -70,6 +64,9 @@ public partial class TrackTile : StaticBody3D
 
 	/// <summary>Direction a racer is travelling as they enter this tile.</summary>
 	public TrackDirection EntryDirection { get; private set; } = TrackDirection.North;
+
+	/// <summary>Elevation the racer enters at, in cubes. The tile sits at this height.</summary>
+	public int EntryHeight { get; private set; }
 
 	/// <summary>
 	/// Fired when the tile reaches its resting place — after the drop, not when it was spawned.
@@ -93,8 +90,10 @@ public partial class TrackTile : StaticBody3D
 	public override void _Ready()
 	{
 		// Only a tile that's still coming down has anything to do per frame, and a long track
-		// is a lot of tiles to be waking up for nothing.
+		// is a lot of tiles to be waking up for nothing. Both are switched back on by whoever
+		// needs them: the fall by Initialize, the physics step by the hazards that move or push.
 		SetProcess(false);
+		SetPhysicsProcess(false);
 	}
 
 	/// <summary>
@@ -108,12 +107,13 @@ public partial class TrackTile : StaticBody3D
 	/// them at zero and it simply exists, which is what the starting straight wants.
 	/// </summary>
 	public void Initialize(TileData data, int trackIndex, Vector2I cell, TrackDirection entryDirection,
-						   bool isGhost = false, Color? ghostTint = null,
+						   int entryHeight, bool isGhost = false, Color? ghostTint = null,
 						   float fallHeight = 0.0f, float fallSpeed = 0.0f)
 	{
 		Data = data;
 		TrackIndex = trackIndex;
 		EntryDirection = entryDirection;
+		EntryHeight = entryHeight;
 		// A hairpin is one cell per leg whatever its CellLength says, so it anchors on its entry
 		// cell and builds the outgoing lane out to the side from there.
 		int runCells = data.IsHairpin ? 1 : data.CellLength;
@@ -126,8 +126,9 @@ public partial class TrackTile : StaticBody3D
 			AddToGroup(SurfaceGroups.Road);
 
 		// A long tile is positioned by its middle, not its entry cell, so the mesh straddles
-		// every cell the grid handed it.
-		Position = TileCatalog.SpanCenterToWorld(cell, entryDirection, runCells);
+		// every cell the grid handed it — and at the height the racer arrives at, which is where
+		// a ramp's geometry starts climbing from.
+		Position = TileCatalog.SpanCenterToWorld(cell, entryDirection, runCells, entryHeight);
 		Rotation = new Vector3(0.0f, entryDirection.Yaw(), 0.0f);
 
 		BuildGeometry();
@@ -176,13 +177,26 @@ public partial class TrackTile : StaticBody3D
 	{
 		TileDefinition definition = TileCatalog.Match(Data);
 
-		// The hairpin is built whole rather than assembled from the parts below: those wall off
-		// the edges of a straight run, which has nothing useful to say about a tile shaped like
-		// an L with both openings on the same side.
+		// Some tiles are built whole, because the assembly below cannot describe them: it walls
+		// off the edges of a flat, level straight run, which has nothing useful to say about an L
+		// with both openings on one side, a road that climbs, or one that leaves the ground.
+		// See TrackTile.Shapes.cs.
 		if (Data.IsHairpin)
 		{
 			BuildHairpin(definition);
 			return;
+		}
+
+		switch (Data.Hazard)
+		{
+			case TileHazard.RampUp:
+			case TileHazard.RampDown:
+				BuildRamp(definition);
+				return;
+
+			case TileHazard.LoopAhead:
+				BuildLoop(definition);
+				return;
 		}
 
 		// In local space the tile always runs "north": the racer comes in over the +Z edge
@@ -190,62 +204,29 @@ public partial class TrackTile : StaticBody3D
 		TrackDirection exitLocal = TrackDirection.North.Turn(Data.ExitTurn);
 
 		BuildFloor(definition);
-		BuildWalls(definition, exitLocal);
-		BuildRacingLine(exitLocal);
+
+		if (HasSideWalls)
+			BuildWalls(definition, exitLocal);
+
+		if (!DrawsOwnRacingLine)
+			BuildRacingLine(exitLocal);
+
 		BuildHazard(definition);
 	}
 
-	private void BuildFloor(TileDefinition definition)
-	{
-		switch (Data.Hazard)
-		{
-			case TileHazard.Gap:
-				AddAprons(GapLength, RoadMaterial());
-				break;
-
-			case TileHazard.IcePatch:
-				// The ice replaces the middle of the road rather than sitting on top of it,
-				// so there's no lip for the suspension to trip over.
-				AddAprons(IceLength, RoadMaterial());
-				BuildIcePatch();
-				break;
-
-			default:
-				AddBox(new Vector3(Size, FloorThickness, Length), new Vector3(0, -FloorThickness * 0.5f, 0),
-					   RoadMaterial());
-				break;
-		}
-	}
+	/// <summary>
+	/// Whether the tile gets the standard barriers along its closed edges.
+	///
+	/// The log trap is the exception, and deliberately so: its whole threat is being shoved off
+	/// the track, which needs there to be nothing to be shoved into.
+	/// </summary>
+	private bool HasSideWalls => Data.Hazard != TileHazard.LogTrap;
 
 	/// <summary>
-	/// Road either side of a centred feature of the given length: the entry apron a racer
-	/// arrives on and the exit apron they have to reach.
+	/// Whether the hazard paints its own markings instead of taking the centre line. True where a
+	/// stripe down the middle of the tile would be painted across thin air.
 	/// </summary>
-	private void AddAprons(float featureLength, StandardMaterial3D material)
-	{
-		float length = (Length - featureLength) * 0.5f;
-		float offset = (Length - length) * 0.5f;
-
-		AddBox(new Vector3(Size, FloorThickness, length),
-			   new Vector3(0, -FloorThickness * 0.5f, offset), material);
-		AddBox(new Vector3(Size, FloorThickness, length),
-			   new Vector3(0, -FloorThickness * 0.5f, -offset), material);
-	}
-
-	/// <summary>
-	/// The ice needs its own body so it can carry its own surface group — the tire model
-	/// looks the group up on whatever the wheel ray actually hits.
-	/// </summary>
-	private void BuildIcePatch()
-	{
-		var iceBody = new StaticBody3D { Name = "IceSurface" };
-		if (!_isGhost)
-			iceBody.AddToGroup(SurfaceGroups.Ice);
-		AddChild(iceBody);
-
-		AddBox(new Vector3(Size, FloorThickness, IceLength), new Vector3(0, -FloorThickness * 0.5f, 0),
-			   IceMaterial(), parent: iceBody);
-	}
+	private bool DrawsOwnRacingLine => Data.Hazard == TileHazard.SplitTrack;
 
 	private void BuildWalls(TileDefinition definition, TrackDirection exitLocal)
 	{
@@ -313,124 +294,6 @@ public partial class TrackTile : StaticBody3D
 		AddBox(size, position, material, collision: false);
 	}
 
-	private void BuildHazard(TileDefinition definition)
-	{
-		switch (Data.Hazard)
-		{
-			case TileHazard.JumpAhead:
-			{
-				// A take-off ramp rising toward the exit. It spans the road so it can't be
-				// driven around, but its run-up and rise are car-scale — a ramp four times
-				// longer at the same angle would fire the car off the far end of the track.
-				const float angle = 12.0f;
-				const float length = 10.0f;
-				const float thickness = 0.4f;
-				float rise = length * 0.5f * Mathf.Sin(Mathf.DegToRad(angle));
-
-				// Sunk so the low lip sits flush with the road; the take-off edge ends up
-				// about 2 m up. Centred, which on a long tile is the point: the run-up is
-				// what lets a racer choose the speed they take it at, and the run-out is
-				// what they land on.
-				AddBox(new Vector3(Size * 0.9f, thickness, length),
-					   new Vector3(0, rise - thickness * 0.5f + 0.02f, 0),
-					   RampMaterial(definition.Accent), rotationDegrees: new Vector3(angle, 0, 0));
-				break;
-			}
-
-			case TileHazard.Bottleneck:
-			{
-				// Intrusions from both walls leaving a car-scale slot down the middle. The slot
-				// deliberately doesn't scale with the road: on a wide tile that's what turns
-				// this from a decoration into a squeeze racers have to fight over.
-				//
-				// The depth is a fraction of one cell rather than of the whole tile, so the
-				// pinch stays a pinch — a squeeze that went on for a hundred metres would just
-				// be a narrow road.
-				const float slot = 7.0f;
-				const float depth = Size * 0.35f;
-				const float width = (Size - slot) * 0.5f;
-				const float offset = (Size + slot) * 0.25f;
-
-				StandardMaterial3D material = WallMaterial(definition.Accent);
-				AddBox(new Vector3(width, WallHeight, depth), new Vector3(offset, WallHeight * 0.5f, 0),
-					   material);
-				AddBox(new Vector3(width, WallHeight, depth), new Vector3(-offset, WallHeight * 0.5f, 0),
-					   material);
-				break;
-			}
-		}
-	}
-
-	// ---- Hairpin ----
-
-	/// <summary>
-	/// A 180-degree turn: the racer arrives up one lane, sweeps round an apex at the far end, and
-	/// comes back down a second lane alongside the first, heading the way they came.
-	///
-	/// Two cells side by side in local space — the entry lane on the origin, the outgoing lane one
-	/// cell to whichever side <see cref="TileData.TurnSide"/> points at — so both openings are on
-	/// the +Z edge and every wall below is either the outer shell or the apex between the lanes.
-	///
-	/// The apex is the tile. Without a barrier between the lanes this would be an eighty metre bay
-	/// that a racer could clip the corner of and drive straight out of; with one they have to go
-	/// to the far end and turn around, which is what a hairpin costs.
-	/// </summary>
-	private void BuildHairpin(TileDefinition definition)
-	{
-		int side = Data.TurnSide;
-
-		// Centre of the outgoing lane, one cell to the side of the entry lane.
-		float lane = side * Size;
-
-		// How far the apex reaches back from the open edge. Half the cell leaves the far half of
-		// both lanes clear to turn around in.
-		const float apex = Size * 0.5f;
-
-		// Both lanes as one slab: two cells across, one deep, centred between them.
-		AddBox(new Vector3(Size * 2.0f, FloorThickness, Size),
-			   new Vector3(lane * 0.5f, -FloorThickness * 0.5f, 0), RoadMaterial());
-
-		StandardMaterial3D wall = WallMaterial(definition.Accent);
-
-		// The outer shell: across the far end of both lanes, then down the outside of each.
-		AddBox(new Vector3(Size * 2.0f, WallHeight, WallThickness),
-			   new Vector3(lane * 0.5f, WallHeight * 0.5f, -LengthInset), wall);
-		AddBox(new Vector3(WallThickness, WallHeight, Size),
-			   new Vector3(-side * WallInset, WallHeight * 0.5f, 0), wall);
-		AddBox(new Vector3(WallThickness, WallHeight, Size),
-			   new Vector3(lane + side * WallInset, WallHeight * 0.5f, 0), wall);
-
-		// The apex, on the boundary the two lanes share, reaching back from the open edge.
-		AddBox(new Vector3(WallThickness, WallHeight, apex),
-			   new Vector3(side * Half, WallHeight * 0.5f, Half - apex * 0.5f), wall);
-
-		BuildHairpinRacingLine(lane);
-	}
-
-	/// <summary>
-	/// The racing line as a U: up the entry lane, across the open end past the apex, and back down
-	/// the outgoing lane. Same job as <see cref="BuildRacingLine"/> — from board altitude this is
-	/// what tells the Track Master which way the track leaves a tile.
-	/// </summary>
-	private void BuildHairpinRacingLine(float lane)
-	{
-		const float width = Size * 0.05f;
-		const float y = 0.011f;
-
-		// The crossover sits north of the apex, in the clear half of the tile — drawn anywhere
-		// south of it the line would run through a wall.
-		const float crossZ = -Half * 0.5f;
-		const float legLength = Half - crossZ;
-		const float legZ = (Half + crossZ) * 0.5f;
-
-		StandardMaterial3D material = LineMaterial();
-
-		AddBox(new Vector3(width, 0.02f, legLength), new Vector3(0, y, legZ), material, collision: false);
-		AddBox(new Vector3(Mathf.Abs(lane), 0.02f, width), new Vector3(lane * 0.5f, y, crossZ), material,
-			   collision: false);
-		AddBox(new Vector3(width, 0.02f, legLength), new Vector3(lane, y, legZ), material, collision: false);
-	}
-
 	// ---- Primitive construction ----
 
 	private void AddBox(Vector3 size, Vector3 position, StandardMaterial3D material,
@@ -460,34 +323,61 @@ public partial class TrackTile : StaticBody3D
 	}
 
 	// ---- Materials ----
-
-	private StandardMaterial3D RoadMaterial()
-		=> Finish(new StandardMaterial3D { AlbedoColor = new Color(0.30f, 0.30f, 0.32f), Roughness = 0.9f });
-
-	private StandardMaterial3D WallMaterial(Color accent)
-		=> Finish(new StandardMaterial3D { AlbedoColor = accent, Roughness = 0.8f });
-
-	private StandardMaterial3D RampMaterial(Color accent)
-		=> Finish(new StandardMaterial3D { AlbedoColor = accent, Roughness = 0.7f });
-
-	private StandardMaterial3D LineMaterial()
-		=> Finish(new StandardMaterial3D { AlbedoColor = new Color(0.92f, 0.92f, 0.88f), Roughness = 0.9f });
-
-	private StandardMaterial3D IceMaterial()
-		=> Finish(new StandardMaterial3D
-		{
-			AlbedoColor = new Color(0.62f, 0.88f, 0.96f),
-			Roughness = 0.05f,
-			Metallic = 0.2f,
-		});
+	//
+	// Every one of these is a colour and nothing else. There are no roughness or metallic values
+	// here on purpose: Finish strips them, so a material is only ever asked what colour it is.
 
 	/// <summary>
-	/// Turn a material into a placement preview: one flat, see-through colour for the whole
-	/// tile. Dropping the per-part colours is deliberate — the shape still reads from the
-	/// walls and ramp, and a single green/red tells the Track Master what they need to know.
+	/// Tarmac. A neutral mid grey, and it stays neutral — this is the surface every hazard colour
+	/// has to be read against, so it is deliberately the least interesting thing on screen.
+	/// </summary>
+	private StandardMaterial3D RoadMaterial()
+		=> Finish(new StandardMaterial3D { AlbedoColor = new Color(0.36f, 0.37f, 0.40f) });
+
+	private StandardMaterial3D WallMaterial(Color accent)
+		=> Finish(new StandardMaterial3D { AlbedoColor = accent });
+
+	private StandardMaterial3D RampMaterial(Color accent)
+		=> Finish(new StandardMaterial3D { AlbedoColor = accent });
+
+	private StandardMaterial3D LineMaterial()
+		=> Finish(new StandardMaterial3D { AlbedoColor = new Color(0.96f, 0.96f, 0.92f) });
+
+	/// <summary>The look of a boost pad, on any tile that carries one. See <c>BoostAccent</c>.</summary>
+	private StandardMaterial3D BoostMaterial()
+		=> Finish(new StandardMaterial3D { AlbedoColor = BoostAccent });
+
+	private StandardMaterial3D GravelMaterial()
+		=> Finish(new StandardMaterial3D { AlbedoColor = new Color(0.74f, 0.58f, 0.32f) });
+
+	/// <summary>
+	/// Ice. Reads as ice by being the palest, coldest thing on the track — not by being shiny.
+	/// With specular gone there is no highlight to sell it with, which is the trade the whole
+	/// look is making: colour does every job that gloss used to.
+	/// </summary>
+	private StandardMaterial3D IceMaterial()
+		=> Finish(new StandardMaterial3D { AlbedoColor = new Color(0.68f, 0.95f, 1.00f) });
+
+	/// <summary>
+	/// The house style, applied to every material any tile builds — and the reason none of the
+	/// helpers above set anything but a colour.
+	///
+	/// Per-vertex shading is the whole trick. It is Gouraud shading, which is what the arcade
+	/// hardware this look comes from actually did: light is worked out at the corners and smeared
+	/// across the face between them, so a box lights as six flat facets instead of a smooth
+	/// gradient. Specular is off and roughness pinned at 1 because a highlight sliding across a
+	/// surface is the single most modern-looking thing a renderer does.
+	///
+	/// A ghost then throws all of that away for one flat see-through colour: the shape still reads
+	/// from the walls and ramp, and a single green or red tells the Track Master what they need.
 	/// </summary>
 	private StandardMaterial3D Finish(StandardMaterial3D material)
 	{
+		material.ShadingMode = BaseMaterial3D.ShadingModeEnum.PerVertex;
+		material.SpecularMode = BaseMaterial3D.SpecularModeEnum.Disabled;
+		material.Metallic = 0.0f;
+		material.Roughness = 1.0f;
+
 		if (!_isGhost)
 			return material;
 
