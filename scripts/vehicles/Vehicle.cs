@@ -24,8 +24,8 @@ namespace MasterTrack.Vehicles;
 /// the wheels rather than being applied to the body, so wheelspin and power-oversteer survive.
 ///
 /// Drive it by writing to <see cref="ThrottleInput"/>, <see cref="SteeringInput"/>,
-/// <see cref="BrakeInput"/> and <see cref="HandbrakeInput"/> each physics step — see
-/// <see cref="VehicleInput"/> for the keyboard/pad sampler.
+/// <see cref="BrakeInput"/>, <see cref="HandbrakeInput"/> and <see cref="NitroInput"/> each
+/// physics step — see <see cref="VehicleInput"/> for the keyboard/pad sampler.
 ///
 /// Surfaces are identified by the *first node group* on whatever a wheel's ray cast hits,
 /// looked up in the tire dictionaries below. Road bodies therefore need to be in a "Road"
@@ -99,6 +99,44 @@ public partial class Vehicle : RigidBody3D
 
     /// <summary>Front:rear brake split. Negative means "work it out from the spring rates".</summary>
     [Export] public float FrontBrakeBias { get; set; } = -1.0f;
+
+    /// <summary>
+    /// Handbrake torque per rear wheel, as a multiple of the *total* footbrake torque. The
+    /// handbrake deliberately bypasses <see cref="FrontBrakeBias"/> — it is a cable onto the
+    /// rear axle, not a hydraulic circuit — so this is the whole story for that axle. At full
+    /// brakes a rear wheel only sees <c>0.5 * (1 - FrontBrakeBias)</c> of the total, so the
+    /// default here is several times the footbrake and locks the rears more or less on contact.
+    /// </summary>
+    [ExportSubgroup("Handbrake")]
+    [Export] public float HandbrakeForceMultiplier { get; set; } = 1.5f;
+
+    /// <summary>
+    /// Lateral grip a fully locked rear tire keeps, as a fraction of what it would have had
+    /// rolling. This is the whole trick: a locked tire has spent its entire friction budget
+    /// sliding forwards and has almost nothing left to resist sideways motion, which is what
+    /// lets the back end come round. The brush model in <see cref="Wheel"/> has its past-peak
+    /// fall-off removed on purpose, so that coupling has to be reintroduced here.
+    ///
+    /// Lower = the rear steps out sooner and further. 0 is a rear axle on ice.
+    /// </summary>
+    [Export] public float HandbrakeLockedGrip { get; set; } = 0.15f;
+
+    /// <summary>
+    /// Longitudinal slip at which the rear tire counts as fully locked for
+    /// <see cref="HandbrakeLockedGrip"/>. Grip fades in across the range below this, so grabbing
+    /// the lever loosens the car progressively instead of dropping it out from under the player.
+    /// </summary>
+    [Export] public float HandbrakeLockSlip { get; set; } = 0.7f;
+
+    /// <summary>
+    /// How much of the yaw stability assist the handbrake switches off, 0..1. At 1 a held
+    /// handbrake disables it entirely.
+    ///
+    /// Without this nothing else on this list matters: <see cref="ProcessStability"/> applies a
+    /// counter-yaw torque straight to the body as soon as the car rotates away from its
+    /// direction of travel, which is exactly the rotation the handbrake exists to create.
+    /// </summary>
+    [Export] public float HandbrakeStabilitySuppression { get; set; } = 1.0f;
 
     /// <summary>
     /// How much faster than the road the driven wheels may spin before traction control
@@ -417,6 +455,48 @@ public partial class Vehicle : RigidBody3D
     /// <summary>Frontal area in m². A rough estimate is fine.</summary>
     [Export] public float FrontalArea { get; set; } = 2.0f;
 
+    // ---------------------------------------------------------------- Nitro
+
+    /// <summary>
+    /// Boosts the player starts a run with. Spent one at a time and never refilled — call
+    /// <see cref="ResetNitro"/> when a new run begins.
+    /// </summary>
+    [ExportGroup("Nitro")]
+    [Export] public int NitroCharges { get; set; } = 5;
+
+    /// <summary>How long one charge burns for, in seconds.</summary>
+    [Export] public float NitroDuration { get; set; } = 1.5f;
+
+    /// <summary>
+    /// Push in newtons, applied to the body along its nose rather than through the tires.
+    /// Divide by <see cref="VehicleMass"/> for the acceleration it adds: at the default 9000 N
+    /// on a 1200 kg car that is 7.5 m/s² on top of whatever the wheels are already doing.
+    ///
+    /// Going in at the body rather than the contact patch is deliberate. Fed through the
+    /// drivetrain a boost would be eaten by traction control, by wheelspin, by a rear axle
+    /// that is sideways, and by the drive curve being flat at the top of the range — it would
+    /// do least exactly when the player most expects a shove. This way it always lands.
+    /// </summary>
+    [Export] public float NitroForce { get; set; } = 9000.0f;
+
+    /// <summary>
+    /// Ceiling while boosting, as a multiple of <see cref="TopSpeed"/>. This is a hard cap:
+    /// both the drive curve and the nitro push itself fade out as the car approaches it, so
+    /// charges chained back to back can't walk the car up to an arbitrary speed. At the
+    /// racer's 55.6 m/s top speed the default puts the boosted ceiling at 250 km/h.
+    /// </summary>
+    [Export] public float NitroTopSpeedMultiplier { get; set; } = 1.25f;
+
+    /// <summary>Dead time after a burst ends before the next charge can be spent, in seconds.</summary>
+    [Export] public float NitroCooldown { get; set; } = 0.4f;
+
+    /// <summary>
+    /// Fraction of the boosted ceiling the nitro push holds full force to, before fading out.
+    /// Below this the shove is the full <see cref="NitroForce"/>; between here and the ceiling
+    /// it tapers to nothing, which is what stops the cap arriving as a wall.
+    /// </summary>
+    private const float NitroFullForceFraction = 0.75f;
+
     // ---------------------------------------------------------------- Runtime state
 
     public readonly List<Wheel> WheelArray = new();
@@ -438,6 +518,9 @@ public partial class Vehicle : RigidBody3D
 
     /// <summary>0..1 handbrake.</summary>
     public float HandbrakeInput;
+
+    /// <summary>Whether the nitro button is held. The rising edge is what spends a charge.</summary>
+    public bool NitroInput;
 
     // ---- Derived state, safe to read for HUD / effects / debug ----
 
@@ -478,6 +561,26 @@ public partial class Vehicle : RigidBody3D
 
     /// <summary>Fraction of drive force traction control is currently letting through, 0..1.</summary>
     public float TcsFactor { get; private set; } = 1.0f;
+    /// <summary>Charges left in this run. Starts at <see cref="NitroCharges"/>.</summary>
+    public int NitroChargesRemaining { get; private set; }
+
+    /// <summary>Seconds left on the current burst, 0 when not boosting.</summary>
+    public float NitroTimeRemaining { get; private set; }
+
+    /// <summary>True while a charge is burning.</summary>
+    public bool IsNitroActive => NitroTimeRemaining > 0.0f;
+
+    /// <summary>How much of the current burst is left, 1 at ignition down to 0. For HUD and FX.</summary>
+    public float NitroFraction => NitroDuration > 0.0f
+        ? Mathf.Clamp(NitroTimeRemaining / NitroDuration, 0.0f, 1.0f)
+        : 0.0f;
+
+    /// <summary>Fires when a charge is spent, with the number left afterwards. For HUD, audio and FX.</summary>
+    [Signal] public delegate void NitroFiredEventHandler(int chargesRemaining);
+
+    /// <summary>Fires when a burst burns out.</summary>
+    [Signal] public delegate void NitroEndedEventHandler();
+
     public bool StabilityActive { get; private set; }
     public float StabilityYawTorque { get; private set; }
     public Vector3 StabilityTorqueVector { get; private set; } = Vector3.Zero;
@@ -503,6 +606,12 @@ public partial class Vehicle : RigidBody3D
 
     /// <summary>Stops the forward/reverse swap flickering while the brake is held at a stop.</summary>
     private float _directionSwapCooldown;
+
+    /// <summary>Last frame's <see cref="NitroInput"/>, so a held button only spends one charge.</summary>
+    private bool _nitroWasHeld;
+
+    /// <summary>Time until another charge may be spent. Covers the burst plus the dead time after it.</summary>
+    private float _nitroLockout;
 
     /// <summary>
     /// How much of the countersteer assist is currently being let through, 0..1. It ramps
@@ -608,6 +717,8 @@ public partial class Vehicle : RigidBody3D
             wheel.LateralGripAssist = LateralGripAssist;
             wheel.LongitudinalGripRatio = LongitudinalGripRatio;
             wheel.WheelToBodyTorqueMultiplier = WheelToBodyTorqueMultiplier;
+            wheel.HandbrakeLockedGrip = HandbrakeLockedGrip;
+            wheel.HandbrakeLockSlip = HandbrakeLockSlip;
         }
 
         // 4.9 = half of g, i.e. the static load on one of the two wheels on the axle.
@@ -714,6 +825,7 @@ public partial class Vehicle : RigidBody3D
         _previousGlobalPosition = GlobalPosition;
 
         CalculateBrakeForce();
+        ResetNitro();
 
         IsVehicleReady = true;
     }
@@ -755,9 +867,82 @@ public partial class Vehicle : RigidBody3D
         ProcessSteering(dt);
         ProcessThrottle(dt);
         ProcessDirection(dt);
+        // Before ProcessDrive, so the drive curve sees this step's boosted speed ceiling.
+        ProcessNitro(dt);
         ProcessDrive(dt);
         ProcessForces(dt);
         ProcessStability();
+    }
+
+    /// <summary>
+    /// Spend a nitro charge, if there is one to spend and the car isn't already boosting or
+    /// still inside the dead time after the last burst. Returns whether one was actually lit,
+    /// so a caller can play the "empty" click instead.
+    ///
+    /// Public so a pickup, a scripted sequence or an AI driver can fire one without having to
+    /// fake a button press.
+    /// </summary>
+    public bool TryActivateNitro()
+    {
+        if (NitroChargesRemaining <= 0 || _nitroLockout > 0.0f)
+            return false;
+
+        NitroChargesRemaining--;
+        NitroTimeRemaining = NitroDuration;
+        _nitroLockout = NitroDuration + NitroCooldown;
+        EmitSignal(SignalName.NitroFired, NitroChargesRemaining);
+        return true;
+    }
+
+    /// <summary>Refill to <see cref="NitroCharges"/> and cancel any burst. Call when a run starts.</summary>
+    public void ResetNitro()
+    {
+        NitroChargesRemaining = NitroCharges;
+        NitroTimeRemaining = 0.0f;
+        _nitroLockout = 0.0f;
+        _nitroWasHeld = false;
+    }
+
+    private void ProcessNitro(float delta)
+    {
+        if (_nitroLockout > 0.0f)
+            _nitroLockout = Mathf.Max(_nitroLockout - delta, 0.0f);
+
+        if (IsNitroActive)
+        {
+            NitroTimeRemaining = Mathf.Max(NitroTimeRemaining - delta, 0.0f);
+            if (!IsNitroActive)
+                EmitSignal(SignalName.NitroEnded);
+        }
+
+        // Edge, not level: holding the button down burns one charge, not all five.
+        if (NitroInput && !_nitroWasHeld)
+            TryActivateNitro();
+        _nitroWasHeld = NitroInput;
+
+        if (!IsNitroActive)
+            return;
+
+        // Taper the push as the boosted ceiling comes up, so chaining charges runs into a
+        // speed limit rather than adding velocity forever.
+        float ceiling = GetNitroSpeedCeiling();
+        float fade = 1.0f - Mathf.Clamp(
+            Mathf.InverseLerp(ceiling * NitroFullForceFraction, ceiling, Speed), 0.0f, 1.0f);
+
+        if (fade <= 0.0f)
+            return;
+
+        // Along the nose, signed by the direction of travel the same way drive torque is, so
+        // boosting while reversing pushes the way the player is actually going.
+        Vector3 forward = -GlobalTransform.Basis.Z * CurrentGear;
+        ApplyCentralForce(forward * NitroForce * fade);
+    }
+
+    /// <summary>Speed ceiling in m/s that applies while boosting, for the current direction.</summary>
+    private float GetNitroSpeedCeiling()
+    {
+        float baseCeiling = CurrentGear == -1 ? ReverseTopSpeed : TopSpeed;
+        return baseCeiling * Mathf.Max(NitroTopSpeedMultiplier, 1.0f);
     }
 
     private void ProcessDrag()
@@ -934,9 +1119,19 @@ public partial class Vehicle : RigidBody3D
     {
         bool reversing = CurrentGear == -1;
         float ceiling = reversing ? ReverseTopSpeed : TopSpeed;
+
+        // Deliberately off the *unboosted* ceiling: this is what the engine note is pitched
+        // from, and rescaling it under nitro would drop the revs at the moment of the shove.
+        // It already clamps at 1, so the car just sits on the limiter past top speed.
         SpeedFraction = Mathf.Clamp(Speed / Mathf.Max(ceiling, 0.001f), 0.0f, 1.0f);
 
-        float available = DriveCurve?.SampleBaked(SpeedFraction) ?? 1.0f;
+        // The curve, though, is sampled against the boosted ceiling, so the wheels keep pulling
+        // past where they would normally have run out of drive.
+        if (IsNitroActive)
+            ceiling = GetNitroSpeedCeiling();
+
+        float driveFraction = Mathf.Clamp(Speed / Mathf.Max(ceiling, 0.001f), 0.0f, 1.0f);
+        float available = DriveCurve?.SampleBaked(driveFraction) ?? 1.0f;
         if (reversing)
             available *= ReverseForceRatio;
 
@@ -1015,11 +1210,15 @@ public partial class Vehicle : RigidBody3D
         }
 
         bool allowAbs = true;
+        float handbrakeTorque = 0.0f;
 
-        // The handbrake is a cable — no ABS on the axle it acts on.
-        if (axle.Handbrake)
+        // The handbrake is a cable straight onto this axle: it skips the bias split the
+        // hydraulics go through, and there is no ABS on it. Note this is gated on the lever
+        // actually being pulled — upstream killed the rear ABS unconditionally here, which is
+        // why RearAbsPulseTime and RearAbsSpinDifferenceThreshold have never done anything.
+        if (axle.Handbrake && _handbrakeForce > 0.0f)
         {
-            _brakeForce += _handbrakeForce;
+            handbrakeTorque = _handbrakeForce;
             allowAbs = false;
         }
 
@@ -1047,11 +1246,19 @@ public partial class Vehicle : RigidBody3D
 
         float rotationSum = 0.0f;
         float split = (axle.RotationSplit + 1.0f) * 0.5f;
+        float wheelBrakeTorque = _brakeForce * 0.5f * axle.BrakeBias + handbrakeTorque;
         axle.AppliedSplit = axle.RotationSplit;
+
+        // How locked the tire model should treat this wheel as being. The wheel scales it by
+        // its own slip, so this is only ever permission to let go, never a command to.
+        float handbrakeAmount = handbrakeTorque > 0.0f ? HandbrakeInput : 0.0f;
+        axle.Wheels[0].HandbrakeAmount = handbrakeAmount;
+        axle.Wheels[1].HandbrakeAmount = handbrakeAmount;
+
         rotationSum += axle.Wheels[0].ProcessTorque(
-            torque * split, driveInertia, _brakeForce * 0.5f * axle.BrakeBias, allowAbs, delta);
+            torque * split, driveInertia, wheelBrakeTorque, allowAbs, delta);
         rotationSum += axle.Wheels[1].ProcessTorque(
-            torque * (1.0f - split), driveInertia, _brakeForce * 0.5f * axle.BrakeBias, allowAbs, delta);
+            torque * (1.0f - split), driveInertia, wheelBrakeTorque, allowAbs, delta);
         axle.RotationSplit = Mathf.Clamp(rotationSum, -1.0f, 1.0f);
     }
 
@@ -1087,6 +1294,13 @@ public partial class Vehicle : RigidBody3D
                     StabilityYawTorque = (yawAngle - StabilityYawEngageAngle) * StabilityYawStrength;
                     StabilityYawTorque *= VehicleInertia.Y
                                           * Mathf.Clamp(Mathf.Abs(AngularVelocity.Y) - 0.5f, 0.0f, 1.0f);
+
+                    // Fade the assist out under the handbrake. It exists to stop the car
+                    // rotating away from its direction of travel, which is precisely what the
+                    // player just asked for; left on, it cancels the slide as fast as the rear
+                    // tires can start it.
+                    StabilityYawTorque *= 1.0f - Mathf.Clamp(
+                        HandbrakeInput * HandbrakeStabilitySuppression, 0.0f, 1.0f);
                 }
             }
 
@@ -1176,7 +1390,12 @@ public partial class Vehicle : RigidBody3D
         float friction = CalculateAverageTireFriction(VehicleMass * 9.8f, SurfaceGroups.Road);
         _maxBrakeForce = friction * BrakingGripMultiplier * _averageDriveWheelRadius
                          / WheelArray.Count * BrakeForceMultiplier;
-        _maxHandbrakeForce = friction * BrakingGripMultiplier * 0.05f / _averageDriveWheelRadius;
+
+        // Per rear wheel, and off the same friction term as the footbrake so the two stay in
+        // proportion when the tires or the mass change. Upstream divided by the wheel radius
+        // where the footbrake multiplies by it, which left the handbrake on a different scale
+        // to everything around it and too weak to reliably lock the axle.
+        _maxHandbrakeForce = _maxBrakeForce * 0.5f * HandbrakeForceMultiplier;
     }
 
     private Vector3 CalculateCenterOfGravity(float frontDistribution,

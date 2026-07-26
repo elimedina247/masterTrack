@@ -123,6 +123,7 @@ public partial class VehicleDebugOverlay : Control
                 Text("Speed / Top Speed", new Vector2(10, 200), Colors.DeepSkyBlue);
                 Text("Brake Input", new Vector2(10, 220), Colors.Red);
                 Text("Handbrake Input", new Vector2(10, 240), Colors.Orange);
+                Text("Nitro Remaining", new Vector2(10, 260), Colors.Violet);
                 break;
 
             case "Drivetrain":
@@ -170,6 +171,10 @@ public partial class VehicleDebugOverlay : Control
         Bar(barOrigin, basis, vehicle.SpeedFraction, Colors.DeepSkyBlue, 4.0f);
         Bar(barOrigin, basis, vehicle.BrakeAmount, Colors.Red, 6.0f);
         Bar(barOrigin, basis, vehicle.HandbrakeInput, Colors.Orange, 8.0f);
+
+        // Time left on the burst, not charges left — the bar is per-boost, and the count is on
+        // the HUD. It reads as a fuse burning down.
+        Bar(barOrigin, basis, vehicle.NitroFraction, Colors.Violet, 10.0f);
     }
 
     private void Bar(Vector3 origin, Basis basis, float value, Color color, float screenOffsetX)

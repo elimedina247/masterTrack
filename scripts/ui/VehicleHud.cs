@@ -19,6 +19,11 @@ public partial class VehicleHud : Control
 
     private Label _speed = null!;
     private Label _direction = null!;
+    private Label _nitro = null!;
+
+    private static readonly Color NitroReady = new(1.0f, 1.0f, 1.0f);
+    private static readonly Color NitroBurning = new(1.0f, 0.62f, 0.15f);
+    private static readonly Color NitroEmpty = new(0.55f, 0.55f, 0.55f);
 
     public override void _Ready()
     {
@@ -31,6 +36,7 @@ public partial class VehicleHud : Control
 
         _speed = AddLabel(box, 32);
         _direction = AddLabel(box, 20);
+        _nitro = AddLabel(box, 22);
 
         Refresh();
     }
@@ -54,6 +60,7 @@ public partial class VehicleHud : Control
         {
             _speed.Text = "";
             _direction.Text = "";
+            _nitro.Text = "";
             return;
         }
 
@@ -61,5 +68,32 @@ public partial class VehicleHud : Control
 
         // Reverse is the one bit of "gear" that's real — it genuinely flips the drive force.
         _direction.Text = VehicleNode.CurrentGear == -1 ? "REVERSE" : "";
+
+        RefreshNitro();
+    }
+
+    /// <summary>
+    /// Charges as a row of pips, so the count reads at a glance without being counted. Drawn
+    /// with ASCII brackets rather than block or diamond glyphs — the default theme font is the
+    /// one thing here that isn't the project's to choose, and a missing glyph shows as tofu.
+    /// </summary>
+    private void RefreshNitro()
+    {
+        int remaining = VehicleNode!.NitroChargesRemaining;
+        int total = Mathf.Max(VehicleNode.NitroCharges, remaining);
+
+        var pips = new System.Text.StringBuilder(total * 2);
+        for (int i = 0; i < total; i++)
+            pips.Append(i < remaining ? "[]" : "..");
+
+        if (VehicleNode.IsNitroActive)
+        {
+            _nitro.Text = $"NITRO {pips}  BOOST";
+            _nitro.AddThemeColorOverride("font_color", NitroBurning);
+            return;
+        }
+
+        _nitro.Text = $"NITRO {pips}";
+        _nitro.AddThemeColorOverride("font_color", remaining > 0 ? NitroReady : NitroEmpty);
     }
 }

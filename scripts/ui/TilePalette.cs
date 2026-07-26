@@ -10,10 +10,12 @@ namespace MasterTrack.UI;
 /// screen. Built from <see cref="TileCatalog"/> in code, so a new tile type appears here with
 /// no UI work.
 ///
-/// Picking a tile happens on mouse-<i>down</i>, not on click. That's what makes both natural
-/// gestures work off one code path: drag a tile out of the tray and release over the board,
-/// or click a tile and then click the board — either way the release over the board is what
-/// places it (see <see cref="TrackMasterController"/>).
+/// The tray is the whole placement interface: hovering a card ghosts that tile onto the end of
+/// the track, and clicking it puts it there. There's no held tile and no second click, because
+/// the end of the track is the only place a tile can go (see <see cref="TrackMasterController"/>).
+///
+/// This also owns the rest of the Track Master's screen furniture — the status line and the
+/// camera mode toggle — since the tray is the only HUD they have.
 /// </summary>
 [GlobalClass]
 public partial class TilePalette : Control
@@ -26,11 +28,16 @@ public partial class TilePalette : Control
 
     private readonly List<PanelContainer> _cards = new();
     private Label _status = null!;
-    private int _selectedIndex = -1;
+    private Button _cameraButton = null!;
+
+    private const string IdleStatus = "Hover a tile to see it on the end of the track — click to place it.";
 
     private static readonly Color CardIdle = new(0.12f, 0.13f, 0.16f, 0.92f);
     private static readonly Color CardHover = new(0.20f, 0.22f, 0.27f, 0.95f);
-    private static readonly Color CardSelected = new(0.16f, 0.34f, 0.24f, 0.98f);
+
+    private static readonly Color StatusIdle = new(0.86f, 0.88f, 0.92f);
+    private static readonly Color StatusValid = new(0.55f, 0.95f, 0.60f);
+    private static readonly Color StatusInvalid = new(0.95f, 0.60f, 0.55f);
 
     public override void _Ready()
     {
@@ -38,12 +45,19 @@ public partial class TilePalette : Control
         MouseFilter = MouseFilterEnum.Ignore;
 
         BuildStatusBar();
+        BuildCameraToggle();
         BuildTray();
 
         if (Builder != null)
-            Builder.HoverChanged += OnHoverChanged;
+        {
+            Builder.PreviewChanged += OnPreviewChanged;
+            Builder.CameraModeChanged += OnCameraModeChanged;
+            OnCameraModeChanged((int)Builder.CameraMode);
+        }
         else
-            GD.PushWarning("[TilePalette] No Builder assigned; tiles can be picked but not placed.");
+        {
+            GD.PushWarning("[TilePalette] No Builder assigned; the tray is inert.");
+        }
     }
 
     private void BuildStatusBar()
@@ -66,10 +80,39 @@ public partial class TilePalette : Control
 
         _status = new Label
         {
-            Text = "Pick a tile below, then drop it on the highlighted cell.",
+            Text = IdleStatus,
             VerticalAlignment = VerticalAlignment.Center,
         };
         margin.AddChild(_status);
+    }
+
+    /// <summary>
+    /// The camera mode toggle, opposite the status line. Its label is driven by the builder's
+    /// signal rather than flipped here, so the button can't drift out of step with the camera.
+    /// </summary>
+    private void BuildCameraToggle()
+    {
+        _cameraButton = new Button
+        {
+            // Never takes focus: with it focused, the space bar and Enter would re-press it,
+            // and the Track Master's hands are on WASD.
+            FocusMode = FocusModeEnum.None,
+            AnchorLeft = 1.0f,
+            AnchorRight = 1.0f,
+            OffsetLeft = -260,
+            OffsetTop = 24,
+            OffsetRight = -24,
+            OffsetBottom = 60,
+            GrowHorizontal = GrowDirection.Begin,
+        };
+        // Same dark panels as the rest of the HUD; the default theme's button doesn't belong
+        // on top of the board.
+        _cameraButton.AddThemeStyleboxOverride("normal", Panel(new Color(0.10f, 0.11f, 0.14f, 0.80f)));
+        _cameraButton.AddThemeStyleboxOverride("hover", Panel(new Color(0.18f, 0.20f, 0.25f, 0.90f)));
+        _cameraButton.AddThemeStyleboxOverride("pressed", Panel(new Color(0.16f, 0.34f, 0.24f, 0.95f)));
+
+        _cameraButton.Pressed += () => Builder?.ToggleCameraMode();
+        AddChild(_cameraButton);
     }
 
     private void BuildTray()
@@ -114,9 +157,9 @@ public partial class TilePalette : Control
         };
         card.AddThemeStyleboxOverride("panel", Panel(CardIdle));
 
-        // Handled here rather than with a Button so the pick happens on press, which is what
-        // lets a drag out of the tray read as one continuous gesture.
-        card.GuiInput += @event => OnCardInput(@event, index);
+        // Handled here rather than with a Button so the tile lands on press: at racing speed
+        // the wait for a release is felt.
+        card.GuiInput += @event => OnCardInput(card, @event, index);
         card.MouseEntered += () => OnCardHover(index, true);
         card.MouseExited += () => OnCardHover(index, false);
 
@@ -159,45 +202,48 @@ public partial class TilePalette : Control
         return card;
     }
 
-    private void OnCardInput(InputEvent @event, int index)
+    private void OnCardInput(PanelContainer card, InputEvent @event, int index)
     {
         if (@event is not InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: true })
             return;
 
-        Select(index);
-        // Not marking the event handled: the matching release still has to reach the builder
-        // if the player drags out over the board.
+        Builder?.PlaceTile(index);
+        // The board has nothing left to do with this click, and letting it through would only
+        // give the builder's camera a chance to react to it.
+        card.AcceptEvent();
     }
 
     private void OnCardHover(int index, bool entered)
     {
-        if (index == _selectedIndex)
-            return;
-
         _cards[index].AddThemeStyleboxOverride("panel", Panel(entered ? CardHover : CardIdle));
-    }
 
-    private void Select(int index)
-    {
-        _selectedIndex = index;
-        Builder?.SelectTile(index);
-
-        for (int i = 0; i < _cards.Count; i++)
-            _cards[i].AddThemeStyleboxOverride("panel", Panel(i == index ? CardSelected : CardIdle));
-
-        TileDefinition? definition = TileCatalog.At(index);
-        if (definition != null)
-            _status.Text = $"{definition.DisplayName} — drop it on the highlighted cell.";
-    }
-
-    private void OnHoverChanged(bool valid, string reason)
-    {
-        if (_selectedIndex < 0)
+        if (entered)
+        {
+            Builder?.PreviewTile(index);
             return;
+        }
 
+        Builder?.ClearPreview();
+        _status.Text = IdleStatus;
+        _status.AddThemeColorOverride("font_color", StatusIdle);
+    }
+
+    /// <summary>The builder previewed a tile on the head: say what clicking would do.</summary>
+    private void OnPreviewChanged(bool valid, string reason)
+    {
         _status.Text = reason;
-        _status.AddThemeColorOverride("font_color",
-            valid ? new Color(0.55f, 0.95f, 0.60f) : new Color(0.95f, 0.60f, 0.55f));
+        _status.AddThemeColorOverride("font_color", valid ? StatusValid : StatusInvalid);
+    }
+
+    private void OnCameraModeChanged(int mode)
+    {
+        bool follow = (TrackMasterController.BoardCameraMode)mode
+                      == TrackMasterController.BoardCameraMode.Follow;
+
+        _cameraButton.Text = follow ? "Camera: Following track" : "Camera: Free roam";
+        _cameraButton.TooltipText = follow
+            ? "Riding the end of the track. Mouse wheel zooms.\nClick to fly the camera yourself."
+            : "WASD to fly, hold right mouse to look, wheel for speed.\nClick to go back to following the track.";
     }
 
     private static StyleBoxFlat Panel(Color color)

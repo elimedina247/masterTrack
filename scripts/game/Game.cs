@@ -29,11 +29,12 @@ public partial class Game : Node3D
     private const string RacerScenePath = "res://scenes/Racer.tscn";
 
     /// <summary>
-    /// Where racers line up, on the starting straight the track builds itself. Only just above
-    /// the road: the suspension has ~0.15 m of travel, so dropping a car in from any height
-    /// bottoms it out on landing.
+    /// Where racers line up, on the starting straight the track builds itself. Measured in
+    /// tiles from the origin so it stays on the back cell of that straight whatever the tile
+    /// size is. Only just above the road: the suspension has ~0.15 m of travel, so dropping a
+    /// car in from any height bottoms it out on landing.
     /// </summary>
-    [Export] public Vector3 StartLine = new(0, 0.15f, 32);
+    [Export] public Vector3 StartLine = new(0, 0.15f, TileCatalog.TileSize * 3.2f);
 
     /// <summary>Gap between racers across the width of the road, in metres.</summary>
     [Export] public float RacerSpacing = 3.0f;
@@ -43,6 +44,8 @@ public partial class Game : Node3D
     private TrackMasterController _builder = null!;
     private VehicleHud? _hud;
     private VehicleDebugOverlay? _debug;
+    private SpeedBlur? _blur;
+    private SpeedLines? _lines;
     private TilePalette? _palette;
 
     private PlayerRole _localRole;
@@ -54,6 +57,8 @@ public partial class Game : Node3D
         _builder = GetNode<TrackMasterController>("TrackMaster");
         _hud = GetNodeOrNull<VehicleHud>("HUD/VehicleHud");
         _debug = GetNodeOrNull<VehicleDebugOverlay>("HUD/VehicleDebug");
+        _blur = GetNodeOrNull<SpeedBlur>("HUD/SpeedBlur");
+        _lines = GetNodeOrNull<SpeedLines>("HUD/SpeedLines");
         _palette = GetNodeOrNull<TilePalette>("HUD/TilePalette");
 
         // Godot installs an implicit OfflineMultiplayerPeer for single-player, so "no peer"
@@ -182,6 +187,10 @@ public partial class Game : Node3D
                 _hud.VehicleNode = car;
             if (_debug != null)
                 _debug.VehicleNode = car;
+            if (_blur != null)
+                _blur.VehicleNode = car;
+            if (_lines != null)
+                _lines.VehicleNode = car;
         }).CallDeferred();
     }
 

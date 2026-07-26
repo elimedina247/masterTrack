@@ -69,6 +69,7 @@ would throw here).
 | Brake | `S` / `↓` | Left trigger |
 | Steer | `A` `D` / `←` `→` | Left stick |
 | Handbrake | `Space` | A |
+| Nitro | `Shift` | B |
 | Clutch | `C` | Left stick click |
 | Auto/manual gearbox | `T` | LB |
 | Shift up | `F` / `+` | X |
@@ -107,6 +108,52 @@ Start here:
 **Physics tick rate must stay at 120 Hz or higher** (`project.godot` sets it). The overlay
 shouts at you in red if it drops. Handling changes when you change the tick rate.
 
+### Nitro
+
+Five charges per run, spent one per press, never refilled — `ResetNitro()` on the vehicle puts
+them back and is what a race start should call. `TryActivateNitro()` fires one without a button
+press, for pickups or AI. Both `NitroFired(chargesRemaining)` and `NitroEnded()` are signals, so
+audio and VFX can hang off them without polling.
+
+The push goes in at the **body**, along the nose, not through the drivetrain. Routed through the
+wheels a boost gets eaten by traction control, by wheelspin, by a rear axle that is sideways and
+by the drive curve being flat at the top of the range — it would do least exactly when the player
+expects most. Applied to the body it lands whatever the car is doing.
+
+Knobs are under **Nitro**:
+
+- **`NitroForce`** (9000 N) — the shove. Divide by `VehicleMass` for the acceleration it adds:
+  7.5 m/s² on the 1200 kg racer, on top of whatever the wheels are already doing.
+- **`NitroTopSpeedMultiplier`** (1.25) — hard speed cap while boosting, as a multiple of
+  `TopSpeed`. 250 km/h on the racer's 200. Both the drive curve *and* the push itself fade out
+  approaching it, so charges chained back to back hit a limit instead of stacking velocity.
+- **`NitroCharges`** (5), **`NitroDuration`** (1.5 s), **`NitroCooldown`** (0.4 s dead time
+  after a burst, so all five can't be dumped in one press-mash).
+
+`SpeedFraction` deliberately stays scaled to the *unboosted* top speed — it is what the engine
+note is pitched from, and rescaling it under nitro would drop the revs at the moment of the shove.
+
+### Handbrake
+
+Four knobs under **Braking → Handbrake**, in the order worth reaching for:
+
+- **`HandbrakeLockedGrip`** (0.15) — lateral grip a locked rear tire keeps. This is the one
+  that decides whether the car rotates. Lower slides more; 0 is a rear axle on ice.
+- **`HandbrakeStabilitySuppression`** (1.0) — how much of the yaw stability assist the lever
+  switches off. At 0 the assist stays on and will cancel the slide as fast as the tires can
+  start it, whatever the other three say. Turn it down only if you want a car that resists
+  being thrown around.
+- **`HandbrakeForceMultiplier`** (1.5) — handbrake torque per rear wheel as a multiple of the
+  total footbrake torque. Above ~1 the rears lock more or less on contact, so this mostly
+  changes how fast they get there, not whether.
+- **`HandbrakeLockSlip`** (0.7) — how much longitudinal slip counts as fully locked. Raise it
+  for a slide that takes longer to build.
+
+Grip is given up in proportion to the slip the tires actually produced, not to the button, so
+a stationary car keeps its grip however hard the lever is pulled. A straight-line handbrake
+pull still gives a straight skid: locking the rears makes the car unstable in yaw, it doesn't
+create yaw. Carry a little steering into it and the back end goes.
+
 ### Wheel geometry
 
 A wheel's `RayCast3D` node sits at the **top of the suspension travel**, not at the wheel
@@ -144,6 +191,17 @@ Behaviour is identical at default settings. These are the deliberate changes:
    `racer_steer_left`, …) rather than upstream's `"Throttle"`, `"Steer Left"`, …
 9. **`can_sleep = false` on the racer body**, so a car waiting on the start line can't be put
    to sleep by the physics server.
+10. **The handbrake actually breaks the rear axle loose.** Upstream's handbrake adds its force
+    into the shared brake force and then sends it through the front:rear bias split, so the
+    axle it is meant to over-brake receives the smaller share of it — and because the shared
+    field is never reset within a step, the force leaks onto whichever axle is processed
+    afterwards. Here it is a separate torque applied straight to the handbrake axle, and three
+    things that were cancelling the slide are stood down while the lever is up: the yaw
+    stability assist (`HandbrakeStabilitySuppression`), the braking grip bonus, and the rear
+    tires' lateral grip (`HandbrakeLockedGrip`). See **Handbrake** under Tuning.
+11. **Rear ABS works.** Upstream disables ABS on the handbrake axle unconditionally, which
+    left `RearAbsPulseTime` and `RearAbsSpinDifferenceThreshold` inert. It is now disabled only
+    while the handbrake is actually pulled.
 
 Two GDScript behaviours are reproduced on purpose rather than "fixed":
 

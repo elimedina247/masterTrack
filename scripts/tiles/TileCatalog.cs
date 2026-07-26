@@ -37,8 +37,16 @@ public sealed class TileDefinition
 /// </summary>
 public static class TileCatalog
 {
-    /// <summary>Width and depth of one tile, in metres.</summary>
-    public const float TileSize = 10.0f;
+    /// <summary>
+    /// Width and depth of one tile, in metres. This is the single knob for the scale of the
+    /// whole board: everything that describes the track's footprint — tile geometry, the
+    /// builder's camera, the start line — is derived from it.
+    ///
+    /// Sized so that the three tiles a racer is warned about are far enough ahead to actually
+    /// be driven for: at 40 m a car doing 150 km/h gets nearly three seconds of warning per
+    /// tile, where a 10 m cell gave it well under one.
+    /// </summary>
+    public const float TileSize = 40.0f;
 
     public static readonly IReadOnlyList<TileDefinition> All = new List<TileDefinition>
     {

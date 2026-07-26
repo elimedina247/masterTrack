@@ -27,6 +27,13 @@ public readonly struct VehicleInputState
     /// <summary>0..1.</summary>
     public float Handbrake { get; init; }
 
+    /// <summary>
+    /// Whether the nitro button is *held*, not whether it was just pressed. The vehicle finds
+    /// the rising edge itself, so this stays a piece of state rather than an event and survives
+    /// the trip over the wire intact.
+    /// </summary>
+    public bool Nitro { get; init; }
+
     public static VehicleInputState Idle => default;
 
     /// <summary>
@@ -40,6 +47,7 @@ public readonly struct VehicleInputState
             Brake = Strength(actions.Brake),
             Steering = Strength(actions.SteerLeft) - Strength(actions.SteerRight),
             Handbrake = Strength(actions.Handbrake),
+            Nitro = !string.IsNullOrEmpty(actions.Nitro) && Input.IsActionPressed(actions.Nitro),
         };
 
     /// <summary>
@@ -55,6 +63,7 @@ public readonly struct VehicleInputState
         vehicle.BrakeInput = Brake;
         vehicle.SteeringInput = Steering;
         vehicle.HandbrakeInput = Handbrake;
+        vehicle.NitroInput = Nitro;
 
         if (vehicle.CurrentGear != -1)
             return;
@@ -79,6 +88,7 @@ public partial class VehicleInputActions : Resource
     [Export] public string SteerLeft { get; set; } = "racer_steer_left";
     [Export] public string SteerRight { get; set; } = "racer_steer_right";
     [Export] public string Handbrake { get; set; } = "racer_handbrake";
+    [Export] public string Nitro { get; set; } = "racer_nitro";
 
     // No clutch or shift actions: there is no gearbox. Drive force comes off a speed curve,
     // and reverse is selected by holding the brake at a standstill.

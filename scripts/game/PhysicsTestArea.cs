@@ -20,8 +20,11 @@ namespace MasterTrack.Game;
 [Tool]
 public partial class PhysicsTestArea : Node3D
 {
-    /// <summary>Half-extent of the tarmac pad, in metres.</summary>
-    [Export] public float PadHalfSize { get; set; } = 130.0f;
+    /// <summary>
+    /// Half-extent of the tarmac pad, in metres. Wide enough to hold the whole tile row with
+    /// room to line each one up, so it grows with the tiles.
+    /// </summary>
+    [Export] public float PadHalfSize { get; set; } = TileCatalog.TileSize * 7.5f;
 
     /// <summary>Width of the grass apron along the +X edge of the pad.</summary>
     [Export] public float GrassWidth { get; set; } = 120.0f;
@@ -29,7 +32,8 @@ public partial class PhysicsTestArea : Node3D
     /// <summary>Grid cell the tile row is centred on, in cells.</summary>
     [Export] public int TileRowZCell { get; set; }
 
-    /// <summary>Cells between each tile in the row. Tiles are 10 m, so 2 leaves a 10 m gap.</summary>
+    /// <summary>Cells between each tile in the row, so 2 leaves a whole cell of clear tarmac
+    /// between neighbours.</summary>
     [Export] public int TileCellStride { get; set; } = 2;
 
     /// <summary>The car to respawn. Defaults to a sibling named <c>TestCar</c>.</summary>
@@ -146,28 +150,31 @@ public partial class PhysicsTestArea : Node3D
             tile.Initialize(definition.ToTileData(), i, cell, TrackDirection.North);
 
             Vector3 world = TileCatalog.CellToWorld(cell);
-            AddLabel(definition.DisplayName, world + new Vector3(0, 4.5f, 0), definition.Accent);
+            AddLabel(definition.DisplayName, world + new Vector3(0, 6.0f, 0), definition.Accent);
         }
     }
 
     /// <summary>
     /// A washboard section. Drive it at different speeds to hear the dampers working — this is
-    /// where bump/rebound settings stop being abstract numbers.
+    /// where bump/rebound settings stop being abstract numbers. Laid out behind the tile row so
+    /// it never sits in the run-up to a tile; the ridges themselves are sized for the car's
+    /// wheelbase, not for the tiles.
     /// </summary>
     private void BuildBumpStrip()
     {
         const float x = -95.0f;
         const float height = 0.1f;
+        float start = -TileCatalog.TileSize * 1.5f;
 
         for (int i = 0; i < 8; i++)
         {
-            float z = 20.0f + i * 3.5f;
+            float z = start - i * 3.5f;
             AddSlab($"Bump{i}", SurfaceGroups.Road, BumpColor,
                     new Vector3(18.0f, height, 0.7f),
                     new Vector3(x, SurfaceY + height * 0.5f, z));
         }
 
-        AddLabel("Bump strip", new Vector3(x, 5.0f, 12.0f), BumpColor);
+        AddLabel("Bump strip", new Vector3(x, 5.0f, start + 8.0f), BumpColor);
     }
 
     // ---- Primitives ----

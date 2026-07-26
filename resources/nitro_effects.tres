@@ -1,0 +1,7 @@
+[gd_resource type="Resource" script_class="NitroEffectSettings" format=3 uid="uid://btoehb7tlvw70"]
+
+[ext_resource type="Script" uid="uid://w7xggo1govv5" path="res://scripts/ui/NitroEffectSettings.cs" id="1_settings"]
+
+[resource]
+script = ExtResource("1_settings")
+LineCount = 22.0

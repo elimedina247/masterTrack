@@ -170,21 +170,36 @@ godot --path . res://scenes/Game.tscn -- --role=trackmaster
 
 ## Building the track
 
-The track is a single connected path on a 10 m grid. Tiles are only ever added at the
+The track is a single connected path on a 40 m grid (`TileCatalog.TileSize` — the one knob for
+the scale of the whole board, sized so the three tiles a racer is warned about are far enough
+ahead to react to). Tiles are only ever added at the
 **head** — the next open cell the racers are driving toward — which is what makes "place tiles
 ahead of the racers" the game rather than free-form building. The head cell is marked on the
 board with a yellow pad and an arrow showing which way the track is running.
 
-**To place a tile:** pick one from the tray along the bottom and release the mouse over the
-highlighted cell. Dragging a tile out of the tray and letting go over the board, or clicking
-the tile and then clicking the board, both work. The ghost preview is green where the tile can
-go and red where it can't, and the status line says why.
+**To place a tile:** click it in the tray along the bottom. It goes straight onto the head —
+that's the only cell it could have gone in, so there's nothing to aim at and no second click.
+Hovering a tile in the tray ghosts it onto the head first: green if it can go there, red if it
+can't, with the status line saying why. Keep the mouse on one tile and click repeatedly to lay
+a run of them, the preview walking along the track as it grows.
+
+**The camera** has two modes, on a toggle button in the top right:
+
+- **Following track** (the default) — rides over the head, easing along as the track grows, so
+  what you're building is always in frame without you touching the camera. The wheel zooms.
+- **Free roam** — a flying camera for going and watching the race. WASD moves along the way
+  it's pointing, holding right mouse aims it, and the wheel changes how fast it flies. Look is
+  held rather than latched so the cursor stays free to reach the tray.
+
+Toggling back to Following eases the camera home rather than cutting to it.
 
 | | |
 |---|---|
-| Pan the board | Arrow keys, or drag with the middle mouse button |
-| Zoom | Mouse wheel |
-| Cancel the held tile | Right click |
+| Place a tile | Click it in the tray |
+| Switch camera mode | The button, top right |
+| Move (free roam) | WASD |
+| Look (free roam) | Hold right mouse |
+| Zoom / fly speed | Mouse wheel |
 
 Tiles live in `TileCatalog`. Adding a new one is a single entry there plus a case in
 `TrackTile.BuildHazard` — the tray, the ghost and the geometry all pick it up automatically.

@@ -43,6 +43,8 @@ public partial class Wheel : RayCast3D
     public float Ackermann = 0.15f;
     public float ContactPatch = 0.2f;
     public float BrakingGripMultiplier = 1.4f;
+    public float HandbrakeLockedGrip = 0.15f;
+    public float HandbrakeLockSlip = 0.7f;
     public string SurfaceType = "";
 
     public Godot.Collections.Dictionary<string, float> TireStiffnesses = new()
@@ -100,6 +102,16 @@ public partial class Wheel : RayCast3D
     public float CurrentLateralGripAssist;
     public float CurrentLongitudinalGripRatio;
     public float CurrentTireStiffness;
+
+    /// <summary>
+    /// How hard the handbrake is being pulled on this wheel, 0..1. Set every physics step by
+    /// the parent vehicle as it drives the axles, and only ever non-zero on the handbrake axle.
+    /// </summary>
+    public float HandbrakeAmount;
+
+    /// <summary>How locked this tire currently is for grip purposes, 0..1. Drives the slide.</summary>
+    public float HandbrakeLockFactor;
+
     public float AbsEnableTime;
     public float AbsPulseTime = 0.3f;
     public float AbsSpinDifferenceThreshold = -12.0f;
@@ -436,9 +448,19 @@ public partial class Wheel : RayCast3D
         float deflect = 1.0f / Mathf.Sqrt(Mathf.Pow(corneringStiffness * SlipVector.Y, 2.0f)
                                           + Mathf.Pow(corneringStiffness * SlipVector.X, 2.0f));
 
+        // How locked the handbrake has this tire, faded in with the slip it actually produced
+        // rather than with the button. A stationary car keeps its grip however hard the lever
+        // is pulled, because a wheel that isn't turning at a standstill isn't sliding.
+        HandbrakeLockFactor = HandbrakeAmount > 0.0f
+            ? HandbrakeAmount * Mathf.Clamp(SlipVector.Y / Mathf.Max(HandbrakeLockSlip, 0.001f), 0.0f, 1.0f)
+            : 0.0f;
+
+        // The braking grip bonus is an assist for hauling the car down in a straight line. A
+        // wheel the handbrake has locked should be giving grip up, not being handed more.
         float brakingHelp = 1.0f;
         if (SlipVector.Y > 0.3f && braking)
-            brakingHelp = 1.0f + BrakingGripMultiplier * Mathf.Clamp(Mathf.Abs(SlipVector.Y), 0.0f, 1.0f);
+            brakingHelp = 1.0f + BrakingGripMultiplier * Mathf.Clamp(Mathf.Abs(SlipVector.Y), 0.0f, 1.0f)
+                                 * (1.0f - HandbrakeLockFactor);
 
         float critLength = friction * (1.0f - SlipVector.Y) * ContactPatch * (0.5f * deflect);
         if (critLength >= ContactPatch)
@@ -455,6 +477,15 @@ public partial class Wheel : RayCast3D
             ForceVector.X = friction * corneringStiffness * SlipVector.X * brushx
                             * (Mathf.Abs(SlipVector.X * CurrentLateralGripAssist) + 1.0f);
         }
+
+        // The friction budget the two axes are supposed to share. This model has the past-peak
+        // fall-off taken out so the tire never lets go on its own, which is what makes the car
+        // forgiving everywhere else — but it also means a locked rear tire keeps enough
+        // cornering stiffness to hold the back end in line. Under the handbrake, and only
+        // there, put the coupling back: the lateral force decays towards HandbrakeLockedGrip as
+        // the tire locks, and the rear axle stops being able to resist the yaw.
+        if (HandbrakeLockFactor > 0.0f)
+            ForceVector.X *= Mathf.Lerp(1.0f, HandbrakeLockedGrip, HandbrakeLockFactor);
 
         if (Mathf.Abs(ForceVector.Y) > Mathf.Abs(maxYForce))
         {

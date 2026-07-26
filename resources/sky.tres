@@ -1,0 +1,58 @@
+[gd_resource type="Sky" format=3 uid="uid://bvicqno3trron"]
+
+[ext_resource type="Shader" uid="uid://ch2s84hdfhohe" path="res://shaders/sky.gdshader" id="1_sky"]
+
+[sub_resource type="Gradient" id="Grad_cloud_color"]
+offsets = PackedFloat32Array(0, 0.5, 1)
+colors = PackedColorArray(1, 1, 1, 1, 0.93, 0.95, 0.98, 1, 0.62, 0.68, 0.78, 1)
+
+[sub_resource type="GradientTexture2D" id="Tex_cloud_color"]
+gradient = SubResource("Grad_cloud_color")
+width = 16
+height = 256
+fill_to = Vector2(0, 1)
+
+[sub_resource type="Gradient" id="Grad_cloud_mask"]
+offsets = PackedFloat32Array(0, 0.46, 0.66, 1)
+colors = PackedColorArray(0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1)
+
+[sub_resource type="FastNoiseLite" id="Noise_clouds"]
+frequency = 0.004
+fractal_gain = 0.45
+
+[sub_resource type="NoiseTexture2D" id="Tex_clouds"]
+width = 1024
+noise = SubResource("Noise_clouds")
+color_ramp = SubResource("Grad_cloud_mask")
+seamless = true
+
+[sub_resource type="Gradient" id="Grad_hdri"]
+offsets = PackedFloat32Array(0, 0.5, 1)
+colors = PackedColorArray(0.55, 0.68, 0.95, 1, 0.86, 0.89, 0.93, 1, 0.28, 0.31, 0.37, 1)
+
+[sub_resource type="GradientTexture2D" id="Tex_hdri"]
+gradient = SubResource("Grad_hdri")
+width = 16
+height = 256
+fill_to = Vector2(0, 1)
+
+[sub_resource type="Gradient" id="Grad_sky"]
+offsets = PackedFloat32Array(0, 0.42, 0.5, 0.62, 1)
+colors = PackedColorArray(0.13, 0.29, 0.6, 1, 0.4, 0.61, 0.85, 1, 0.73, 0.83, 0.93, 1, 0.55, 0.66, 0.81, 1, 0.16, 0.24, 0.38, 1)
+
+[sub_resource type="GradientTexture2D" id="Tex_sky"]
+gradient = SubResource("Grad_sky")
+width = 16
+height = 256
+fill_to = Vector2(0, 1)
+
+[sub_resource type="ShaderMaterial" id="Mat_sky"]
+shader = ExtResource("1_sky")
+shader_parameter/hdri_background = SubResource("Tex_hdri")
+shader_parameter/sky_background = SubResource("Tex_sky")
+shader_parameter/clouds = SubResource("Tex_clouds")
+shader_parameter/cloud_color = SubResource("Tex_cloud_color")
+shader_parameter/exposure = 1.0
+
+[resource]
+sky_material = SubResource("Mat_sky")
