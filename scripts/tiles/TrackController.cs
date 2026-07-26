@@ -48,7 +48,7 @@ public partial class TrackController : Node3D
     [Signal] public delegate void TrackHeadChangedEventHandler();
 
     /// <summary>True only in real networked play; solo skips the RPC round trip entirely.</summary>
-    private bool Networked => Multiplayer.MultiplayerPeer is ENetMultiplayerPeer;
+    private static bool Networked => NetworkManager.Instance.IsNetworked;
 
     public override void _Ready()
     {

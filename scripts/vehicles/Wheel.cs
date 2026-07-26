@@ -89,6 +89,9 @@ public partial class Wheel : RayCast3D
     public Vector2 SlipVector = Vector2.Zero;
 
     public float PreviousCompression;
+
+    /// <summary>Whether <see cref="PreviousCompression"/> holds a real previous frame yet.</summary>
+    private bool _suspensionSeeded;
     public float SpringCurrentLength;
     public float MaxSpringLength;
     public float AntirollForce;
@@ -187,6 +190,14 @@ public partial class Wheel : RayCast3D
         HitFromInside = true;
 
         MaxSpringLength = SpringLength;
+
+        // Seed the previous-frame state, or the first physics tick measures this wheel's
+        // velocity as its distance from the world origin over one step: a car sitting still at
+        // z = 60 reads as doing 7 km/s. The tire model answers that with a force to match and
+        // fires the car back towards the origin — harder the further out it spawned.
+        PreviousGlobalPosition = GlobalPosition;
+        _suspensionSeeded = false;
+
         ApplySurface(SurfaceType);
     }
 
@@ -354,6 +365,15 @@ public partial class Wheel : RayCast3D
 
         // Compression is carried in millimetres, which is what the spring rates assume.
         float compression = (SpringLength - SpringCurrentLength) * 1000.0f;
+
+        // Same reasoning as PreviousGlobalPosition: on the very first tick there is no previous
+        // compression to difference against, and treating the resting compression as if the
+        // spring had arrived there in one step hands the dampers a spurious impact to absorb.
+        if (!_suspensionSeeded)
+        {
+            PreviousCompression = compression;
+            _suspensionSeeded = true;
+        }
 
         float springSpeedMmPerSecond = (compression - PreviousCompression) / delta;
         PreviousCompression = compression;

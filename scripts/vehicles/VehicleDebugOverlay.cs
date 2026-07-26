@@ -19,7 +19,7 @@ namespace MasterTrack.Vehicles;
 /// <c>vehicle_debug_next</c> / <c>vehicle_debug_prev</c> (comma and period).
 /// </summary>
 [GlobalClass]
-public partial class VehicleDebugOverlay : Control
+public partial class VehicleDebugOverlay : Control, IVehicleObserver
 {
     /// <summary>The vehicle to inspect. Required.</summary>
     [Export] public Vehicle? VehicleNode { get; set; }

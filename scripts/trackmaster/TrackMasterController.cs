@@ -339,6 +339,16 @@ public partial class TrackMasterController : Node3D
 
 	private void AimMarker(RacerMarker marker)
 	{
+		// The roster is only re-read every MarkerRosterInterval seconds, so a car that goes away
+		// in between — a peer dropping out, or the match scene being torn down — leaves a marker
+		// pointing at a freed object. Without this that is an exception every frame until the
+		// next sweep, rather than a chevron that simply stops being drawn.
+		if (!IsInstanceValid(marker.Racer) || !marker.Racer.IsInsideTree())
+		{
+			marker.Root.Visible = false;
+			return;
+		}
+
 		marker.Root.Position = marker.Racer.GlobalPosition + new Vector3(0.0f, MarkerHeight, 0.0f);
 
 		// Yaw off the car's forward axis flattened onto the board, rather than its euler Y —

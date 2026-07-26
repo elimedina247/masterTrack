@@ -115,20 +115,20 @@ master-track/
 │   ├── Racer.tscn                # the car: rigid body + 4 raycast wheels
 │   └── TestArea.tscn             # scratch area for driving
 └── scripts/
-    ├── networking/
-    │   ├── NetworkManager.cs     # autoload: host/join, peer lifecycle
-    │   └── GameManager.cs        # autoload: roles, rounds, game state
-    ├── vehicles/                 # the ported vehicle physics
-    │   ├── Vehicle.cs            # body, motor, clutch, gearbox, assists — all tuning
-    │   ├── Wheel.cs              # one raycast wheel: suspension, tires, ABS
-    │   ├── Axle.cs               # a pair of wheels + their differential
-    │   ├── VehicleInput.cs       # input as a value + the action map
-    │   ├── VehicleDebugOverlay.cs# the tuning overlay
-    │   ├── SurfaceGroups.cs      # Road / Dirt / Grass / Ice group names
-    │   └── EngineSound.cs, WheelSmoke.cs, VehicleInputController.cs
-    ├── tiles/
-    │   ├── TileHazard.cs         # enum of hazard types
-    │   ├── TileData.cs           # one tile's data: hazard, exit turn, length, height change
+	├── networking/
+	│   ├── NetworkManager.cs     # autoload: host/join, peer lifecycle
+	│   └── GameManager.cs        # autoload: roles, rounds, game state
+	├── vehicles/                 # the ported vehicle physics
+	│   ├── Vehicle.cs            # body, motor, clutch, gearbox, assists — all tuning
+	│   ├── Wheel.cs              # one raycast wheel: suspension, tires, ABS
+	│   ├── Axle.cs               # a pair of wheels + their differential
+	│   ├── VehicleInput.cs       # input as a value + the action map
+	│   ├── VehicleDebugOverlay.cs# the tuning overlay
+	│   ├── SurfaceGroups.cs      # Road / Dirt / Grass / Ice group names
+	│   └── EngineSound.cs, WheelSmoke.cs, VehicleInputController.cs
+	├── tiles/
+	│   ├── TileHazard.cs         # enum of hazard types
+	│   ├── TileData.cs           # one tile's data: hazard, exit turn, length, height change
     │   ├── TileCatalog.cs        # every tile type + weights, grid <-> world helpers
     │   ├── TrackDirection.cs     # N/E/S/W and the turn maths
     │   ├── TrackGrid.cs          # the track model: cells, order, height, placement rules
@@ -147,8 +147,8 @@ master-track/
     │   └── Game.cs               # wires up whichever half this machine is playing
     └── ui/
         ├── MainMenu.cs           # host / join / solo buttons
-        ├── TilePalette.cs        # the Track Master's tile tray
-        └── VehicleHud.cs         # speed / rpm / gear
+		├── TilePalette.cs        # the Track Master's tile tray
+		└── VehicleHud.cs         # speed / rpm / gear
 ```
 
 ---

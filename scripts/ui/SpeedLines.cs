@@ -18,7 +18,7 @@ namespace MasterTrack.UI;
 /// whole viewport, and the effect is off for most of a run.
 /// </summary>
 [GlobalClass]
-public partial class SpeedLines : ColorRect
+public partial class SpeedLines : ColorRect, IVehicleObserver
 {
     /// <summary>The vehicle to watch. Set at runtime by whoever spawns the car.</summary>
     [Export] public Vehicle? VehicleNode { get; set; }

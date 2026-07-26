@@ -12,7 +12,7 @@ namespace MasterTrack.UI;
 /// showing them would just be a second speedometer dressed up as a drivetrain.
 /// </summary>
 [GlobalClass]
-public partial class VehicleHud : Control
+public partial class VehicleHud : Control, IVehicleObserver
 {
     /// <summary>The vehicle to report on. Set at runtime by whoever spawns the car.</summary>
     [Export] public Vehicle? VehicleNode { get; set; }

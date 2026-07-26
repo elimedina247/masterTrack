@@ -18,7 +18,7 @@ namespace MasterTrack.UI;
 /// frame, and this effect is off for most of a run.
 /// </summary>
 [GlobalClass]
-public partial class SpeedBlur : ColorRect
+public partial class SpeedBlur : ColorRect, IVehicleObserver
 {
     /// <summary>The vehicle to watch. Set at runtime by whoever spawns the car.</summary>
     [Export] public Vehicle? VehicleNode { get; set; }

@@ -5,6 +5,7 @@ using MasterTrack.Tiles;
 using MasterTrack.TrackMaster;
 using MasterTrack.UI;
 using MasterTrack.Vehicles;
+using System.Collections.Generic;
 
 namespace MasterTrack.Game;
 
@@ -15,54 +16,36 @@ namespace MasterTrack.Game;
 /// - <b>Racer:</b> a car, a chase camera and the driving HUD.
 /// - <b>Track Master:</b> the top-down board, the tile tray, and no car at all.
 ///
-/// The host spawns a car per racer under <c>Racers</c> and the <see cref="MultiplayerSpawner"/>
-/// replicates them. Each car then carries its own pose over the wire (see
-/// <see cref="RacerController"/>), so every peer — the Track Master most of all — sees the
-/// racers moving in real time. Tiles are not replicated as nodes: every peer rebuilds the track
-/// from the confirmed placements (see <see cref="TrackController"/>).
+/// The cars themselves are <see cref="RacerArena"/>'s business — the same node the lobby uses —
+/// so this class is only about the match: who is playing which side, and the hazard warnings that
+/// come off the track. Tiles are not replicated as nodes: every peer rebuilds the track from the
+/// confirmed placements (see <see cref="TrackController"/>).
 /// </summary>
 public partial class Game : Node3D
 {
-    [Export] public PackedScene RacerScene = null!;
-
-    private const string RacerScenePath = "res://scenes/Racer.tscn";
-
-    /// <summary>
-    /// Where racers line up, on the starting straight the track builds itself. Measured in
-    /// tiles from the origin so it stays on the back cell of that straight whatever the tile
-    /// size is. Only just above the road: the suspension has ~0.15 m of travel, so dropping a
-    /// car in from any height bottoms it out on landing.
-    /// </summary>
-    [Export] public Vector3 StartLine = new(0, 0.15f, TileCatalog.TileSize * 3.2f);
-
-    /// <summary>Gap between racers across the width of the road, in metres.</summary>
-    [Export] public float RacerSpacing = 3.0f;
-
-    private Node3D _racers = null!;
+    private RacerArena _arena = null!;
     private TrackController _track = null!;
     private TrackMasterController _builder = null!;
     private VehicleHud? _hud;
     private VehicleDebugOverlay? _debug;
-    private SpeedBlur? _blur;
-    private SpeedLines? _lines;
     private TilePalette? _palette;
+    private Label? _waiting;
 
     private PlayerRole _localRole;
 
     public override void _Ready()
     {
-        _racers = GetNode<Node3D>("Racers");
+        _arena = GetNode<RacerArena>("RacerArena");
         _track = GetNode<TrackController>("Track");
         _builder = GetNode<TrackMasterController>("TrackMaster");
         _hud = GetNodeOrNull<VehicleHud>("HUD/VehicleHud");
         _debug = GetNodeOrNull<VehicleDebugOverlay>("HUD/VehicleDebug");
-        _blur = GetNodeOrNull<SpeedBlur>("HUD/SpeedBlur");
-        _lines = GetNodeOrNull<SpeedLines>("HUD/SpeedLines");
         _palette = GetNodeOrNull<TilePalette>("HUD/TilePalette");
+        _waiting = GetNodeOrNull<Label>("HUD/WaitingLabel");
+        if (_waiting != null)
+            _waiting.Visible = false;
 
-        // Godot installs an implicit OfflineMultiplayerPeer for single-player, so "no peer"
-        // isn't a reliable solo test. Real networked play always uses an ENetMultiplayerPeer.
-        bool networked = Multiplayer.MultiplayerPeer is ENetMultiplayerPeer;
+        bool networked = NetworkManager.Instance.IsNetworked;
         _localRole = networked ? GameManager.Instance.LocalRole : GameManager.Instance.SoloRole;
 
         GD.Print($"[Game] _Ready. networked={networked}, uid={Multiplayer.GetUniqueId()}, " +
@@ -70,20 +53,8 @@ public partial class Game : Node3D
 
         ApplyRole();
 
-        // Cars that arrive by replication are never seen by SpawnRacer, so watch the
-        // container instead of only wiring up the ones we create ourselves.
-        _racers.ChildEnteredTree += OnRacerEnteredTree;
-
         // Warnings are computed against the authoritative track, so only the server does it.
         _track.TilePlaced += OnTilePlaced;
-
-        // Fall back to loading by path if the export wasn't bound in the scene.
-        RacerScene ??= GD.Load<PackedScene>(RacerScenePath);
-        if (RacerScene == null)
-        {
-            GD.PushError($"[Game] Could not load racer scene from {RacerScenePath}.");
-            return;
-        }
 
         if (!networked)
         {
@@ -93,10 +64,45 @@ public partial class Game : Node3D
             return;
         }
 
-        // Only the server instantiates cars; the spawner mirrors them to clients. Deferred
-        // so every peer has finished loading this scene before nodes start replicating.
+        // Only the server instantiates cars; the spawner mirrors them to clients. Held until
+        // every peer has reported this scene loaded rather than fired a frame after our own
+        // _Ready — see the scene-ready handshake in GameManager for why the wait is unbounded.
         if (Multiplayer.IsServer())
-            CallDeferred(nameof(SpawnNetworkedRacers));
+            GameManager.Instance.AllPeersReady += OnAllPeersReady;
+
+        GameManager.Instance.SceneReadyProgress += OnSceneReadyProgress;
+        GameManager.Instance.ReportSceneReady();
+    }
+
+    /// <summary>
+    /// Autoloads outlive this scene, and a C# <c>+=</c> handler is a managed delegate Godot
+    /// cannot tie to a node's lifetime — so it has to be taken back by hand or the next signal
+    /// lands on a disposed node.
+    /// </summary>
+    public override void _ExitTree()
+    {
+        GameManager.Instance.AllPeersReady -= OnAllPeersReady;
+        GameManager.Instance.SceneReadyProgress -= OnSceneReadyProgress;
+    }
+
+    /// <summary>Every peer is in the scene, so spawned cars will reach all of them.</summary>
+    private void OnAllPeersReady()
+    {
+        GameManager.Instance.AllPeersReady -= OnAllPeersReady;
+        CallDeferred(nameof(SpawnNetworkedRacers));
+    }
+
+    /// <summary>
+    /// Say who we are still waiting on. Without this the wait is indistinguishable from a
+    /// hang — which is the whole reason it is a visible count rather than a timeout.
+    /// </summary>
+    private void OnSceneReadyProgress(int ready, int total)
+    {
+        if (_waiting == null)
+            return;
+
+        _waiting.Text = $"Waiting for players... ({ready}/{total})";
+        _waiting.Visible = ready < total;
     }
 
     /// <summary>Turn on the half of the game this machine is playing, and turn off the other.</summary>
@@ -126,71 +132,22 @@ public partial class Game : Node3D
 
     private void SpawnSolo()
     {
-        if (_localRole == PlayerRole.TrackMaster)
-        {
-            // An unowned car so the board has something on it to build ahead of. It takes no
-            // input and never claims the camera.
-            SpawnRacer(-1, 0, 1);
-            return;
-        }
-
-        SpawnRacer(Multiplayer.GetUniqueId(), 0, 1);
+        // The Track Master gets an unowned car so the board has something on it to build ahead
+        // of. It takes no input and never claims the camera.
+        int owner = _localRole == PlayerRole.TrackMaster ? -1 : Multiplayer.GetUniqueId();
+        _arena.Spawn(owner, 0, 1);
     }
 
     private void SpawnNetworkedRacers()
     {
-        int racerCount = 0;
+        var racers = new List<int>();
         foreach (var kvp in GameManager.Instance.Roles)
         {
             if (kvp.Value == PlayerRole.Racer)
-                racerCount++;
+                racers.Add(kvp.Key);
         }
 
-        int slot = 0;
-        foreach (var kvp in GameManager.Instance.Roles)
-        {
-            if (kvp.Value != PlayerRole.Racer)
-                continue;
-            SpawnRacer(kvp.Key, slot++, racerCount);
-        }
-    }
-
-    private void SpawnRacer(int peerId, int slot, int totalRacers)
-    {
-        var car = RacerScene.Instantiate<RacerController>();
-        // Name = peer id so the spawner-replicated copies on clients can recover ownership.
-        car.Name = peerId.ToString();
-        car.OwnerPeerId = peerId;
-        // Centre the grid on the road rather than running it off the right-hand edge.
-        float offset = (slot - (totalRacers - 1) * 0.5f) * RacerSpacing;
-        car.Position = StartLine + new Vector3(offset, 0, 0);
-        _racers.AddChild(car, forceReadableName: true);
-        GD.Print($"[Game] Spawned racer for peer {peerId} at {car.Position} (local={car.IsLocalPlayer}).");
-    }
-
-    /// <summary>
-    /// Point the HUD and debug overlay at this machine's car. Deferred by a frame because
-    /// a replicated car recovers its owner id in _Ready, which hasn't run yet at this point.
-    /// </summary>
-    private void OnRacerEnteredTree(Node node)
-    {
-        if (node is not RacerController car)
-            return;
-
-        Callable.From(() =>
-        {
-            if (!IsInstanceValid(car) || !car.IsLocalPlayer)
-                return;
-
-            if (_hud != null)
-                _hud.VehicleNode = car;
-            if (_debug != null)
-                _debug.VehicleNode = car;
-            if (_blur != null)
-                _blur.VehicleNode = car;
-            if (_lines != null)
-                _lines.VehicleNode = car;
-        }).CallDeferred();
+        _arena.SpawnFor(racers);
     }
 
     /// <summary>
@@ -200,14 +157,14 @@ public partial class Game : Node3D
     /// </summary>
     private void OnTilePlaced(int trackIndex, int hazard)
     {
-        if (Multiplayer.MultiplayerPeer is ENetMultiplayerPeer && !Multiplayer.IsServer())
+        if (NetworkManager.Instance.IsNetworked && !Multiplayer.IsServer())
             return;
 
         int warnIndex = trackIndex - RacerController.WarningLookahead;
         if (warnIndex < 0)
             return;
 
-        foreach (Node child in _racers.GetChildren())
+        foreach (Node child in _arena.Racers.GetChildren())
         {
             if (child is not RacerController car)
                 continue;
@@ -222,7 +179,7 @@ public partial class Game : Node3D
     private void ReportRenderState()
     {
         Camera3D current = GetViewport().GetCamera3D();
-        GD.Print($"[Game] Racers in tree: {_racers.GetChildCount()}. " +
+        GD.Print($"[Game] Racers in tree: {_arena.Racers.GetChildCount()}. " +
                  $"Track tiles: {_track.Grid.Count}, head {_track.Grid.HeadCell} " +
                  $"heading {_track.Grid.HeadDirection.DisplayName()}. Current camera: " +
                  (current != null ? current.GetPath() : "<none>"));

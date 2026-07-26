@@ -24,6 +24,30 @@ public partial class NetworkManager : Node
 
     public bool IsHost => Multiplayer.MultiplayerPeer != null && Multiplayer.IsServer();
 
+    /// <summary>
+    /// Whether this machine is in a real session rather than playing solo.
+    ///
+    /// "No peer" is not the solo test: Godot installs an implicit
+    /// <see cref="OfflineMultiplayerPeer"/> whenever the peer is cleared, and that peer reports
+    /// itself connected with unique id 1 — indistinguishable from a host by every other measure.
+    /// So the offline peer is what we actually have to rule out.
+    ///
+    /// Deliberately not a check against a concrete peer type. A transport swap (Steam) replaces
+    /// <see cref="ENetMultiplayerPeer"/> with a <see cref="MultiplayerPeerExtension"/>, and any
+    /// <c>is ENetMultiplayerPeer</c> test would then quietly decide a genuinely networked game was
+    /// solo — every peer simulating every car and diverging, with nothing to say it had happened.
+    /// </summary>
+    public bool IsNetworked
+    {
+        get
+        {
+            MultiplayerPeer? peer = Multiplayer.MultiplayerPeer;
+            return peer is not null
+                   && peer is not OfflineMultiplayerPeer
+                   && peer.GetConnectionStatus() != MultiplayerPeer.ConnectionStatus.Disconnected;
+        }
+    }
+
     public override void _Ready()
     {
         Instance = this;
@@ -71,8 +95,10 @@ public partial class NetworkManager : Node
     /// <summary>Tear down the current session and return to a disconnected state.</summary>
     public void Disconnect()
     {
-        if (Multiplayer.MultiplayerPeer is ENetMultiplayerPeer peer)
-            peer.Close();
+        // Close() is on the base peer, so this shuts down whatever transport is in use.
+        // Harmless on the implicit offline peer, which is all there is when we were never
+        // connected in the first place.
+        Multiplayer.MultiplayerPeer?.Close();
 
         Multiplayer.MultiplayerPeer = null;
         GD.Print("[NetworkManager] Disconnected.");

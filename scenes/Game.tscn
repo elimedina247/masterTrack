@@ -1,6 +1,7 @@
 [gd_scene format=3 uid="uid://5vb3gdmlltu6"]
 
 [ext_resource type="Script" uid="uid://b802o6fknf58s" path="res://scripts/game/Game.cs" id="1_game"]
+[ext_resource type="Script" path="res://scripts/game/RacerArena.cs" id="14_arena"]
 [ext_resource type="PackedScene" uid="uid://5vb3gdxlbtm6" path="res://scenes/Racer.tscn" id="2_racer"]
 [ext_resource type="Script" uid="uid://c8mksia3gxe7k" path="res://scripts/ui/VehicleHud.cs" id="3_hud"]
 [ext_resource type="Script" uid="uid://dpuyf56gq5foi" path="res://scripts/vehicles/VehicleDebugOverlay.cs" id="4_vdebug"]
@@ -26,7 +27,6 @@ fog_sky_affect = 0.0
 
 [node name="Game" type="Node3D" unique_id=653604701]
 script = ExtResource("1_game")
-RacerScene = ExtResource("2_racer")
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=2077104838]
 environment = SubResource("Env")
@@ -41,11 +41,11 @@ shadow_enabled = true
 [node name="Track" type="Node3D" parent="." unique_id=12408710]
 script = ExtResource("5_track")
 
-[node name="Racers" type="Node3D" parent="." unique_id=950769750]
-
-[node name="RacerSpawner" type="MultiplayerSpawner" parent="." unique_id=660340900]
-_spawnable_scenes = PackedStringArray("uid://5vb3gdxlbtm6")
-spawn_path = NodePath("../Racers")
+[node name="RacerArena" type="Node3D" parent="." node_paths=PackedStringArray("Hud")]
+script = ExtResource("14_arena")
+RacerScene = ExtResource("2_racer")
+Layout = 0
+Hud = NodePath("../HUD")
 
 [node name="TrackMaster" type="Node3D" parent="." unique_id=218324840 node_paths=PackedStringArray("Track")]
 script = ExtResource("6_builder")
@@ -94,6 +94,21 @@ grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("4_vdebug")
+
+[node name="WaitingLabel" type="Label" parent="HUD"]
+visible = false
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 8
+theme_override_font_sizes/font_size = 32
+text = "Waiting for players..."
+horizontal_alignment = 1
+vertical_alignment = 1
 
 [node name="TilePalette" type="Control" parent="HUD" unique_id=350786319 node_paths=PackedStringArray("Builder")]
 layout_mode = 3

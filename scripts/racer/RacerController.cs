@@ -91,10 +91,42 @@ public partial class RacerController : Vehicle
 	/// Real networked play. Solo runs on Godot's implicit offline peer, where there is nobody to
 	/// replicate to and every car is simulated locally exactly as it always was.
 	/// </summary>
-	private bool IsNetworked => Multiplayer.MultiplayerPeer is ENetMultiplayerPeer;
+	private static bool IsNetworked => NetworkManager.Instance.IsNetworked;
 
 	/// <summary>Somebody else's car on this machine: a puppet driven by the wire, not by physics.</summary>
 	private bool IsRemote => IsNetworked && !IsLocalPlayer;
+
+	/// <summary>
+	/// Assemble a freshly instantiated car: who owns it, where it starts, and the pose channel
+	/// it will talk over. Called by <see cref="MasterTrack.Game.RacerArena"/>'s spawn function on
+	/// every peer, the server included.
+	///
+	/// Deliberately before the car enters the tree. Godot needs a
+	/// <see cref="MultiplayerSynchronizer"/> to already exist, with its authority already
+	/// settled, by the time the spawn it belongs to is processed — leaving either until
+	/// <c>_Ready</c> is an error it reports at runtime, and quietly costs the car its pose.
+	/// </summary>
+	public void PrepareForSpawn(int peerId, Vector3 position)
+	{
+		// Name = peer id as well, so a copy can still recover its owner from the node name.
+		Name = peerId.ToString();
+		OwnerPeerId = peerId;
+		Position = position;
+
+		if (!IsNetworked)
+			return;
+
+		// Seed the pose before anyone can read it, so a remote copy has somewhere real to
+		// start from instead of the world origin.
+		NetPosition = position;
+		NetRotation = Basis.GetRotationQuaternion();
+
+		AddChild(BuildSynchronizer());
+
+		// The owning peer is the movement authority for its own car. Recursive by default, so
+		// this covers the synchronizer added just above.
+		SetMultiplayerAuthority(peerId);
+	}
 
 	public override void _Ready()
 	{
@@ -102,37 +134,16 @@ public partial class RacerController : Vehicle
 		// physics step, and before anything reads the vehicle's state.
 		base._Ready();
 
-		// When spawned over the network (via MultiplayerSpawner) the owner isn't set by
-		// hand, so we encode it in the node name and recover it here. Solo/host spawns
-		// set OwnerPeerId directly before adding the node, so this leaves those alone.
-		if (OwnerPeerId == 0 && int.TryParse(Name, out int idFromName))
-			OwnerPeerId = idFromName;
-
 		// How the board finds this car. Everything else about the marker is the board's business.
 		AddToGroup(GroupName);
 
-		if (IsNetworked)
+		if (IsRemote)
 		{
-			// Seed the pose before anyone can read it, so a remote copy has somewhere real to
-			// start from instead of the world origin.
-			NetPosition = GlobalPosition;
-			NetRotation = GlobalBasis.GetRotationQuaternion();
-
-			AddChild(BuildSynchronizer());
-
-			if (IsRemote)
-			{
-				// Kinematic rather than static: the pose is assigned rather than simulated, but
-				// the car should still shove anything it lands on.
-				FreezeMode = FreezeModeEnum.Kinematic;
-				Freeze = true;
-			}
+			// Kinematic rather than static: the pose is assigned rather than simulated, but
+			// the car should still shove anything it lands on.
+			FreezeMode = FreezeModeEnum.Kinematic;
+			Freeze = true;
 		}
-
-		// The owning peer is the movement authority for its own car. Recursive by default, so
-		// this covers the synchronizer added just above.
-		if (Multiplayer.MultiplayerPeer != null)
-			SetMultiplayerAuthority(OwnerPeerId);
 
 		// Hand the camera to the local player only.
 		GetNodeOrNull<CameraRig>("CameraRig")?.SetActive(IsLocalPlayer);

@@ -1,13 +1,23 @@
 using Godot;
+using MasterTrack.Networking;
+using MasterTrack.Racer;
 using MasterTrack.Tiles;
 using MasterTrack.Vehicles;
+using System.Collections.Generic;
 
 namespace MasterTrack.Game;
 
 /// <summary>
-/// A playground for feeling out the vehicle physics: a big open pad to slide around on, a
-/// grass apron so surface changes are obvious, a bump strip for the dampers, and one of every
-/// tile in <see cref="TileCatalog"/> laid out in a row with a run-up to each.
+/// A playground for feeling out the vehicle physics, and the lobby everyone waits in.
+///
+/// The pad itself: a big open surface to slide around on, a grass apron so surface changes are
+/// obvious, a bump strip for the dampers, and one of every tile in <see cref="TileCatalog"/> laid
+/// out in a row with a run-up to each.
+///
+/// In a session it is also where the group gathers. Cars are <see cref="RacerArena"/>'s business,
+/// the same node the match uses, so a car that reaches everybody here reaches everybody there;
+/// this class only decides *when* one is spawned — as each peer reports its lobby loaded, so a
+/// late arrival gets a car without disturbing anyone already driving.
 ///
 /// Everything is built in code so the tiles here are the real ones the Track Master places —
 /// there's no second copy of the geometry to drift out of sync.
@@ -52,10 +62,8 @@ public partial class PhysicsTestArea : Node3D
 	private float _padHalfX;
 	private float _padHalfZ;
 
-	/// <summary>The car to respawn. Defaults to a sibling named <c>TestCar</c>.</summary>
-	[Export] public RigidBody3D? Car { get; set; }
-
 	private const string MainMenuScenePath = "res://scenes/Main.tscn";
+	private const string GameScenePath = "res://scenes/Game.tscn";
 	private const string GeneratedRootName = "Generated";
 
 	// The pad's surface sits a hair below the tiles so the two never z-fight. Small enough
@@ -68,7 +76,22 @@ public partial class PhysicsTestArea : Node3D
 	private static readonly Color BumpColor = new(0.85f, 0.72f, 0.25f);
 
 	private Node3D _generated = null!;
-	private Transform3D _carStart;
+
+	private RacerArena? _arena;
+
+	/// <summary>This machine's car, and where to put it back. Null until one spawns.</summary>
+	private RacerController? _localCar;
+	private Transform3D _localCarStart;
+
+	/// <summary>Server only. Which ring slot each peer's car was given.</summary>
+	private readonly Dictionary<int, int> _slots = new();
+
+	/// <summary>
+	/// Slots the lobby ring is divided into. Fixed at the session's capacity rather than the
+	/// current head count, so a car already parked on the pad never has to move because somebody
+	/// else joined.
+	/// </summary>
+	private static int RingSlots => NetworkManager.MaxPlayers + 1;
 
 	public override void _Ready()
 	{
@@ -77,9 +100,96 @@ public partial class PhysicsTestArea : Node3D
 		if (Engine.IsEditorHint())
 			return;
 
-		Car ??= GetNodeOrNull<RigidBody3D>("TestCar");
-		if (Car != null)
-			_carStart = Car.GlobalTransform;
+		_arena = GetNodeOrNull<RacerArena>("RacerArena");
+		if (_arena == null)
+		{
+			GD.PushError("[TestArea] No RacerArena child, so there will be no cars.");
+			return;
+		}
+
+		_arena.LocalRacerSpawned += OnLocalRacerSpawned;
+
+		if (!NetworkManager.Instance.IsNetworked)
+		{
+			// Solo Test Drive: one car, ours, in the middle of the pad.
+			_arena.Spawn(Multiplayer.GetUniqueId(), 0, 1);
+			return;
+		}
+
+		GameManager.Instance.GameStateChanged += OnGameStateChanged;
+
+		// Subscribed before checking in, so the host's own arrival is not missed.
+		if (NetworkManager.Instance.IsHost)
+		{
+			GameManager.Instance.PeerSceneReady += OnPeerSceneReady;
+			NetworkManager.Instance.PlayerDisconnected += OnPlayerDisconnected;
+		}
+
+		GameManager.Instance.ReportSceneReady();
+	}
+
+	/// <summary>
+	/// Autoloads outlive this scene, and a C# <c>+=</c> handler is a managed delegate Godot
+	/// cannot tie to a node's lifetime — so it has to be taken back by hand or the next signal
+	/// lands on a disposed node. Harmless to remove a handler that was never added.
+	/// </summary>
+	public override void _ExitTree()
+	{
+		if (Engine.IsEditorHint())
+			return;
+
+		if (_arena != null)
+			_arena.LocalRacerSpawned -= OnLocalRacerSpawned;
+
+		GameManager.Instance.GameStateChanged -= OnGameStateChanged;
+		GameManager.Instance.PeerSceneReady -= OnPeerSceneReady;
+		NetworkManager.Instance.PlayerDisconnected -= OnPlayerDisconnected;
+	}
+
+	/// <summary>Server only. A peer has the lobby loaded, so its car can safely be spawned.</summary>
+	private void OnPeerSceneReady(int peerId)
+	{
+		if (_arena == null || _slots.ContainsKey(peerId))
+			return;
+
+		_slots[peerId] = NextFreeSlot();
+		_arena.Spawn(peerId, _slots[peerId], RingSlots);
+	}
+
+	/// <summary>Server only. Free the slot and the car of a peer that has left.</summary>
+	private void OnPlayerDisconnected(int peerId)
+	{
+		_slots.Remove(peerId);
+		_arena?.Despawn(peerId);
+	}
+
+	/// <summary>Lowest unused ring slot, so a leaver's parking space is reused by the next joiner.</summary>
+	private int NextFreeSlot()
+	{
+		for (int slot = 0; slot < RingSlots; slot++)
+		{
+			if (!_slots.ContainsValue(slot))
+				return slot;
+		}
+
+		return 0;
+	}
+
+	/// <summary>
+	/// The car this machine drives. Captured rather than exported because in a session it
+	/// arrives by replication, and which one is ours is not known until it does.
+	/// </summary>
+	private void OnLocalRacerSpawned(RacerController car)
+	{
+		_localCar = car;
+		_localCarStart = car.GlobalTransform;
+	}
+
+	/// <summary>The host has started the match; everyone follows them into it.</summary>
+	private void OnGameStateChanged(int state)
+	{
+		if ((GameState)state == GameState.InRound)
+			GetTree().ChangeSceneToFile(GameScenePath);
 	}
 
 	/// <summary>
@@ -147,20 +257,32 @@ public partial class PhysicsTestArea : Node3D
 			RespawnCar();
 
 		if (@event.IsActionPressed("ui_cancel"))
-			GetTree().ChangeSceneToFile(MainMenuScenePath);
+			LeaveToMenu();
 	}
 
 	/// <summary>
-	/// Put the car back on the start line, upright and stopped. Goes through the physics
+	/// Back to the main menu. In a session that means dropping out of it first — otherwise the
+	/// peer stays connected from behind the menu and the host keeps waiting on a ghost.
+	/// </summary>
+	private void LeaveToMenu()
+	{
+		if (NetworkManager.Instance.IsNetworked)
+			NetworkManager.Instance.Disconnect();
+
+		GetTree().ChangeSceneToFile(MainMenuScenePath);
+	}
+
+	/// <summary>
+	/// Put our own car back where it started, upright and stopped. Goes through the physics
 	/// server rather than assigning GlobalTransform, which a rigid body is entitled to ignore.
 	/// </summary>
 	private void RespawnCar()
 	{
-		if (Car == null || !IsInstanceValid(Car))
+		if (_localCar == null || !IsInstanceValid(_localCar))
 			return;
 
-		Rid rid = Car.GetRid();
-		PhysicsServer3D.BodySetState(rid, PhysicsServer3D.BodyState.Transform, _carStart);
+		Rid rid = _localCar.GetRid();
+		PhysicsServer3D.BodySetState(rid, PhysicsServer3D.BodyState.Transform, _localCarStart);
 		PhysicsServer3D.BodySetState(rid, PhysicsServer3D.BodyState.LinearVelocity, Vector3.Zero);
 		PhysicsServer3D.BodySetState(rid, PhysicsServer3D.BodyState.AngularVelocity, Vector3.Zero);
 	}
