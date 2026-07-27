@@ -98,6 +98,7 @@ Nothing in the steering scales with speed or grip, so the car answers the stick 
 | Steer | `A` `D` / `←` `→` | Left stick |
 | **Drift** | `Space` | A |
 | **Flip** (airborne) | `W` nose up / `S` nose down | Triggers |
+| **Turn** (airborne) | `A` `D` / `←` `→` | Left stick |
 | Nitro | `Shift` | B |
 | Reset | see `racer_reset` | — |
 | Physics debug overlay | `` ` `` | Right stick click |
@@ -390,9 +391,6 @@ tuned or gated:
 - **`AirborneUprightTorque` / `AirborneUprightDamping`** — levels the car so it lands on its
   wheels. It does **not** engage on take-off; see below.
 
-- **`AirborneSteerMultiplier`** (0.35) — air steering at full strength pirouettes the car off
-  every jump.
-
 - **`MaxPullForce`** (11000 N, near a full g) and **`PullFadeDistance`** (0.12 m) — the spring
   term goes negative when the ground drops away past the ride height, which glues the car over a
   crest. The fade is what separates a crease from a cliff: a crease drops the road away by
@@ -414,7 +412,7 @@ So it is gated on air time:
   stays flipping.
 - **`UprightFadeTime`** (0.8 s) — fades in after that, so a long flight straightens up rather
   than snapping level.
-- Suppressed entirely, along with `AirPitchDamping`, while the player is asking for rotation.
+- Suppressed entirely while the player is asking for rotation on any axis.
 
 `UprightAssist` on the overlay's **Airborne** page is the number to watch when a jump won't flip.
 Anything above 0 is the car being told to be flat, and it should read 0 for the whole of a normal
@@ -422,13 +420,49 @@ jump.
 
 ### Flying the car
 
-- **`AirPitchTorque`** (30000 Nm) — throttle pitches the nose **up**, brake pitches it **down**.
-  Those two pedals do nothing at all in the air (drive is scaled by `GroundFraction`, which is
-  zero), so they were free, and they are the pair the player's thumbs are already on.
-- **`AirPitchDamping`** (4000 Nm per rad/s) — bleeds off a tumble picked up from a bad take-off,
-  but only while the player is *not* asking for rotation, so it never quietly kills a flip.
+Air rotation is **rate controlled, not torque controlled**. Each axis is driven toward a target
+angular rate, so the export *is* the fastest the car will ever go round — rather than an
+acceleration that keeps adding for as long as the button is held, which lets the car wind itself
+into a spin it cannot recover from. Releasing drives the rate back to zero, which is also what
+bleeds off a tumble from a bad take-off; there is no separate damping term.
 
-Roll is not bound yet — steering still yaws in the air.
+- **`AirPitchRate`** (140 °/s) — throttle pitches the nose **up**, brake pitches it **down**.
+  Those two pedals do nothing at all in the air (drive is scaled by `GroundFraction`, which is
+  zero), so they were free, and they are the pair the player's thumbs are already on. 140 °/s is
+  a bit over two seconds per full rotation.
+- **`AirYawRate`** (100 °/s) — steering turns the car left and right, about **world up**, so it
+  is still a flat turn with the car upside down. Slower than pitch on purpose: yaw in the air is
+  for lining up a landing, not for tricks, and it is the axis a player is most likely to be
+  holding by accident on the way off a ramp.
+- **`AirRotationGain`** (6000 Nm per rad/s) — how quickly a flip spins up and stops, without
+  changing how fast it ends up going.
+
+The heading controller is **stood down completely** while airborne — `ProcessAirborne` owns every
+axis up there, and two controllers arguing over yaw is what made air steering feel vague. The
+heading is still being dragged onto the car's facing throughout, so there is nothing to unwind on
+landing.
+
+Roll is not bound. It needs an input you don't currently have spare.
+
+### The camera lets go in the air
+
+On the ground the rig is a child of the car, so "no rotation" already means "looking down the
+track" — right, because the car and the road turn together. In the air the car can be doing
+anything, and a camera welded to it turns the whole world upside down around a car that appears
+to sit still. That reads as the *world* spinning rather than the car, and it is genuinely
+nauseating.
+
+`CameraRig.DetachWhenAirborne` holds a fixed world orientation instead: level, on the yaw the car
+was travelling on as it took off, so the horizon stays put and the car tumbles in front of it.
+
+- **`DetachDelay`** (0.35 s) — long enough that kerbs, crests and the constant going-light of a
+  ramp don't twitch the camera in and out.
+- **`DetachTime`** (0.25 s) / **`ReattachTime`** (0.55 s) — slower to take hold again than to let
+  go, because the car can land facing anywhere and snapping onto its nose is its own lurch.
+
+Both poses are built as world bases and slerped rather than switching between a local and a
+global mode. A switch would move the camera on the frame it happened; a slerp cannot, because at
+the moment of the swap the two poses are identical.
 
 ### Drive and grip scale with `GroundFraction`, not with `IsAirborne`
 

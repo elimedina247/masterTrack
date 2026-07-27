@@ -223,12 +223,6 @@ public partial class Vehicle : RigidBody3D
     [Export] public float AlignmentTorqueMax { get; set; } = 60000.0f;
 
     /// <summary>
-    /// Alignment torque multiplier while airborne. Air steering with no grip to fight is far too
-    /// effective at full strength — the car pirouettes off every jump.
-    /// </summary>
-    [Export] public float AirborneSteerMultiplier { get; set; } = 0.35f;
-
-    /// <summary>
     /// How hard the car rights itself toward level while airborne, in Nm per radian of tilt.
     /// Nothing else stops a car that took off crooked from landing on its roof.
     ///
@@ -388,21 +382,38 @@ public partial class Vehicle : RigidBody3D
     [Export] public float FallGravityMultiplier { get; set; } = 2.0f;
 
     /// <summary>
-    /// Flip torque from the throttle and brake while airborne, in Nm. Throttle pitches the nose
-    /// up, brake pitches it down.
+    /// Fastest the car flips in the air, in degrees per second. Throttle pitches the nose up,
+    /// brake pitches it down.
     ///
     /// Those two pedals do nothing at all in the air — drive force is scaled by
     /// <see cref="GroundFraction"/>, which is zero — so they are free, and they are the pair the
     /// player's thumbs are already on.
+    ///
+    /// <b>A rate, not a torque.</b> A torque accelerates for as long as it is held, so the flip
+    /// you get depends on how long you were in the air and the car can wind itself into a spin it
+    /// cannot recover from. Driving toward a rate means the number below <i>is</i> the fastest it
+    /// will ever go round, and releasing brings it back to still. 140°/s is a bit over two
+    /// seconds per full rotation.
     /// </summary>
-    [Export] public float AirPitchTorque { get; set; } = 30000.0f;
+    [Export] public float AirPitchRate { get; set; } = 140.0f;
 
     /// <summary>
-    /// Damping on airborne pitch and roll when the player is <i>not</i> asking for rotation, in
-    /// Nm per rad/s. Bleeds off a tumble picked up from a bad take-off without stopping a flip
-    /// the player is driving.
+    /// Fastest the car turns left and right in the air, in degrees per second, from the steering
+    /// input.
+    ///
+    /// Slower than the pitch rate on purpose: yaw in the air is for lining up a landing, not for
+    /// tricks, and it is the axis a player is most likely to be holding by accident on the way
+    /// off a ramp.
     /// </summary>
-    [Export] public float AirPitchDamping { get; set; } = 4000.0f;
+    [Export] public float AirYawRate { get; set; } = 100.0f;
+
+    /// <summary>
+    /// How hard the car is driven toward its target rotation rate, in Nm per rad/s of error.
+    ///
+    /// Sets how quickly a flip spins up and how quickly it stops, without changing how fast it
+    /// ends up going. Higher is snappier and more arcade; lower feels like the car has mass.
+    /// </summary>
+    [Export] public float AirRotationGain { get; set; } = 6000.0f;
 
     /// <summary>
     /// Hard ceiling on speed along gravity, in m/s. Not a feel knob — it is the guard rail that
@@ -1021,13 +1032,19 @@ public partial class Vehicle : RigidBody3D
 
         HeadingError = noseFlat.Normalized().SignedAngleTo(heading, Vector3.Up);
 
+        // Stood down completely in the air — ProcessAirborne owns every axis up there, and two
+        // controllers arguing over yaw is what made air steering feel vague. The heading is still
+        // being dragged onto the car's facing above, so there is nothing to unwind on landing.
+        if (IsAirborne)
+        {
+            SteerTorque = 0.0f;
+            return;
+        }
+
         float yawRate = AngularVelocity.Dot(Vector3.Up);
         float turnForce = Mathf.Clamp(
             HeadingError * AlignmentTorqueStrength - yawRate * AlignmentTorqueDamping,
             -AlignmentTorqueMax, AlignmentTorqueMax);
-
-        if (IsAirborne)
-            turnForce *= AirborneSteerMultiplier;
 
         // Walaber's upright_factor: fade steering out as the car tips away from level, so a car on
         // its side or mid-roll stops trying to steer and lets the righting torque do its work.
@@ -1049,13 +1066,22 @@ public partial class Vehicle : RigidBody3D
 
         AirTime += delta;
 
-        // Throttle and brake are dead weight in the air, so they fly the car instead. Torque about
-        // the car's own X axis, which is a flip in the plane it is already travelling in.
+        // Throttle and brake are dead weight in the air, so they fly the car instead.
         float pitchInput = Mathf.Clamp(ThrottleInput, 0.0f, 1.0f)
                            - Mathf.Clamp(BrakeInput, 0.0f, 1.0f);
+        float yawInput = Mathf.Clamp(SteeringInput, -1.0f, 1.0f);
 
-        if (Mathf.Abs(pitchInput) > 0.01f)
-            ApplyTorque(GlobalTransform.Basis.X * (pitchInput * AirPitchTorque));
+        // Rate control, not torque. Each axis is driven toward a target angular rate, so the
+        // export is the fastest it will ever go round rather than an acceleration that keeps
+        // adding for as long as the button is held. Releasing drives the rate back to zero, which
+        // is also what bleeds off a tumble picked up from a bad take-off — no separate damping.
+        //
+        // Pitch about the car's own X, so a flip stays in the plane it is travelling in. Yaw
+        // about world up, so it is still a flat turn with the car upside down.
+        ApplyAirRate(GlobalTransform.Basis.X, pitchInput * Mathf.DegToRad(AirPitchRate));
+        ApplyAirRate(Vector3.Up, yawInput * Mathf.DegToRad(AirYawRate));
+
+        float rotationInput = Mathf.Max(Mathf.Abs(pitchInput), Mathf.Abs(yawInput));
 
         // Level the car so it lands on its wheels: torque about the axis that would take its roof
         // back to vertical, damped by however fast it is already rolling that way.
@@ -1069,19 +1095,19 @@ public partial class Vehicle : RigidBody3D
             ? Mathf.Clamp((AirTime - UprightGraceTime) / UprightFadeTime, 0.0f, 1.0f)
             : (AirTime > UprightGraceTime ? 1.0f : 0.0f);
 
-        UprightAssist = assist * (1.0f - Mathf.Abs(pitchInput));
+        UprightAssist = assist * (1.0f - rotationInput);
+
+        if (UprightAssist <= 0.0f)
+            return;
 
         Vector3 up = GlobalTransform.Basis.Y;
         Vector3 axis = up.Cross(Vector3.Up);
         float tilt = Mathf.Acos(Mathf.Clamp(up.Dot(Vector3.Up), -1.0f, 1.0f));
 
-        // Damp roll and pitch only; yaw belongs to the steering controller. Damping is on the
-        // same switch as the righting, so a flip the player is driving is not quietly bled away.
-        Vector3 spin = AngularVelocity - Vector3.Up * AngularVelocity.Dot(Vector3.Up);
-        ApplyTorque(-spin * (AirPitchDamping * (1.0f - Mathf.Abs(pitchInput))));
-
-        if (UprightAssist > 0.0f && axis.LengthSquared() > 0.0001f)
+        if (axis.LengthSquared() > 0.0001f)
         {
+            // Damps roll and pitch only; yaw is the player's while they are in the air.
+            Vector3 spin = AngularVelocity - Vector3.Up * AngularVelocity.Dot(Vector3.Up);
             Vector3 righting = axis.Normalized() * (tilt * AirborneUprightTorque);
             ApplyTorque((righting - spin * AirborneUprightDamping) * UprightAssist);
         }
@@ -1097,5 +1123,16 @@ public partial class Vehicle : RigidBody3D
             return;
 
         ApplyCentralForce(down * ((FallGravityMultiplier - 1.0f) * Mass * GravityMagnitude));
+    }
+
+    /// <summary>
+    /// Drive rotation about <paramref name="axis"/> toward <paramref name="targetRate"/> rad/s.
+    /// A target of zero is therefore also the brake, which is why airborne rotation needs no
+    /// separate damping term.
+    /// </summary>
+    private void ApplyAirRate(Vector3 axis, float targetRate)
+    {
+        float rateError = targetRate - AngularVelocity.Dot(axis);
+        ApplyTorque(axis * (rateError * AirRotationGain));
     }
 }

@@ -25,6 +25,38 @@ public partial class CameraRig : Node3D
     [Export] public float MinPitch = -0.5f; // look down
     [Export] public float MaxPitch = 0.6f;  // look up
 
+    // ---------------------------------------------------------------- Airborne detach
+
+    /// <summary>
+    /// Whether the camera lets go of the car's orientation while it is in the air.
+    ///
+    /// On the ground the rig is a child of the car, so "no rotation" already means "looking down
+    /// the track" — which is what you want, because the car and the road turn together. In the
+    /// air the car can be doing anything, and a camera welded to it turns the whole world upside
+    /// down around a car that appears to sit still. That reads as the world spinning rather than
+    /// the car spinning, and it is genuinely nauseating.
+    ///
+    /// Detached, the camera holds a fixed world orientation and the <i>car</i> tumbles in front
+    /// of it, which is both readable and what makes a flip worth watching.
+    /// </summary>
+    [ExportGroup("Airborne")]
+    [Export] public bool DetachWhenAirborne { get; set; } = true;
+
+    /// <summary>
+    /// Seconds airborne before the camera lets go. Long enough that kerbs, crests and the
+    /// constant going-light of a ramp don't make the camera twitch in and out of detaching.
+    /// </summary>
+    [Export] public float DetachDelay { get; set; } = 0.35f;
+
+    /// <summary>Seconds to let go over, once <see cref="DetachDelay"/> has passed.</summary>
+    [Export] public float DetachTime { get; set; } = 0.25f;
+
+    /// <summary>
+    /// Seconds to take hold again after landing. Slower than letting go: the car can land facing
+    /// anywhere, and snapping the camera back onto its nose is its own lurch.
+    /// </summary>
+    [Export] public float ReattachTime { get; set; } = 0.55f;
+
     // ---------------------------------------------------------------- Nitro FOV
 
     /// <summary>
@@ -81,6 +113,15 @@ public partial class CameraRig : Node3D
     private Vector3 _baseCameraRotation;
     private readonly FastNoiseLite _shakeNoise = new();
     private float _shakeTime;
+
+    /// <summary>How far let go the camera currently is, 0 on the ground to 1 fully detached.</summary>
+    private float _detach;
+
+    /// <summary>
+    /// World yaw the camera holds while detached, captured as it starts to let go. Everything
+    /// else about the detached pose is level, so the car tumbles against a steady horizon.
+    /// </summary>
+    private float _heldYaw;
 
     public override void _Ready()
     {
@@ -153,10 +194,50 @@ public partial class CameraRig : Node3D
             _pitch = Mathf.Lerp(_pitch, 0.0f, t);
         }
 
-        Rotation = new Vector3(_pitch, _yaw, 0.0f);
-
+        ProcessDetach((float)delta);
         ProcessNitroFov((float)delta);
         ProcessSpeedShake((float)delta);
+    }
+
+    /// <summary>
+    /// Blend between riding on the car's orientation and holding a fixed world one.
+    ///
+    /// Both poses are built as world bases and then slerped, rather than switching between a
+    /// local and a global mode. A switch would land the camera somewhere different on the frame
+    /// it happened; a slerp cannot, because at the moment of the swap the two are the same pose.
+    /// </summary>
+    private void ProcessDetach(float delta)
+    {
+        bool wantDetach = DetachWhenAirborne
+                          && _vehicle is { IsVehicleReady: true, IsAirborne: true }
+                          && _vehicle.AirTime >= DetachDelay;
+
+        // Grab the direction the car was travelling as we let go, so the held view is the one the
+        // player was already looking down rather than an arbitrary compass bearing.
+        if (wantDetach && _detach <= 0.0f && _vehicle != null)
+            _heldYaw = _vehicle.GlobalRotation.Y;
+
+        float time = wantDetach ? DetachTime : ReattachTime;
+        _detach = time > 0.0f
+            ? Mathf.MoveToward(_detach, wantDetach ? 1.0f : 0.0f, delta / time)
+            : (wantDetach ? 1.0f : 0.0f);
+
+        var look = Basis.FromEuler(new Vector3(_pitch, _yaw, 0.0f));
+
+        if (_detach <= 0.0f || _vehicle == null)
+        {
+            // Attached: plain local rotation, exactly as before. Nothing to compose.
+            Rotation = new Vector3(_pitch, _yaw, 0.0f);
+            return;
+        }
+
+        Basis attached = _vehicle.GlobalBasis * look;
+
+        // Level, and holding the yaw captured at take-off, so the horizon stays put and the car
+        // is the thing that moves.
+        Basis held = Basis.FromEuler(new Vector3(_pitch, _heldYaw + _yaw, 0.0f));
+
+        GlobalBasis = attached.Slerp(held, _detach).Orthonormalized();
     }
 
     private void ProcessNitroFov(float delta)
