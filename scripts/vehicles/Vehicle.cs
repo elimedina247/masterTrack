@@ -455,6 +455,54 @@ public partial class Vehicle : RigidBody3D
     /// <summary>Frontal area in m². A rough estimate is fine.</summary>
     [Export] public float FrontalArea { get; set; } = 2.0f;
 
+    /// <summary>
+    /// Downforce at <see cref="TopSpeed"/>, in multiples of the car's own weight. 1.5 is fast
+    /// GT territory; 0 turns the whole thing off.
+    ///
+    /// This exists because cornering radius is <c>v² / (μg)</c> — grip is flat with speed while
+    /// the force a corner demands grows with its square, so a car with no aero understeers
+    /// worse the faster it goes no matter what the steering is set to. Downforce scales with
+    /// v² as well, which is what keeps the radius from running away.
+    ///
+    /// It arrives as tire load rather than as a shove on the chassis; see
+    /// <see cref="Wheel.Downforce"/> for why. Because the tire model only reads it for a wheel
+    /// whose spring is loaded, an airborne car gets none of it — jump arcs are untouched.
+    /// </summary>
+    [Export] public float DownforceG { get; set; } = 1.5f;
+
+    /// <summary>
+    /// Share of the downforce carried by the front axle. 0.5 is neutral; bias it rearward for
+    /// a car that stays settled at speed, forward for one that still points into a fast corner.
+    /// </summary>
+    [Export(PropertyHint.Range, "0,1,0.01")]
+    public float DownforceBalance { get; set; } = 0.5f;
+
+    // ---------------------------------------------------------------- Airborne
+
+    /// <summary>
+    /// Gravity multiplier while the car is off the ground and heading down. 1 is real gravity.
+    ///
+    /// The track is built on 40 m cubes, and a 40 m drop under real gravity is 2.9 seconds of
+    /// hang time — correct, and far too floaty to play. This only touches the descent, so a
+    /// ramp still launches the car exactly as high as it did; it just stops hanging up there.
+    ///
+    /// Applied as a force rather than by raising gravity itself on purpose. Spring rates are
+    /// derived against a hardcoded half-g, so a car that simply weighed three times as much
+    /// would sit on its bump stops. Airborne there is no load on the springs to get wrong.
+    /// </summary>
+    [ExportGroup("Airborne")]
+    [Export] public float FallGravityMultiplier { get; set; } = 3.0f;
+
+    /// <summary>
+    /// Terminal velocity in m/s — a hard ceiling on how fast the car can be moving *along*
+    /// gravity. 0 disables it.
+    ///
+    /// Not a feel knob: drag alone puts the real terminal velocity around 310 m/s, so a long
+    /// fall off the side of the board would otherwise keep accelerating until the per-step
+    /// movement started arguing with the collision solver. This is the guard rail for that.
+    /// </summary>
+    [Export] public float MaxFallSpeed { get; set; } = 65.0f;
+
     // ---------------------------------------------------------------- Nitro
 
     /// <summary>
@@ -593,6 +641,36 @@ public partial class Vehicle : RigidBody3D
     /// <summary>Gravity as reported by the physics server, used by the bump stops.</summary>
     public Vector3 CurrentGravity { get; private set; } = Vector3.Zero;
 
+    /// <summary>
+    /// True when no wheel's ray cast reaches anything — the car is properly in the air rather
+    /// than merely light on the springs. Deliberately the ray rather than the spring load, so
+    /// a wheel at full droop about to touch down doesn't count as flying.
+    /// </summary>
+    public bool IsAirborne
+    {
+        get
+        {
+            foreach (Wheel wheel in WheelArray)
+            {
+                if (wheel.IsColliding())
+                    return false;
+            }
+
+            return WheelArray.Count > 0;
+        }
+    }
+
+    /// <summary>
+    /// Strength of gravity in m/s². Falls back to 9.8 until the physics server has told us,
+    /// which it can't until the first <see cref="_IntegrateForces"/> after the body exists.
+    /// </summary>
+    private float GravityMagnitude
+        => CurrentGravity.LengthSquared() > 0.0f ? CurrentGravity.Length() : 9.8f;
+
+    /// <summary>Unit vector along gravity, with the same first-frame fallback.</summary>
+    private Vector3 GravityDirection
+        => CurrentGravity.LengthSquared() > 0.0f ? CurrentGravity.Normalized() : Vector3.Down;
+
     public Vector3 VehicleInertia { get; private set; } = Vector3.Zero;
 
     private Vector3 _previousGlobalPosition = Vector3.Zero;
@@ -633,6 +711,21 @@ public partial class Vehicle : RigidBody3D
     public override void _IntegrateForces(PhysicsDirectBodyState3D state)
     {
         CurrentGravity = state.TotalGravity;
+
+        if (MaxFallSpeed <= 0.0f)
+            return;
+
+        // Clamped here rather than as a drag force because it has to be a hard ceiling: a
+        // force that merely opposes the fall still lets velocity creep past whatever number
+        // was asked for. Only the component along gravity is touched, so a car flung sideways
+        // off a ramp keeps every bit of its horizontal speed.
+        Vector3 down = state.TotalGravity.LengthSquared() > 0.0f
+            ? state.TotalGravity.Normalized()
+            : Vector3.Down;
+
+        float fallSpeed = state.LinearVelocity.Dot(down);
+        if (fallSpeed > MaxFallSpeed)
+            state.LinearVelocity -= down * (fallSpeed - MaxFallSpeed);
     }
 
     /// <summary>
@@ -863,6 +956,8 @@ public partial class Vehicle : RigidBody3D
         Speed = LocalVelocity.Length();
 
         ProcessDrag();
+        ProcessDownforce();
+        ProcessFallGravity();
         ProcessBraking(dt);
         ProcessSteering(dt);
         ProcessThrottle(dt);
@@ -950,6 +1045,53 @@ public partial class Vehicle : RigidBody3D
         float drag = 0.5f * AirDensity * Mathf.Pow(Speed, 2.0f) * FrontalArea * CoefficientOfDrag;
         if (drag > 0.0f)
             ApplyCentralForce(-LinearVelocity.Normalized() * drag);
+    }
+
+    /// <summary>
+    /// Work out this step's aero load and hand each tire its share. Must run before
+    /// <see cref="ProcessForces"/>, which is where the tire model reads it.
+    ///
+    /// Quoted against <see cref="TopSpeed"/> rather than as a raw coefficient because that is
+    /// the number anyone tuning this actually wants to reason about — "how many times its own
+    /// weight, flat out". Nothing clamps it at the top: under nitro the car goes past
+    /// <see cref="TopSpeed"/> and earns the extra grip that comes with it.
+    /// </summary>
+    private void ProcessDownforce()
+    {
+        float total = 0.0f;
+        if (DownforceG > 0.0f && TopSpeed > 0.0f)
+        {
+            float speedRatio = Speed / TopSpeed;
+            total = DownforceG * VehicleMass * GravityMagnitude * speedRatio * speedRatio;
+        }
+
+        float frontPerWheel = total * DownforceBalance * 0.5f;
+        float rearPerWheel = total * (1.0f - DownforceBalance) * 0.5f;
+
+        foreach (Wheel wheel in FrontAxle.Wheels)
+            wheel.Downforce = frontPerWheel;
+
+        foreach (Wheel wheel in RearAxle.Wheels)
+            wheel.Downforce = rearPerWheel;
+    }
+
+    /// <summary>
+    /// Push the car down harder while it is falling, so a 40 m drop doesn't take three seconds.
+    ///
+    /// Descent only. Applying it on the way up as well would cut jump height at the same time,
+    /// and the launch off a ramp is the part that's already right — it's the hang at the top
+    /// that reads as floaty. See <see cref="FallGravityMultiplier"/>.
+    /// </summary>
+    private void ProcessFallGravity()
+    {
+        if (FallGravityMultiplier <= 1.0f || !IsAirborne)
+            return;
+
+        Vector3 down = GravityDirection;
+        if (LinearVelocity.Dot(down) <= 0.0f)
+            return;
+
+        ApplyCentralForce(down * ((FallGravityMultiplier - 1.0f) * Mass * GravityMagnitude));
     }
 
     private void ProcessBraking(float delta)

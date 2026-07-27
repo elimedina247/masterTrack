@@ -104,9 +104,54 @@ Start here:
   plain RWD (`VariableTorqueSplit` is off); turn it on to blend toward AWD under slip.
 - **Assists** — `SteeringSlipAssist`, `CountersteerAssist`, `TractionControlMaxWheelSpin`,
   `EnableStability`. Turn these down for a car that bites, up for one that flatters.
+- **`DownforceG`** — what stops the car understeering worse and worse as it speeds up. See
+  **Aero and airborne** below; reach for it before you touch `MaxSteeringAngle`.
 
 **Physics tick rate must stay at 120 Hz or higher** (`project.godot` sets it). The overlay
 shouts at you in red if it drops. Handling changes when you change the tick rate.
+
+### Aero and airborne
+
+Two additions that aren't in GEVP. Both exist because the track is built on **40 m cubes**,
+which makes this a much bigger world than a normal car sim is tuned for.
+
+Cornering radius is `v² / (μg)`. Grip is flat with speed, the force a corner demands grows with
+its square, so with no aero the car understeers worse the faster it goes — at 200 km/h on
+1.8 μ the radius is about 186 m, against a 40 m tile. No amount of steering lock fixes that,
+because above roughly 23 km/h the car is grip-limited rather than lock-limited.
+
+- **`DownforceG`** (1.5) — downforce at `TopSpeed`, as a multiple of the car's own weight.
+  Scales with v², so it's absent when you're crawling and largest exactly where the problem is.
+  0 disables it.
+- **`DownforceBalance`** (0.5) — front's share. Rearward for stability at speed, forward to
+  keep the nose alive in a fast corner.
+
+It arrives as **tire load, not a force on the chassis**. Pressing the body down would be the
+physical route, but spring rates are derived so static weight already sits at `RestingRatio`
+(half) of the travel — one g of downforce would park the car on its bump stops. Adding it to
+the normal load in the brush model instead means grip without the ride height collapsing. It
+also means an airborne wheel gets none of it, so **jump arcs are unchanged**.
+
+Falling is the other half. A 40 m drop under real gravity is **2.9 seconds** of hang time,
+which is correct and unplayable:
+
+| Fall gravity | Hang time, one cube | Impact |
+|---|---|---|
+| 1.0× | 2.86 s | 28 m/s |
+| 2.5× | 1.81 s | 44 m/s |
+| **3.0×** (default) | **1.65 s** | 49 m/s |
+| 4.0× | 1.43 s | 56 m/s |
+
+- **`FallGravityMultiplier`** (3.0) — extra gravity while airborne **and descending only**.
+  Leaving the ascent alone means a ramp still launches the car exactly as high; it just stops
+  hanging at the apex. That asymmetry is what reads as weight rather than heaviness.
+- **`MaxFallSpeed`** (65 m/s) — terminal velocity, clamped along gravity in `_IntegrateForces`.
+  Not a feel knob: drag alone puts the real terminal velocity near 310 m/s, so this is the
+  guard rail that keeps a fall off the edge of the board from outrunning the collision solver.
+  Horizontal speed is untouched. 0 disables it.
+
+Don't reach for global gravity or `gravity_scale` instead. `CalculateSpringRate` is fed a
+hardcoded `4.9` (half of g), so a car that simply weighed more would sit bottomed out.
 
 ### Nitro
 
@@ -202,6 +247,12 @@ Behaviour is identical at default settings. These are the deliberate changes:
 11. **Rear ABS works.** Upstream disables ABS on the handbrake axle unconditionally, which
     left `RearAbsPulseTime` and `RearAbsSpinDifferenceThreshold` inert. It is now disabled only
     while the handbrake is actually pulled.
+12. **Downforce**, which GEVP has no concept of. Added as tire normal load rather than a body
+    force, for the ride-height reason in **Aero and airborne**. Set `DownforceG = 0` for
+    upstream behaviour.
+13. **Fall gravity and terminal velocity.** Also not upstream — both are about the 40 m tile
+    scale rather than the car. `FallGravityMultiplier = 1` and `MaxFallSpeed = 0` restore plain
+    Godot gravity.
 
 Two GDScript behaviours are reproduced on purpose rather than "fixed":
 

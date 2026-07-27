@@ -88,6 +88,18 @@ public partial class Wheel : RayCast3D
     /// <summary>Tire slip in the contact plane: X = slip angle (rad), Y = longitudinal slip ratio.</summary>
     public Vector2 SlipVector = Vector2.Zero;
 
+    /// <summary>
+    /// Aerodynamic load on this tire in newtons, written every physics step by the parent
+    /// vehicle. Added to the spring force <i>only</i> where the tire model works out how much
+    /// grip it has — it is deliberately never fed to the body as a force.
+    ///
+    /// Pressing the chassis down for real would be the physical route, but the spring rates
+    /// are derived so that static weight already sits at <c>RestingRatio</c> of the travel
+    /// (half, as tuned), which means one g of downforce puts the car on its bump stops. This
+    /// way the grip arrives without the ride height collapsing.
+    /// </summary>
+    public float Downforce;
+
     public float PreviousCompression;
 
     /// <summary>Whether <see cref="PreviousCompression"/> holds a real previous frame yet.</summary>
@@ -464,7 +476,13 @@ public partial class Wheel : RayCast3D
             SlipVector = new Vector2(0.0001f, 0.0001f);
 
         float corneringStiffness = 0.5f * CurrentTireStiffness * Mathf.Pow(ContactPatch, 2.0f);
-        float friction = CurrentCof * SpringForce - SpringForce / (TireWidth * ContactPatch * 0.2f);
+
+        // Aero load rides on top of the spring force, but only while the spring is actually
+        // carrying something. A wheel hanging at full droop still passes the IsColliding test
+        // above, and letting downforce alone give it grip would have the car cornering off a
+        // tire that isn't really on the road.
+        float normalLoad = SpringForce > 0.0f ? SpringForce + Downforce : 0.0f;
+        float friction = CurrentCof * normalLoad - normalLoad / (TireWidth * ContactPatch * 0.2f);
         float deflect = 1.0f / Mathf.Sqrt(Mathf.Pow(corneringStiffness * SlipVector.Y, 2.0f)
                                           + Mathf.Pow(corneringStiffness * SlipVector.X, 2.0f));
 
