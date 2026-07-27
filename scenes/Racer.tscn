@@ -78,6 +78,10 @@ TireRadius = 0.36
 [node name="RimRR" parent="BodyRig/WheelRRHub" unique_id=509893854 instance=ExtResource("7_rimR")]
 transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 0, 0, 0)
 
+[node name="NitroFlame" type="Node3D" parent="BodyRig" unique_id=1660429712 node_paths=PackedStringArray("VehicleNode")]
+script = ExtResource("14_nitroflame")
+VehicleNode = NodePath("../..")
+
 [node name="Collision" type="CollisionShape3D" parent="." unique_id=1227752201]
 transform = Transform3D(1.1, 0, 0, 0, 1.1, 0, 0, 0, 1.1, 0, 0.59, 0)
 shape = SubResource("Shape_body")
@@ -101,10 +105,6 @@ TireWidth = 0.245
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.65, 0.34, 1)
 script = ExtResource("3_groundray")
 TireWidth = 0.245
-
-[node name="NitroFlame" type="Node3D" parent="BodyRig" unique_id=1660429712 node_paths=PackedStringArray("VehicleNode")]
-script = ExtResource("14_nitroflame")
-VehicleNode = NodePath("../..")
 
 [node name="SkidMarks" type="MeshInstance3D" parent="." unique_id=1471203588 node_paths=PackedStringArray("VehicleNode")]
 script = ExtResource("10_skid")

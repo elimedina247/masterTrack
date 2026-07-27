@@ -175,6 +175,25 @@ public partial class Vehicle : RigidBody3D
     /// </summary>
     [Export] public float DriftGripMultiplier { get; set; } = 0.28f;
 
+    /// <summary>
+    /// Hardest the tires may pull sideways, in newtons. <b>This is what lets the car slide.</b>
+    ///
+    /// <see cref="GripFactor"/> removes a *percentage of the sideways velocity every physics
+    /// step*, which is a fixed time constant rather than a fixed force — so the harder the car is
+    /// thrown sideways, the harder it grips back, without limit. Land sideways at 55 m/s and the
+    /// uncapped model asks for 6600 m/s² of lateral deceleration: about 670 g, seven million
+    /// newtons, and every bit of the slide gone in twenty milliseconds. The car stops dead in its
+    /// own length because a tire was allowed to be infinitely strong.
+    ///
+    /// Capping it means momentum survives a bad landing: the car keeps sliding and scrubs the
+    /// speed off over time, which is what having been thrown sideways should feel like.
+    ///
+    /// 100000 N is about 8.5 g on the 1200 kg racer. Steady cornering only asks for around 60000,
+    /// so ordinary driving never reaches this — it bites on landings, on impacts, and on trying
+    /// to corner at boosted speeds, which is the one place it will change how the car drives.
+    /// </summary>
+    [Export] public float MaxGripForce { get; set; } = 100000.0f;
+
     // There is deliberately no airborne grip value. Grip is scaled by GroundFraction, so it is
     // exactly zero once the last ray leaves the road — see ProcessGrip. Any of it left running in
     // the air would point along the car's own X axis, which would make rotating the car change
@@ -962,7 +981,16 @@ public partial class Vehicle : RigidBody3D
 
         Vector3 side = GlobalTransform.Basis.X;
         float instantSideAccel = -side.Dot(LinearVelocity) / delta;
-        ApplyCentralForce(side * (instantSideAccel * Mass * grip));
+
+        // Clamped, because the solve above is a *time constant*, not a force: it asks for whatever
+        // it takes to cancel the sideways velocity this step, so the faster the car is thrown
+        // sideways the harder it grips back. Without the cap a tire is infinitely strong and a
+        // car that lands sideways stops in its own length. See MaxGripForce.
+        // Scaled by contact as well: two corners on the road can hold half of what four can, so a
+        // car touching down on one wheel slides further before it hooks up.
+        float cap = MaxGripForce * GroundFraction;
+        float sideForce = Mathf.Clamp(instantSideAccel * Mass * grip, -cap, cap);
+        ApplyCentralForce(side * sideForce);
     }
 
     // ---------------------------------------------------------------- Steering

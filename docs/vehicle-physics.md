@@ -160,6 +160,45 @@ is `GripFactor`. That fraction is the entire tire model. It does not vary with l
 how much of the friction budget acceleration is using — which is unphysical, and is exactly why
 the car is predictable.
 
+### The tires need a limit, or momentum dies on landing
+
+`GripFactor` is a **time constant, not a force**. It removes a percentage of the sideways
+velocity every physics step, so the harder the car is thrown sideways, the harder it grips back —
+without limit:
+
+| Landed sideways at | Lateral deceleration asked for | Force |
+|---|---|---|
+| 5 m/s | 600 m/s² (61 g) | 0.65 MN |
+| 20 m/s | 2400 m/s² (245 g) | 2.6 MN |
+| 55 m/s | 6600 m/s² (**674 g**) | **7.1 MN** |
+
+A tire allowed to be infinitely strong stops the car dead in its own length. Twist the car in
+mid-air, land sideways at speed, and every bit of that momentum vanished in about twenty
+milliseconds.
+
+**`MaxGripForce`** (100000 N, ≈8.5 g on the racer) caps it, scaled by `GroundFraction` so a car
+touching down on one wheel slides further before it hooks up. Momentum now survives a bad landing
+and scrubs off over time:
+
+| Landed sideways at | Slides | Over |
+|---|---|---|
+| 20 m/s | 2.4 m | 0.24 s |
+| 40 m/s | 9.6 m | 0.48 s |
+| 55 m/s | 18.2 m | 0.66 s |
+
+Ordinary driving never reaches the cap — steady cornering asks for about 60000 N. What it does
+change is **cornering at boosted speed**, which is now genuinely grip-limited:
+
+| Speed | Tightest radius held without sliding |
+|---|---|
+| 40 m/s | 19 m |
+| 55 m/s (`TopSpeed`) | 36 m |
+| 75 m/s (chained boost) | 68 m |
+
+A tile is 40 m, so up to `TopSpeed` the car still holds anything the track can throw at it, and
+past that it starts to wash out. Raise `MaxGripForce` if boosted cornering feels too loose;
+lower it for longer slides everywhere.
+
 ---
 
 ## Steering has no steering angle
