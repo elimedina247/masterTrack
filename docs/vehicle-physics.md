@@ -238,12 +238,28 @@ measured g is honest, and honest is not the goal. This one is driven mostly by w
 **asking for**, so the shell answers the stick before the physics catches up:
 
 - **Roll** — `LeanRoll` 9°, plus `DriftRoll` 7° more at full drift.
-- **Drift yaw** — `DriftYaw` 8°, so the shell sits further sideways than the body actually is.
-  This is what makes a drift read as a drift from behind rather than as hard cornering.
+- **Drift yaw** — `HeadingYawFollow`, see below.
 - **Pitch** — `SquatPitch` under power, `DivePitch` under braking, `BoostPitch` on top while a
   boost burns.
 
-Raise `LeanRoll` and `DriftRoll` first if the car still looks too flat.
+### Drift yaw is the heading error
+
+The vehicle is a PD controller chasing `HeadingDirection` — the **white arrow** in the debug
+overlay's Steering page — and the chassis always lags it. During a drift that lag *is* the drift
+angle, because the heading has been swung 35° off.
+
+`HeadingYawFollow` (1.0) yaws the shell by `HeadingError` to take up exactly that lag, which puts
+the **model on the white arrow** while the chassis underneath is still catching up. That is what
+makes the nose point into the slide.
+
+- `0` — shell follows the chassis; the car looks like it is cornering, not drifting.
+- `1` — model sits exactly on the commanded heading.
+- `>1` — model *leads* the heading, overstating the drift. A legitimate arcade cheat.
+
+`MaxHeadingYaw` (40°) stops a spin or a hard collision twisting the shell off its chassis.
+
+Raise `LeanRoll` and `DriftRoll` if the car still looks too flat, and `HeadingYawFollow` if it
+doesn't look sideways enough.
 
 ---
 
@@ -280,12 +296,37 @@ New, and needed because there is no suspension geometry to land on:
   wheels.
 - **`AirborneSteerMultiplier`** (0.35) — air steering at full strength pirouettes the car off
   every jump.
-- **`MaxPullForce`** — the spring term goes negative when the ground drops away past the ride
-  height, which glues the car over a crest. Left unbounded it also yanks the nose down off a
-  ramp and kills the jump, so it is capped rather than removed.
+- **`MaxPullForce`** (11000 N, near a full g) — the spring term goes negative when the ground
+  drops away past the ride height, which glues the car over a crest. It does **not** flatten real
+  jumps: a ray that has left the road entirely finds nothing to pull against, so the reach of the
+  ray is what separates "following a crease" from "airborne", not the strength of this.
 
-Drive force is cut to zero while airborne. There is nothing to push against, and without the cut
-a car accelerates off a ramp.
+### Drive and grip scale with `GroundFraction`, not with `IsAirborne`
+
+Both fade with **how much of the car is on the road** — `GroundedRayCount / 4` — rather than
+switching off the moment the last ray leaves it.
+
+This is not a nicety. Ramps are built from chord facets (see below), and the convex creases
+between them unstick a car at speed. An all-or-nothing check meant a ramp stopped driving the
+instant it started working: the car would skim a crease, lose *all* drive and drop to airborne
+grip, and stall halfway up. Fully airborne the drive is still zero — there is nothing to push
+against, and without that a car accelerates off a ramp.
+
+### Ramp geometry
+
+Ramps used to be pure smoothstep from end to end, which sounds smooth and is not: a smoothstep's
+slope peaks at **1.5× its own average**, so a two-cube climb reached 44° in the middle while
+being 34° on paper, and the angle changed everywhere. Eight evenly spaced facets left a 10–18°
+crease every 15 metres.
+
+They are now **trapezoidal**: smoothstep into a constant slope, hold it, smoothstep out
+(`RampBlend` 0.22). Over three cells that is a flat **23°** for a one-cube climb and **40°** for
+two. Facets are clustered into the two eased ends, where all the curvature is —
+`RampEaseSegments` 8 each, `RampMidSegments` 4 down the collinear middle — which brings the worst
+crease to 4.3° and 7.9°.
+
+If ramps still feel wrong, `RampBlend` is the knob: lower is a longer constant slope with sharper
+ends, higher is gentler ends and a steeper middle.
 
 ---
 

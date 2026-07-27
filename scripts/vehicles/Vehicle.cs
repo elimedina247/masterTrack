@@ -71,10 +71,17 @@ public partial class Vehicle : RigidBody3D
 
     /// <summary>
     /// Cap on the downward pull a ray applies when the ground falls away past
-    /// <see cref="RideHeight"/>, in newtons. See <see cref="GroundRay.MaxPullForce"/> — it keeps
-    /// the car glued over a crest without flattening the jump off a ramp.
+    /// <see cref="RideHeight"/>, in newtons. See <see cref="GroundRay.MaxPullForce"/>.
+    ///
+    /// This is what holds the car down over a crest, and it is worth a full g or so: ramps are
+    /// built from chord facets and the convex creases between them will otherwise throw the car
+    /// off the road several times on the way up.
+    ///
+    /// It does not flatten real jumps, because a ray that has left the road entirely finds
+    /// nothing to pull against — the reach of the ray is what separates "following a crease"
+    /// from "airborne", not the strength of this.
     /// </summary>
-    [Export] public float MaxPullForce { get; set; } = 4000.0f;
+    [Export] public float MaxPullForce { get; set; } = 11000.0f;
 
     /// <summary>
     /// Raises or lowers the centre of mass relative to the body origin, in metres. The single
@@ -399,6 +406,16 @@ public partial class Vehicle : RigidBody3D
     /// <summary>How many of the four rays are touching something.</summary>
     public int GroundedRayCount { get; private set; }
 
+    /// <summary>
+    /// Fraction of the car that is on the road, 0..1.
+    ///
+    /// Drive and grip scale with this rather than switching off the moment the last ray leaves.
+    /// That matters far more than it sounds: ramps are built from chord facets, and the creases
+    /// between them unstick a car at speed. Cutting drive outright there means a ramp stops
+    /// driving the instant it starts working, which is exactly what an all-or-nothing check did.
+    /// </summary>
+    public float GroundFraction { get; private set; }
+
     /// <summary>Effective grip this step, after surface and drift. 1 is on rails, 0 is ice.</summary>
     public float CurrentGrip { get; private set; }
 
@@ -609,6 +626,7 @@ public partial class Vehicle : RigidBody3D
         }
 
         IsAirborne = GroundedRayCount == 0;
+        GroundFraction = WheelArray.Count > 0 ? (float)GroundedRayCount / WheelArray.Count : 0.0f;
 
         // Off a rear ray rather than averaged: the rears are what the car drives on, and one
         // dictionary lookup beats blending four values that are nearly always the same number.
@@ -839,9 +857,12 @@ public partial class Vehicle : RigidBody3D
         else
             maxForce = MaxCoastForce;
 
-        // Nothing to push against in the air. Left in, a car would accelerate off a ramp.
-        if (IsAirborne)
-            maxForce = 0.0f;
+        // Scaled by how much of the car is actually on the road, not switched off the moment the
+        // last ray leaves it. Fully airborne this is still zero — there is nothing to push
+        // against, and without that a car accelerates off a ramp — but a car skimming a crease
+        // with two corners down keeps half its drive instead of losing all of it. See
+        // GroundFraction: ramps are chord facets, and the creases unstick the car constantly.
+        maxForce *= GroundFraction;
 
         ApplyCentralForce(forward * Mathf.Clamp(accelForce, -maxForce, maxForce));
     }
@@ -859,19 +880,16 @@ public partial class Vehicle : RigidBody3D
     /// </summary>
     private void ProcessGrip(float delta)
     {
-        float grip;
-        if (IsAirborne)
-        {
-            grip = AirborneGripFactor;
-        }
-        else
-        {
-            grip = GripFactor.TryGetValue(SurfaceType, out float g) ? g : 0.9f;
+        float grip = GripFactor.TryGetValue(SurfaceType, out float g) ? g : 0.9f;
 
-            // On the drift's own ramp, so grip returns at the rate the car straightens rather
-            // than snapping back the instant the button comes up.
-            grip *= Mathf.Lerp(1.0f, DriftGripMultiplier, DriftBlend);
-        }
+        // On the drift's own ramp, so grip returns at the rate the car straightens rather than
+        // snapping back the instant the button comes up.
+        grip *= Mathf.Lerp(1.0f, DriftGripMultiplier, DriftBlend);
+
+        // Faded by how much of the car is down rather than switched to the airborne value the
+        // moment the last ray leaves — same reason as the drive force above. A car crossing a
+        // crease on a ramp should lose some grip, not all of it.
+        grip = Mathf.Lerp(AirborneGripFactor, grip, GroundFraction);
 
         CurrentGrip = grip;
 

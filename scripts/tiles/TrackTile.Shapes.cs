@@ -85,7 +85,22 @@ public partial class TrackTile
 
 	/// <summary>How many facets a ramp is built from. Enough that the eased profile reads as a
 	/// curve and the car does not feel the joints.</summary>
-	private const int RampSegments = 8;
+	/// <summary>
+	/// Chord facets in each of a ramp's two eased ends.
+	///
+	/// All of a ramp's curvature is here, so this is the number that decides how big a crease the
+	/// car has to be thrown over. The old build spread 8 facets evenly across the whole tile and
+	/// left 10–18° kinks. Eight per ease brings the worst crease to 4.3° on a one-cube climb and
+	/// 7.9° on a two-cube one, for 20 facets against the old 8.
+	/// </summary>
+	private const int RampEaseSegments = 8;
+
+	/// <summary>
+	/// Chord facets in a ramp's constant-slope middle. These are collinear — there is no crease
+	/// between them at any count — so this is only about not spanning the middle with one very
+	/// long collision box.
+	/// </summary>
+	private const int RampMidSegments = 4;
 
 	/// <summary>Thickness of a sloped or looping road slab. Thin, unlike the flat tiles' twenty
 	/// metre foundation, because a ramp has open air underneath it and a loop has its own inside.</summary>
@@ -109,10 +124,12 @@ public partial class TrackTile
 		StandardMaterial3D wall = WallMaterial(definition.Accent);
 		StandardMaterial3D line = LineMaterial();
 
-		for (int i = 0; i < RampSegments; i++)
+		float[] samples = RampSamples();
+
+		for (int i = 0; i < samples.Length - 1; i++)
 		{
-			float t0 = (float)i / RampSegments;
-			float t1 = (float)(i + 1) / RampSegments;
+			float t0 = samples[i];
+			float t1 = samples[i + 1];
 
 			var p0 = new Vector2(HalfLength - t0 * Length, RampHeightAt(t0, rise));
 			var p1 = new Vector2(HalfLength - t1 * Length, RampHeightAt(t1, rise));
@@ -126,6 +143,32 @@ public partial class TrackTile
 			if (i == 0 && Data.HeightChange >= 2)
 				AddClimbBoost(p0, p1);
 		}
+	}
+
+	/// <summary>
+	/// Where along the ramp to put the facet joints, as fractions from entry to exit.
+	///
+	/// Deliberately not evenly spaced. Every bit of a ramp's curvature is in the two eased ends,
+	/// so that is where the facets are worth spending: spreading them evenly puts most of them
+	/// down the constant-slope middle where consecutive facets are collinear and the extra
+	/// resolution buys nothing at all.
+	/// </summary>
+	private static float[] RampSamples()
+	{
+		var samples = new float[RampEaseSegments * 2 + RampMidSegments + 1];
+		var n = 0;
+
+		for (var i = 0; i < RampEaseSegments; i++)
+			samples[n++] = RampBlend * i / RampEaseSegments;
+
+		for (var i = 0; i < RampMidSegments; i++)
+			samples[n++] = RampBlend + (1.0f - 2.0f * RampBlend) * i / RampMidSegments;
+
+		for (var i = 0; i < RampEaseSegments; i++)
+			samples[n++] = 1.0f - RampBlend + RampBlend * i / RampEaseSegments;
+
+		samples[n] = 1.0f;
+		return samples;
 	}
 
 	/// <summary>
@@ -153,11 +196,64 @@ public partial class TrackTile
 	}
 
 	/// <summary>
+	/// Fraction of a ramp's length spent easing in at each end. The stretch between is a constant
+	/// slope.
+	///
+	/// The ramp used to be pure smoothstep from end to end, which sounds smooth and is not: the
+	/// slope of a smoothstep peaks at <b>1.5×</b> its own average, so a two-cube climb reached 45°
+	/// in the middle while being 33° on paper, and the angle was changing everywhere. Every facet
+	/// joint was a crease the car had to be thrown over.
+	///
+	/// A constant slope has creases in only two places, and this eases those two out.
+	/// </summary>
+	private const float RampBlend = 0.22f;
+
+	/// <summary>
 	/// Height of the ramp surface a fraction <paramref name="t"/> of the way from entry to exit.
 	///
-	/// Smoothstep: flat at both ends, so the joints with the neighbouring tiles are tangential.
+	/// Trapezoidal: smoothstep into a constant slope, hold it, smoothstep out. Flat at both ends
+	/// so the joints with the neighbouring tiles are still tangential, but the middle — which is
+	/// most of the ramp — is a single plane at one angle.
+	///
+	/// With <see cref="RampBlend"/> at 0.22 the constant slope is <c>rise / (run × 0.78)</c>:
+	/// <b>23°</b> for a one-cube climb over three cells and <b>40°</b> for two. Both inside the
+	/// range a car can actually drive up, and the two-cube climb no longer needs its boost strip
+	/// to be passable at all.
 	/// </summary>
-	private static float RampHeightAt(float t, float rise) => rise * t * t * (3.0f - 2.0f * t);
+	private static float RampHeightAt(float t, float rise)
+	{
+		// Area under a trapezoidal speed profile, normalised so t=1 gives exactly the full rise.
+		// The eases are smoothstep, so their integral is the t³/3 − t⁴/6 below.
+		float area = Ease(1.0f, RampBlend);
+		return rise * Ease(t, RampBlend) / area;
+	}
+
+	/// <summary>
+	/// Unnormalised height of a trapezoidal slope profile at <paramref name="t"/>: smoothstep up
+	/// over the first <paramref name="blend"/>, constant, smoothstep down over the last.
+	/// </summary>
+	private static float Ease(float t, float blend)
+	{
+		if (blend <= 0.0f)
+			return t;
+
+		// Rising ease: integral of smoothstep(t/blend) scaled back into t.
+		if (t < blend)
+		{
+			float u = t / blend;
+			return blend * u * u * u * (1.0f - u * 0.5f);
+		}
+
+		// Constant middle: the rising ease contributed half of its span.
+		if (t <= 1.0f - blend)
+			return blend * 0.5f + (t - blend);
+
+		// Falling ease: the mirror of the rise. The area still to come from here to the end is the
+		// rising partial measured backwards, so what has accumulated is the full half minus that.
+		float v = (1.0f - t) / blend;
+		return blend * 0.5f + (1.0f - 2.0f * blend)
+			   + blend * (0.5f - v * v * v * (1.0f - v * 0.5f));
+	}
 
 	/// <summary>
 	/// One facet of sloped road, spanning from <paramref name="from"/> to <paramref name="to"/>

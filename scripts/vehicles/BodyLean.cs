@@ -58,12 +58,26 @@ public partial class BodyLean : Node3D
     // ---------------------------------------------------------------- Drift yaw
 
     /// <summary>
-    /// Extra yaw into the slide at full drift, in degrees. The shell sits further sideways than
-    /// the body actually is, which is what makes a drift read as a drift from behind rather than
-    /// as the car merely cornering hard.
+    /// How much of the heading error the shell yaws to take up, 0..1.
+    ///
+    /// <b>This is the drift pose.</b> The vehicle is a PD controller chasing
+    /// <see cref="Vehicle.HeadingDirection"/> — the white arrow in the debug overlay — and the
+    /// body always lags it, by a lot during a drift, because that lag <i>is</i> the drift angle.
+    /// Yawing the shell by <see cref="Vehicle.HeadingError"/> puts the model on the arrow: the
+    /// nose points into the slide while the chassis underneath is still catching up.
+    ///
+    /// At 1.0 the model sits exactly on the commanded heading. Above 1 it leads it, which
+    /// overstates the drift and is a legitimate arcade cheat. At 0 the shell just follows the
+    /// body and the car looks like it is cornering rather than drifting.
     /// </summary>
     [ExportGroup("Drift")]
-    [Export] public float DriftYaw { get; set; } = 8.0f;
+    [Export] public float HeadingYawFollow { get; set; } = 1.0f;
+
+    /// <summary>
+    /// Ceiling on that yaw, in degrees, so a spin or a hard collision can't twist the shell right
+    /// round off its chassis.
+    /// </summary>
+    [Export] public float MaxHeadingYaw { get; set; } = 40.0f;
 
     // ---------------------------------------------------------------- Pitch
 
@@ -99,6 +113,7 @@ public partial class BodyLean : Node3D
     private float _lean;
     private float _drift;
     private float _pitch;
+    private float _yaw;
 
     public override void _Ready()
     {
@@ -118,9 +133,17 @@ public partial class BodyLean : Node3D
         _lean = Mathf.Lerp(_lean, TargetLean(vehicle), t);
         _pitch = Mathf.Lerp(_pitch, TargetPitch(vehicle), t);
 
-        // Signed by the drift direction rather than by the lean, so the shell keeps pointing into
+        // Signed by the drift direction rather than by the lean, so the shell keeps rolling into
         // the slide even through the moment the player countersteers and the lean crosses zero.
         _drift = Mathf.Lerp(_drift, vehicle.DriftBlend * vehicle.DriftDirection, t);
+
+        // Take up the chassis' lag on the commanded heading. Positive HeadingError means the
+        // heading is to the left of the nose, and a positive yaw about local +Y swings the nose
+        // left, so the two already agree.
+        float maxYaw = Mathf.DegToRad(MaxHeadingYaw);
+        _yaw = Mathf.Lerp(_yaw,
+                          Mathf.Clamp(vehicle.HeadingError * HeadingYawFollow, -maxYaw, maxYaw),
+                          t);
 
         float direction = LeanIntoTurn ? 1.0f : -1.0f;
 
@@ -129,7 +152,7 @@ public partial class BodyLean : Node3D
         float sideways = -_lean * LeanOffset * direction;
         float roll = (_lean * Mathf.DegToRad(LeanRoll)
                       + _drift * Mathf.DegToRad(DriftRoll)) * direction;
-        float yaw = _drift * Mathf.DegToRad(DriftYaw);
+        float yaw = _yaw;
 
         // Roll about a pivot above the origin rather than through the floor, then yaw and pitch
         // about the same point so the whole shell moves as one piece.

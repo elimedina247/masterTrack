@@ -180,7 +180,10 @@ public partial class GroundRay : RayCast3D
 
         wheel.Position = new Vector3(0.0f, -(drop - TireRadius), 0.0f);
 
-        float steer = Steers ? -vehicle.SteeringInput * Mathf.DegToRad(VisualSteerAngle) : 0.0f;
+        // Positive SteeringInput is left, and a positive rotation about local +Y swings the wheel's
+        // −Z toward −X, which is also left. The two already agree; negating it here was the bug
+        // that had the wheels pointing the wrong way.
+        float steer = Steers ? vehicle.SteeringInput * Mathf.DegToRad(VisualSteerAngle) : 0.0f;
 
         // Rolled from road speed rather than from a simulated spin, because there is no spin to
         // simulate — the wheels are along for the ride.
