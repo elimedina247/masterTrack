@@ -222,35 +222,6 @@ public partial class Vehicle : RigidBody3D
     /// <summary>Ceiling on the alignment torque, in Nm.</summary>
     [Export] public float AlignmentTorqueMax { get; set; } = 60000.0f;
 
-    /// <summary>
-    /// How hard the car rights itself toward level while airborne, in Nm per radian of tilt.
-    /// Nothing else stops a car that took off crooked from landing on its roof.
-    ///
-    /// <b>It does not apply immediately.</b> See <see cref="UprightGraceTime"/> — a righting
-    /// torque that engages the moment the wheels leave is a righting torque that makes flips
-    /// impossible and flattens the car every time it goes light crossing a ramp.
-    /// </summary>
-    [Export] public float AirborneUprightTorque { get; set; } = 24000.0f;
-
-    /// <summary>Damping on the righting torque, in Nm per rad/s.</summary>
-    [Export] public float AirborneUprightDamping { get; set; } = 8000.0f;
-
-    /// <summary>
-    /// Seconds of air time before the righting torque starts to come in at all.
-    ///
-    /// This is what makes a jump a jump. Below it the car keeps whatever rotation it left the
-    /// ground with — so it holds its nose-up angle off the top of a climb, and a flip the player
-    /// started stays flipping. It also covers the constant going-light of crossing a ramp's
-    /// creases, which is otherwise a stream of tiny commands to be flat that fight the slope.
-    /// </summary>
-    [Export] public float UprightGraceTime { get; set; } = 1.0f;
-
-    /// <summary>
-    /// Seconds over which the righting torque fades in once the grace has run out. Fading rather
-    /// than switching, so a long flight straightens up rather than snapping level.
-    /// </summary>
-    [Export] public float UprightFadeTime { get; set; } = 0.8f;
-
     // ---------------------------------------------------------------- Drifting
 
     /// <summary>
@@ -364,24 +335,6 @@ public partial class Vehicle : RigidBody3D
     // ---------------------------------------------------------------- Airborne
 
     /// <summary>
-    /// Gravity multiplier while airborne and <i>descending</i>. The track is built on 40 m cubes,
-    /// and a 40 m drop under real gravity is 2.9 seconds of hang time — correct, and unplayable.
-    /// Leaving the ascent alone means a ramp still launches the car exactly as high.
-    ///
-    /// <b>This is the air-time knob, so it is also the flip knob.</b> Every multiple of it is
-    /// time the player does not have to rotate in. It was 3.0, inherited from the physics this
-    /// replaced, which made descents plummet and left no room to flip; 2.0 keeps a one-cube drop
-    /// off the floaty end while giving that time back.
-    ///
-    /// | Multiplier | Hang time, one cube | Impact |
-    /// | 1.0 | 2.86 s | 28 m/s |
-    /// | 2.0 | 2.02 s | 40 m/s |
-    /// | 3.0 | 1.65 s | 49 m/s |
-    /// </summary>
-    [ExportGroup("Airborne")]
-    [Export] public float FallGravityMultiplier { get; set; } = 2.0f;
-
-    /// <summary>
     /// Fastest the car flips in the air, in degrees per second. Throttle pitches the nose up,
     /// brake pitches it down.
     ///
@@ -395,6 +348,7 @@ public partial class Vehicle : RigidBody3D
     /// will ever go round, and releasing brings it back to still. 140°/s is a bit over two
     /// seconds per full rotation.
     /// </summary>
+    [ExportGroup("Airborne")]
     [Export] public float AirPitchRate { get; set; } = 140.0f;
 
     /// <summary>
@@ -490,12 +444,6 @@ public partial class Vehicle : RigidBody3D
 
     /// <summary>Seconds since the last ray left the road. Zero while any corner is down.</summary>
     public float AirTime { get; private set; }
-
-    /// <summary>
-    /// How much of the auto-levelling is currently being applied, 0..1. Zero for the first
-    /// <see cref="UprightGraceTime"/> of a jump and while the player is flying the car.
-    /// </summary>
-    public float UprightAssist { get; private set; }
 
     /// <summary>How many of the four rays are touching something.</summary>
     public int GroundedRayCount { get; private set; }
@@ -595,7 +543,6 @@ public partial class Vehicle : RigidBody3D
     private float _burstLength = 1.0f;
     private Vector3 _gravity = Vector3.Down * 9.8f;
 
-    private float GravityMagnitude => _gravity.LengthSquared() > 0.0f ? _gravity.Length() : 9.8f;
     private Vector3 GravityDirection => _gravity.LengthSquared() > 0.0f ? _gravity.Normalized() : Vector3.Down;
 
     public override void _Ready()
@@ -1093,67 +1040,17 @@ public partial class Vehicle : RigidBody3D
 
         // Rate control, not torque. Each axis is driven toward a target angular rate, so the
         // export is the fastest it will ever go round rather than an acceleration that keeps
-        // adding for as long as the button is held. Releasing drives the rate back to zero, which
-        // is also what bleeds off a tumble picked up from a bad take-off — no separate damping.
+        // adding for as long as the button is held.
+        //
+        // Releasing drives the rate back to zero, and with the upright assist gone that is now
+        // the *only* thing settling the car in the air. Note what it does not cover: roll is
+        // neither driven nor damped, so a car that takes off rolling keeps rolling until it
+        // lands. That is honest, and it is also the one axis with no way to correct it.
         //
         // Pitch about the car's own X, so a flip stays in the plane it is travelling in. Yaw
         // about world up, so it is still a flat turn with the car upside down.
         ApplyAirRate(GlobalTransform.Basis.X, pitchInput * Mathf.DegToRad(AirPitchRate));
         ApplyAirRate(Vector3.Up, yawInput * Mathf.DegToRad(AirYawRate));
-
-        float rotationInput = Mathf.Max(Mathf.Abs(pitchInput), Mathf.Abs(yawInput));
-
-        // Level the car so it lands on its wheels: torque about the axis that would take its roof
-        // back to vertical, damped by however fast it is already rolling that way.
-        //
-        // Held off for UprightGraceTime and then faded in, and stood down entirely while the
-        // player is flying the car. Applied immediately at full strength — which is what it used
-        // to do — it makes flips impossible, throws away the nose-up angle the car earned off a
-        // climb, and fires in a stream of tiny corrections every time the car goes light crossing
-        // a ramp crease, each one an order to be flat that the slope then has to undo.
-        float assist = UprightFadeTime > 0.0f
-            ? Mathf.Clamp((AirTime - UprightGraceTime) / UprightFadeTime, 0.0f, 1.0f)
-            : (AirTime > UprightGraceTime ? 1.0f : 0.0f);
-
-        UprightAssist = assist * (1.0f - rotationInput);
-
-        Vector3 up = GlobalTransform.Basis.Y;
-        Vector3 axis = up.Cross(Vector3.Up);
-
-        if (UprightAssist > 0.0f && axis.LengthSquared() > 0.0001f)
-        {
-            float tilt = Mathf.Acos(Mathf.Clamp(up.Dot(Vector3.Up), -1.0f, 1.0f));
-
-            // Damps roll and pitch only; yaw is the player's while they are in the air.
-            Vector3 spin = AngularVelocity - Vector3.Up * AngularVelocity.Dot(Vector3.Up);
-            Vector3 righting = axis.Normalized() * (tilt * AirborneUprightTorque);
-            ApplyTorque((righting - spin * AirborneUprightDamping) * UprightAssist);
-        }
-
-        ApplyFallGravity();
-    }
-
-    /// <summary>
-    /// The extra gravity that stops a 40 m drop hanging for three seconds. Descent only: applying
-    /// it on the way up would cut jump height at the same time, and the launch off a ramp is the
-    /// part that is already right — it is the hang at the apex that reads as floaty.
-    ///
-    /// <b>Its own method, and called unconditionally.</b> It used to sit at the end of
-    /// <see cref="ProcessAirborne"/> behind an early return that bailed out when the upright
-    /// assist was zero — which is exactly when the player is flying the car. Starting a flip
-    /// therefore switched the extra gravity off and the car floated. How the car is rotating has
-    /// no business deciding how hard it falls.
-    /// </summary>
-    private void ApplyFallGravity()
-    {
-        if (FallGravityMultiplier <= 1.0f)
-            return;
-
-        Vector3 down = GravityDirection;
-        if (LinearVelocity.Dot(down) <= 0.0f)
-            return;
-
-        ApplyCentralForce(down * ((FallGravityMultiplier - 1.0f) * Mass * GravityMagnitude));
     }
 
     /// <summary>

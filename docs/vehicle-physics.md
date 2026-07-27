@@ -48,9 +48,11 @@ velocity as it stood at the top of the step.
 | 4 | **Steering torque** (PD → heading) | about **world up** | yes | **stood down** |
 | 5 | **Flip rate torque** | about car's `Basis.X` | — | yes |
 | 5b | **Air yaw rate torque** | about **world up** | — | yes |
-| 6 | **Upright assist torque** | about `up × worldUp` | — | after 1 s, if no input |
-| 7 | **Fall gravity** | centre of mass, down | — | descending only |
-| 8 | **Terminal velocity clamp** | `_IntegrateForces`, velocity | always | always |
+| 6 | **Terminal velocity clamp** | `_IntegrateForces`, velocity | always | always |
+
+Every force in that list is new. **Nothing from the previous physics survives** — the airborne
+upright assist and the extra fall gravity were the last two, and both were removed on purpose.
+See **Airborne** below for what that costs.
 
 Things that are **not** in the list, and that people expect to be:
 
@@ -64,22 +66,17 @@ Things that are **not** in the list, and that people expect to be:
 - **No anti-roll bar, camber, toe, Ackermann, ABS or traction control.**
 - **No roll control in the air.** Pitch and yaw only.
 
-### Two ways this bites, both now fixed
-
-Worth knowing because the same shape can recur.
+### One trap worth remembering
 
 **A percentage-per-step force is enormous.** #3 removes `grip` of the velocity along its axis
 *every physics step*. At 120 Hz, even the 5% airborne value removes 99.8% of that component
-inside one second. On the ground that is exactly right — an upright car's `Basis.X` is horizontal,
-so all it deletes is sideways speed. Roll the car in mid-air and `Basis.X` tilts, and the same
-force starts deleting **fall speed** just as efficiently. Gravity appeared to switch off whenever
-you spun. The axis is now flattened while airborne.
+inside one second.
 
-**An early return skipped the gravity.** Fall gravity (#7) used to sit at the end of
-`ProcessAirborne` behind `if (UprightAssist <= 0) return;`. The upright assist is zero exactly
-when the player is flying the car, so *starting a flip turned the extra gravity off*. It is its
-own method now and is called unconditionally. Nothing about how the car is rotating has any
-business deciding how hard it falls.
+On the ground that is exactly right — an upright car's `Basis.X` is horizontal, so all it deletes
+is sideways speed. Roll the car in mid-air and `Basis.X` tilts, and the same force starts deleting
+**fall speed** just as efficiently. Gravity appeared to switch off whenever you spun. The axis is
+flattened while airborne now, but the shape of that mistake can recur anywhere a per-step
+percentage meets an axis that is free to rotate.
 
 ### Why "solve then clamp"
 
@@ -420,55 +417,35 @@ rolling resistance, which is cheaper and much easier to reason about.
 
 ## Airborne
 
-Three things used to conspire to hold the car flat, and between them they made flips impossible
-and made ramps feel like the body was being pressed downward the whole way up. All three are now
-tuned or gated:
+Gravity in the air is now **just gravity**. There is no extra fall multiplier and no auto-level:
+both were the last surviving pieces of the previous physics, and both were removed on purpose.
 
-- **`FallGravityMultiplier`** (2.0, was 3.0) — extra gravity while airborne **and descending
-  only**. Leaving the ascent alone means a ramp still launches the car exactly as high; it just
-  stops hanging at the apex. **This is the air-time knob, so it is also the flip knob** — every
-  multiple of it is time the player does not have to rotate in. The 3.0 was inherited from the
-  physics this replaced and cut air time by 40%.
+- **`MaxFallSpeed`** (65 m/s) — the one remaining airborne clamp, in `_IntegrateForces`. Not a
+  feel knob: it is the guard rail that stops a fall off the edge of the board outrunning the
+  collision solver.
+- **`MaxPullForce`** (11000 N) and **`PullFadeDistance`** (0.12 m) — the spring term goes negative
+  when the ground drops away past the ride height, which glues the car over a crest. The fade is
+  what separates a crease from a cliff: a crease drops the road away by centimetres and wants
+  holding onto, an edge drops it away by everything and wants letting go of. Without it, a pull
+  strong enough to follow a crease also sucks the car back down off every jump.
 
-  | Multiplier | Hang time, one cube | Impact |
-  |---|---|---|
-  | 1.0 | 2.86 s | 28 m/s |
-  | **2.0** | **2.02 s** | **40 m/s** |
-  | 3.0 | 1.65 s | 49 m/s |
+### What removing the auto-level and fall gravity costs
 
-- **`MaxFallSpeed`** (65 m/s) — terminal velocity, clamped along gravity in `_IntegrateForces`.
-  Not a feel knob: it is the guard rail that stops a fall off the edge of the board outrunning
-  the collision solver.
+Both were doing real work. Know what has been given up:
 
-- **`AirborneUprightTorque` / `AirborneUprightDamping`** — levels the car so it lands on its
-  wheels. It does **not** engage on take-off; see below.
+| Gone | What it did | What happens now |
+|---|---|---|
+| `FallGravityMultiplier` | 2×–3× gravity on descent | A 40 m drop hangs for **2.86 s**, up from 2.02 s. Jumps are long and floaty — but honest |
+| `AirborneUprightTorque` | Levelled the car toward flat | A car that takes off crooked **lands crooked**. On its roof, it stays there until `racer_reset` |
 
-- **`MaxPullForce`** (11000 N, near a full g) and **`PullFadeDistance`** (0.12 m) — the spring
-  term goes negative when the ground drops away past the ride height, which glues the car over a
-  crest. The fade is what separates a crease from a cliff: a crease drops the road away by
-  centimetres and wants holding onto, an edge drops it away by everything and wants letting go
-  of. Without the fade, a pull strong enough to follow a crease also sucks the car back down off
-  every jump.
+And one thing neither of them covered, now exposed: **roll is neither driven nor damped.** Pitch
+and yaw are rate controlled, so releasing the stick settles them — nothing touches roll at all. A
+car that leaves the ground rolling keeps rolling until it lands, and there is no input bound to
+correct it. The overlay's **Airborne** page shows the roll rate.
 
-### The auto-level has to yield
-
-A righting torque that engages the moment the last ray leaves the road is a righting torque that
-makes flips impossible. Worse, it fires in a stream of tiny corrections every time the car goes
-light crossing a ramp's creases — each one an order to be flat that the slope then has to undo,
-which is what made climbs feel like the body was fighting the road.
-
-So it is gated on air time:
-
-- **`UprightGraceTime`** (1.0 s) — nothing at all. The car keeps whatever rotation it left the
-  ground with, holds its nose-up angle off the top of a climb, and a flip the player started
-  stays flipping.
-- **`UprightFadeTime`** (0.8 s) — fades in after that, so a long flight straightens up rather
-  than snapping level.
-- Suppressed entirely while the player is asking for rotation on any axis.
-
-`UprightAssist` on the overlay's **Airborne** page is the number to watch when a jump won't flip.
-Anything above 0 is the car being told to be flat, and it should read 0 for the whole of a normal
-jump.
+If floaty jumps become the problem, `FallGravityMultiplier` is the honest thing to bring back — it
+only ever touched the descent, so it never changed how high a ramp threw you. If landing on the
+roof becomes the problem, binding roll is a better answer than reinstating an assist.
 
 ### Flying the car
 

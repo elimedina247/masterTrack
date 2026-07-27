@@ -135,16 +135,20 @@ public partial class VehicleDebugOverlay : Control, IVehicleObserver
                 Text($"Grounded: {vehicle.GroundedRayCount}/4  ({vehicle.GroundFraction:P0})",
                      new Vector2(10, 120), Colors.White);
                 Text($"Air time: {vehicle.AirTime:F2} s", new Vector2(10, 140), Colors.Aqua);
-
-                // The number to watch when a jump won't flip: anything above 0 is the car being
-                // told to be flat, and it should read 0 for the whole of a normal jump.
-                Text($"Upright assist: {vehicle.UprightAssist:P0}", new Vector2(10, 160),
-                     vehicle.UprightAssist > 0.0f ? Colors.Orange : Colors.Gray);
+                Text($"Fall speed: {-vehicle.LinearVelocity.Y:F1} m/s", new Vector2(10, 160),
+                     Colors.Aqua);
 
                 Text($"Pitch: {Mathf.RadToDeg(vehicle.GlobalRotation.X):F0} deg   " +
                      $"Roll: {Mathf.RadToDeg(vehicle.GlobalRotation.Z):F0} deg",
                      new Vector2(10, 180), Colors.White);
-                Text("Throttle / brake pitch the car in the air", new Vector2(10, 210), Colors.Gray);
+
+                // Nothing drives or damps roll any more, so a car that takes off rolling keeps
+                // rolling. Worth seeing the number when a landing goes wrong.
+                Text($"Roll rate: {Mathf.RadToDeg(vehicle.AngularVelocity.Dot(vehicle.GlobalBasis.Z)):F0} deg/s",
+                     new Vector2(10, 200), Colors.Gray);
+
+                Text("Throttle / brake pitch, steering yaws. No auto-level.",
+                     new Vector2(10, 230), Colors.Gray);
                 break;
 
             case "Steering":
