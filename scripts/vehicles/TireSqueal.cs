@@ -22,15 +22,14 @@ public partial class TireSqueal : AudioStreamPlayer3D
 
     // ---------------------------------------------------------------- When to squeal
 
-    /// <summary>Slip angle in radians past which a tire starts to sing.</summary>
+    /// <summary>Sideways speed in m/s past which the tires start to sing.</summary>
     [ExportGroup("Slip")]
-    [Export] public float LateralSlipThreshold { get; set; } = 0.25f;
+    [Export] public float SlipThreshold { get; set; } = 1.5f;
 
-    /// <summary>Longitudinal slip ratio past which a tire starts to sing.</summary>
-    [Export] public float LongitudinalSlipThreshold { get; set; } = 0.2f;
-
-    /// <summary>How far past the threshold slip has to go for a full-volume squeal.</summary>
-    [Export] public float FullSlip { get; set; } = 0.9f;
+    /// <summary>
+    /// How far past the threshold sideways speed has to go for a full-volume squeal, in m/s.
+    /// </summary>
+    [Export] public float FullSlip { get; set; } = 7.0f;
 
     /// <summary>
     /// Road speed in m/s below which the squeal is faded out entirely. A tire scrubbing at
@@ -100,10 +99,9 @@ public partial class TireSqueal : AudioStreamPlayer3D
             return;
 
         float target = 0.0f;
-        foreach (Wheel wheel in vehicle.WheelArray)
+        foreach (GroundRay wheel in vehicle.WheelArray)
         {
-            float slip = TireSlip.Intensity(
-                wheel, LateralSlipThreshold, LongitudinalSlipThreshold, FullSlip);
+            float slip = TireSlip.Intensity(vehicle, wheel, SlipThreshold, FullSlip);
 
             if (slip > 0.0f && SurfaceVolume.TryGetValue(wheel.SurfaceType, out float scale))
                 target = Mathf.Max(target, slip * scale);

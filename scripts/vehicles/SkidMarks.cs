@@ -30,19 +30,16 @@ public partial class SkidMarks : MeshInstance3D
 
     // ---------------------------------------------------------------- When to draw
 
-    /// <summary>Slip angle in radians past which a tire starts leaving rubber.</summary>
+    /// <summary>Sideways speed in m/s past which the car starts leaving rubber.</summary>
     [ExportGroup("Slip")]
-    [Export] public float LateralSlipThreshold { get; set; } = 0.25f;
-
-    /// <summary>Longitudinal slip ratio past which a tire starts leaving rubber.</summary>
-    [Export] public float LongitudinalSlipThreshold { get; set; } = 0.2f;
+    [Export] public float SlipThreshold { get; set; } = 1.5f;
 
     /// <summary>
-    /// How far past the threshold slip has to go for a mark at full darkness. Below this the
-    /// mark fades in with slip, so a tire that is only just letting go leaves a faint smear
-    /// rather than the same black line as a full lock-up.
+    /// How far past the threshold sideways speed has to go for a mark at full darkness, in m/s.
+    /// Below this the mark fades in, so a car only just letting go leaves a faint smear rather
+    /// than the same black line as a committed drift.
     /// </summary>
-    [Export] public float FullOpacitySlip { get; set; } = 0.8f;
+    [Export] public float FullOpacitySlip { get; set; } = 6.0f;
 
     /// <summary>Alpha of a mark laid at full slip.</summary>
     [Export] public float MaxOpacity { get; set; } = 0.7f;
@@ -173,13 +170,12 @@ public partial class SkidMarks : MeshInstance3D
         }
 
         for (int i = 0; i < vehicle.WheelArray.Count; i++)
-            ProcessWheel(vehicle.WheelArray[i], i);
+            ProcessWheel(vehicle, vehicle.WheelArray[i], i);
     }
 
-    private void ProcessWheel(Wheel wheel, int index)
+    private void ProcessWheel(Vehicle vehicle, GroundRay wheel, int index)
     {
-        float intensity = TireSlip.Intensity(
-            wheel, LateralSlipThreshold, LongitudinalSlipThreshold, FullOpacitySlip);
+        float intensity = TireSlip.Intensity(vehicle, wheel, SlipThreshold, FullOpacitySlip);
 
         // Off the ground, gripping, or on a surface that doesn't mark: end the current strip
         // so the next slide starts a fresh one instead of drawing a line across the gap.
@@ -210,14 +206,17 @@ public partial class SkidMarks : MeshInstance3D
 
         Vector3 normal = wheel.LastCollisionNormal;
 
-        // The wheel's own X axis is its axle, which is exactly the direction the contact patch
+        // The ray's own X axis is the axle line, which is exactly the direction the contact patch
         // is wide in. Flattening it against the surface normal keeps the ribbon on the ground
-        // rather than tipping it with camber.
+        // rather than tipping it with the road camber.
         Vector3 lateral = wheel.GlobalTransform.Basis.X;
         lateral -= normal * lateral.Dot(normal);
         if (lateral.LengthSquared() < 0.0001f)
             return;
-        lateral = lateral.Normalized() * (wheel.TireWidth * 0.0005f * WidthScale);
+
+        // TireWidth is metres now, not the millimetres the old tire model wanted, so this is a
+        // plain half-width rather than the old 0.0005 unit conversion.
+        lateral = lateral.Normalized() * (wheel.TireWidth * 0.5f * WidthScale);
 
         Vector3 lifted = point + normal * GroundOffset;
         strip.Left.Add(lifted - lateral);

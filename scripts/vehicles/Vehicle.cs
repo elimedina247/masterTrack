@@ -1,926 +1,556 @@
-// C# port of addons/gevp/scripts/vehicle.gd from Godot-Easy-Vehicle-Physics.
-//
-//   https://github.com/DAShoe1/Godot-Easy-Vehicle-Physics
-//   Copyright (c) 2024 David Shoemaker
-//   Portions are Copyright (c) 2021 Dechode  https://github.com/Dechode/Godot-Advanced-Vehicle
-//
-// MIT licensed — see assets/gevp/LICENSE. The maths below is a faithful translation of the
-// original GDScript; see docs/vehicle-physics.md for the deliberate deviations.
-
 using System.Collections.Generic;
-using System.Linq;
 using Godot;
 
 namespace MasterTrack.Vehicles;
 
 /// <summary>
-/// A ray-cast rigid-body vehicle: suspension, brush-model tires, a speed-curve powertrain and
-/// a pile of driver assists. The body is a plain <see cref="RigidBody3D"/> — all the forces
-/// come from the four <see cref="Wheel"/> ray casts, which must be direct children of this node.
+/// An arcade drift car, built the way Walaber builds them in Parking Garage Rally Circuit:
+/// a hovercraft that happens to be wearing a car.
 ///
-/// <b>There is no gearbox.</b> The source project's motor, clutch and transmission have been
-/// replaced by a single <see cref="DriveCurve"/> of force against road speed, which is how
-/// arcade racers usually do it — see docs/vehicle-physics.md. Drive torque still flows through
-/// the wheels rather than being applied to the body, so wheelspin and power-oversteer survive.
+/// <b>There is no tire model.</b> No wheels, no axles, no differentials, no gearbox, no brush
+/// model. The car is a <see cref="RigidBody3D"/> held up by four <see cref="GroundRay"/> springs,
+/// pushed along by one central force, held in line by a second central force, and pointed by one
+/// torque. Four ideas do what fifty used to:
 ///
-/// Drive it by writing to <see cref="ThrottleInput"/>, <see cref="SteeringInput"/>,
-/// <see cref="BrakeInput"/>, <see cref="HandbrakeInput"/> and <see cref="NitroInput"/> each
-/// physics step — see <see cref="VehicleInput"/> for the keyboard/pad sampler.
+/// <list type="number">
+///   <item><b>Suspension</b> — each ray applies <c>(compression × k) − (closing speed × c)</c>
+///     along world up. The only per-corner force in the game.</item>
+///   <item><b>Drive</b> — solve for the force that would reach <see cref="TopSpeed"/> in a single
+///     step, then clamp it to <see cref="MaxAccelForce"/>. Top speed is a <i>target</i>, not
+///     something that emerges from power fighting drag — which is exactly why a boost can
+///     overshoot it cleanly.</item>
+///   <item><b>Grip</b> — solve for the force that would cancel all sideways velocity in a single
+///     step, then keep <see cref="GripFactor"/> of it. That fraction <i>is</i> the grip.</item>
+///   <item><b>Steering</b> — no steering angle exists. A PD controller torques the body toward
+///     <see cref="HeadingDirection"/>.</item>
+/// </list>
 ///
-/// Surfaces are identified by the *first node group* on whatever a wheel's ray cast hits,
-/// looked up in the tire dictionaries below. Road bodies therefore need to be in a "Road"
-/// group (see <see cref="SurfaceGroups"/>).
+/// Drive it by writing <see cref="ThrottleInput"/>, <see cref="SteeringInput"/>,
+/// <see cref="BrakeInput"/>, <see cref="DriftInput"/> and <see cref="NitroInput"/> every physics
+/// step — see <see cref="VehicleInput"/>.
+///
+/// See docs/vehicle-physics.md for the reasoning, the tuning order, and what changed from the
+/// GEVP port this replaced.
 /// </summary>
 [GlobalClass]
 public partial class Vehicle : RigidBody3D
 {
-    // ---------------------------------------------------------------- Wheel nodes
+    // ---------------------------------------------------------------- Ground rays
 
-    [ExportGroup("Wheel Nodes")]
-    [Export] public Wheel? FrontLeftWheel { get; set; }
-    [Export] public Wheel? FrontRightWheel { get; set; }
-    [Export] public Wheel? RearLeftWheel { get; set; }
-    [Export] public Wheel? RearRightWheel { get; set; }
-
-    // ---------------------------------------------------------------- Steering
-
-    /// <summary>How fast steering input ramps toward the stick/key position, per second.</summary>
-    [ExportGroup("Steering")]
-    [Export] public float SteeringSpeed { get; set; } = 4.25f;
-
-    /// <summary>How fast steering returns toward centre, per second.</summary>
-    [Export] public float CountersteerSpeed { get; set; } = 11.0f;
-
-    /// <summary>Steering speed is divided by velocity times this; bigger = slower steering at speed.</summary>
-    [Export] public float SteeringSpeedDecay { get; set; } = 0.20f;
-
-    /// <summary>Further steering input is blocked once front lateral slip passes this.</summary>
-    [Export] public float SteeringSlipAssist { get; set; } = 0.15f;
-
-    /// <summary>How hard steering is nudged toward the direction of travel.</summary>
-    [Export] public float CountersteerAssist { get; set; } = 0.9f;
-
-    /// <summary>Steering input is raised to this power, which softens it near full lock.</summary>
-    [Export] public float SteeringExponent { get; set; } = 1.5f;
-
-    /// <summary>Maximum steering angle. Shown in the inspector in degrees.</summary>
-    [Export(PropertyHint.Range, "0,360,0.1,radians_as_degrees")]
-    public float MaxSteeringAngle { get; set; } = Mathf.DegToRad(40.0f);
-
-    /// <summary>How much the front wheels turn per unit of steering input.</summary>
-    [ExportSubgroup("Front Axle")]
-    [Export] public float FrontSteeringRatio { get; set; } = 1.0f;
-
-    /// <summary>How much the rear wheels turn per unit of steering input (rear-steer).</summary>
-    [ExportSubgroup("Rear Axle")]
-    [Export] public float RearSteeringRatio { get; set; }
-
-    // ---------------------------------------------------------------- Throttle and braking
-
-    /// <summary>How fast throttle input ramps, per second.</summary>
-    [ExportGroup("Throttle and Braking")]
-    [Export] public float ThrottleSpeed { get; set; } = 20.0f;
-
-    /// <summary>
-    /// Scales throttle ramp speed by steering input.
-    /// <b>Inert:</b> exposed upstream but never read by the physics. Left in for parity.
-    /// </summary>
-    [Export] public float ThrottleSteeringAdjust { get; set; } = 0.1f;
-
-    /// <summary>How fast brake input ramps, per second.</summary>
-    [Export] public float BrakingSpeed { get; set; } = 10.0f;
-
-    /// <summary>
-    /// Scales the brake force derived from tire friction. Upstream declares this but never
-    /// applies it; here it does multiply the calculated force, so the default of 1.0 behaves
-    /// exactly like the original and anything else is a real adjustment.
-    /// </summary>
-    [Export] public float BrakeForceMultiplier { get; set; } = 1.0f;
-
-    /// <summary>Front:rear brake split. Negative means "work it out from the spring rates".</summary>
-    [Export] public float FrontBrakeBias { get; set; } = -1.0f;
-
-    /// <summary>
-    /// Handbrake torque per rear wheel, as a multiple of the *total* footbrake torque. The
-    /// handbrake deliberately bypasses <see cref="FrontBrakeBias"/> — it is a cable onto the
-    /// rear axle, not a hydraulic circuit — so this is the whole story for that axle. At full
-    /// brakes a rear wheel only sees <c>0.5 * (1 - FrontBrakeBias)</c> of the total, so the
-    /// default here is several times the footbrake and locks the rears more or less on contact.
-    /// </summary>
-    [ExportSubgroup("Handbrake")]
-    [Export] public float HandbrakeForceMultiplier { get; set; } = 1.5f;
-
-    /// <summary>
-    /// Lateral grip a fully locked rear tire keeps, as a fraction of what it would have had
-    /// rolling. This is the whole trick: a locked tire has spent its entire friction budget
-    /// sliding forwards and has almost nothing left to resist sideways motion, which is what
-    /// lets the back end come round. The brush model in <see cref="Wheel"/> has its past-peak
-    /// fall-off removed on purpose, so that coupling has to be reintroduced here.
-    ///
-    /// Lower = the rear steps out sooner and further. 0 is a rear axle on ice.
-    /// </summary>
-    [Export] public float HandbrakeLockedGrip { get; set; } = 0.15f;
-
-    /// <summary>
-    /// Longitudinal slip at which the rear tire counts as fully locked for
-    /// <see cref="HandbrakeLockedGrip"/>. Grip fades in across the range below this, so grabbing
-    /// the lever loosens the car progressively instead of dropping it out from under the player.
-    /// </summary>
-    [Export] public float HandbrakeLockSlip { get; set; } = 0.7f;
-
-    /// <summary>
-    /// How much of the yaw stability assist the handbrake switches off, 0..1. At 1 a held
-    /// handbrake disables it entirely.
-    ///
-    /// Without this nothing else on this list matters: <see cref="ProcessStability"/> applies a
-    /// counter-yaw torque straight to the body as soon as the car rotates away from its
-    /// direction of travel, which is exactly the rotation the handbrake exists to create.
-    /// </summary>
-    [Export] public float HandbrakeStabilitySuppression { get; set; } = 1.0f;
-
-    /// <summary>
-    /// How much faster than the road the driven wheels may spin before traction control
-    /// starts cutting drive force, in m/s at the contact patch. Negative disables it.
-    ///
-    /// This is measured the same way as <see cref="FrontAbsSpinDifferenceThreshold"/> — a
-    /// wheel-vs-road speed difference — rather than as a slip ratio. It used to be compared
-    /// against <c>SlipVector.Y</c>, which is negative under wheelspin and never exceeds 1.0,
-    /// so the old ceiling of 8.0 could not be reached and traction control never once ran.
-    /// </summary>
-    [Export] public float TractionControlMaxWheelSpin { get; set; } = 8.0f;
-
-    /// <summary>
-    /// Wheelspin past <see cref="TractionControlMaxWheelSpin"/> at which traction control
-    /// reaches a full cut, in m/s. The cut ramps across this range instead of switching on,
-    /// because slamming drive force to zero lurches the car exactly when it is least settled.
-    /// </summary>
-    [Export] public float TractionControlFadeRange { get; set; } = 6.0f;
-
-    /// <summary>How long the front ABS holds the brake off, in seconds.</summary>
-    [ExportSubgroup("Front Axle")]
-    [Export] public float FrontAbsPulseTime { get; set; } = 0.03f;
-
-    /// <summary>Wheel-vs-road speed difference that trips the front ABS.</summary>
-    [Export] public float FrontAbsSpinDifferenceThreshold { get; set; } = 12.0f;
-
-    /// <summary>How long the rear ABS holds the brake off, in seconds.</summary>
-    [ExportSubgroup("Rear Axle")]
-    [Export] public float RearAbsPulseTime { get; set; } = 0.03f;
-
-    /// <summary>Wheel-vs-road speed difference that trips the rear ABS.</summary>
-    [Export] public float RearAbsSpinDifferenceThreshold { get; set; } = 12.0f;
-
-    // ---------------------------------------------------------------- Stability
-
-    /// <summary>Torque the body back in line when it yaws away from its direction of travel.</summary>
-    [ExportGroup("Stability")]
-    [Export] public bool EnableStability { get; set; } = true;
-
-    /// <summary>Yaw angle before stability kicks in: 0 = straight ahead, 1 = 90 degrees.</summary>
-    [Export] public float StabilityYawEngageAngle { get; set; }
-
-    [Export] public float StabilityYawStrength { get; set; } = 6.0f;
-
-    /// <summary>Extra yaw strength while grounded, to overcome tire grip.</summary>
-    [Export] public float StabilityYawGroundMultiplier { get; set; } = 2.0f;
-
-    /// <summary>Torque keeping the car upright while airborne.</summary>
-    [Export] public float StabilityUprightSpring { get; set; } = 1.0f;
-
-    /// <summary>Damping on rotation while airborne.</summary>
-    [Export] public float StabilityUprightDamping { get; set; } = 1000.0f;
-
-    // ---------------------------------------------------------------- Powertrain
-
-    /// <summary>
-    /// Drive force at the contact patch when <see cref="DriveCurve"/> reads 1.0, in newtons.
-    /// Divide by <see cref="VehicleMass"/> for the resulting acceleration in m/s².
-    /// </summary>
-    [ExportGroup("Powertrain")]
-    [Export] public float MaxDriveForce { get; set; } = 12000.0f;
-
-    /// <summary>Speed in m/s the drive curve is measured against. Multiply by 3.6 for km/h.</summary>
-    [Export] public float TopSpeed { get; set; } = 200.0f;
-
-    /// <summary>
-    /// Fraction of <see cref="MaxDriveForce"/> available across the speed range, where X is
-    /// <c>speed / TopSpeed</c>. This one curve replaces the motor, clutch and gearbox.
-    ///
-    /// A real drivetrain shapes force against speed via gearing; here that shape is authored
-    /// directly. Neither a flat force nor a linear ramp works on its own — flat force plus aero
-    /// drag can give punch or a sane top speed but not both, and a linear ramp bleeds away so
-    /// early the car feels like it gives up. A curve that holds near full force through the
-    /// midrange and then falls off is what reads as "fast" while still capping out.
-    ///
-    /// Ending at 0.0 makes <see cref="TopSpeed"/> a real ceiling rather than an asymptote.
-    /// </summary>
-    [Export] public Curve? DriveCurve { get; set; }
-
-    /// <summary>Top speed in reverse, in m/s.</summary>
-    [Export] public float ReverseTopSpeed { get; set; } = 25.0f;
-
-    /// <summary>Drive force in reverse, as a fraction of <see cref="MaxDriveForce"/>.</summary>
-    [Export] public float ReverseForceRatio { get; set; } = 0.45f;
-
-    /// <summary>
-    /// Rotational inertia the drive wheels are fighting, standing in for the motor and gearbox
-    /// that used to supply it. Higher resists wheelspin; lower lets the tires light up sooner.
-    ///
-    /// The old gearbox made this vary with the gear — inertia scales with the square of the
-    /// ratio, so it ran about 3.5 in first down to 0.6 in top. This sits mid-range: high enough
-    /// that the tires don't light up instantly off every corner, low enough that the rear can
-    /// still be provoked into stepping out. It also sets how *fast* a slide develops and
-    /// recovers — higher feels mushy and slow to react, lower feels twitchy.
-    /// </summary>
-    [Export] public float DrivetrainInertia { get; set; } = 1.5f;
-
-    /// <summary>Speed below which holding the brake swaps between forward and reverse, in m/s.</summary>
-    [Export] public float DirectionSwapSpeed { get; set; } = 2.0f;
-
-    // ---------------------------------------------------------------- Drivetrain
-
-    /// <summary>Torque to the front wheels: 1 = FWD, 0 = RWD, in between = AWD.</summary>
-    [ExportGroup("Drivetrain")]
-    [Export] public float FrontTorqueSplit { get; set; }
-
-    /// <summary>Shift the torque split around based on wheel slip.</summary>
-    [Export] public bool VariableTorqueSplit { get; set; }
-
-    /// <summary>Split to blend toward when a wheel slips (needs <see cref="VariableTorqueSplit"/>).</summary>
-    [Export] public float FrontVariableSplit { get; set; }
-
-    /// <summary>Seconds to blend between torque splits.</summary>
-    [Export] public float VariableSplitSpeed { get; set; } = 1.0f;
-
-    /// <summary>Torque at which the front differential locks. Negative disables it.</summary>
-    [ExportSubgroup("Front Axle")]
-    [Export] public float FrontLockingDifferentialEngageTorque { get; set; } = 200.0f;
-
-    /// <summary>Torque vectoring on the front axle: 1.0 sends everything to the outside wheel.</summary>
-    [Export] public float FrontTorqueVectoring { get; set; }
-
-    /// <summary>Torque at which the rear differential locks. Negative disables it.</summary>
-    [ExportSubgroup("Rear Axle")]
-    [Export] public float RearLockingDifferentialEngageTorque { get; set; } = 200.0f;
-
-    /// <summary>Torque vectoring on the rear axle: 1.0 sends everything to the outside wheel.</summary>
-    [Export] public float RearTorqueVectoring { get; set; }
+    [ExportGroup("Ground Rays")]
+    [Export] public GroundRay? FrontLeftWheel { get; set; }
+    [Export] public GroundRay? FrontRightWheel { get; set; }
+    [Export] public GroundRay? RearLeftWheel { get; set; }
+    [Export] public GroundRay? RearRightWheel { get; set; }
 
     // ---------------------------------------------------------------- Suspension
 
-    /// <summary>Vehicle mass in kg. Drives the calculated spring and brake rates.</summary>
+    /// <summary>Vehicle mass in kg.</summary>
     [ExportGroup("Suspension")]
-    [Export] public float VehicleMass { get; set; } = 1500.0f;
-
-    /// <summary>Fraction of the mass over the front axle.</summary>
-    [Export] public float FrontWeightDistribution { get; set; } = 0.5f;
-
-    /// <summary>Raises/lowers the centre of gravity from the wheel ray-cast plane.</summary>
-    [Export] public float CenterOfGravityHeightOffset { get; set; } = -0.2f;
-
-    /// <summary>Scales the body's calculated inertia; higher resists rotation more.</summary>
-    [Export] public float InertiaMultiplier { get; set; } = 1.2f;
-
-    /// <summary>Front suspension travel in metres.</summary>
-    [ExportSubgroup("Front Axle")]
-    [Export] public float FrontSpringLength { get; set; } = 0.15f;
-
-    /// <summary>How compressed the front spring sits at rest; 0 = fully compressed.</summary>
-    [Export] public float FrontRestingRatio { get; set; } = 0.5f;
-
-    /// <summary>Front damping ratio; 1 = critically damped. Road car ~0.3, race car ~0.9.</summary>
-    [Export] public float FrontDampingRatio { get; set; } = 0.4f;
-
-    [Export] public float FrontBumpDampMultiplier { get; set; } = 0.6667f;
-    [Export] public float FrontReboundDampMultiplier { get; set; } = 1.5f;
-
-    /// <summary>Front antiroll bar stiffness as a ratio of spring stiffness.</summary>
-    [Export] public float FrontArbRatio { get; set; } = 0.25f;
-
-    /// <summary>Front camber in radians. Not simulated; a slight angle helps stability.</summary>
-    [Export] public float FrontCamber { get; set; } = 0.01745329f;
-
-    /// <summary>Front toe in radians.</summary>
-    [Export] public float FrontToe { get; set; } = 0.01f;
-
-    /// <summary>Front bump-stop force multiplier. Lower it if the car bounces off big bumps.</summary>
-    [Export] public float FrontBumpStopMultiplier { get; set; } = 1.0f;
-
-    /// <summary>Align the front wheels as a beam axle. Cosmetic only.</summary>
-    [Export] public bool FrontBeamAxle { get; set; }
-
-    /// <summary>Rear suspension travel in metres; usually a little more than the front.</summary>
-    [ExportSubgroup("Rear Axle")]
-    [Export] public float RearSpringLength { get; set; } = 0.2f;
-
-    /// <summary>How compressed the rear spring sits at rest; 0 = fully compressed.</summary>
-    [Export] public float RearRestingRatio { get; set; } = 0.5f;
-
-    /// <summary>Rear damping ratio; 1 = critically damped.</summary>
-    [Export] public float RearDampingRatio { get; set; } = 0.4f;
-
-    [Export] public float RearBumpDampMultiplier { get; set; } = 0.6667f;
-    [Export] public float RearReboundDampMultiplier { get; set; } = 1.5f;
-
-    /// <summary>Rear antiroll bar stiffness as a ratio of spring stiffness.</summary>
-    [Export] public float RearArbRatio { get; set; } = 0.25f;
-
-    /// <summary>Rear camber in radians.</summary>
-    [Export] public float RearCamber { get; set; } = 0.01745329f;
-
-    /// <summary>Rear toe in radians.</summary>
-    [Export] public float RearToe { get; set; } = 0.01f;
-
-    /// <summary>Rear bump-stop force multiplier.</summary>
-    [Export] public float RearBumpStopMultiplier { get; set; } = 1.0f;
-
-    /// <summary>Align the rear wheels as a beam axle. Cosmetic only.</summary>
-    [Export] public bool RearBeamAxle { get; set; }
-
-    // ---------------------------------------------------------------- Tires
-
-    /// <summary>Length of the tire contact patch in the brush model.</summary>
-    [ExportGroup("Tires")]
-    [Export] public float ContactPatch { get; set; } = 0.2f;
-
-    /// <summary>Extra longitudinal grip under braking.</summary>
-    [Export] public float BrakingGripMultiplier { get; set; } = 1.5f;
-
-    /// <summary>How much tire force also acts as a torque about the wheel on the body.</summary>
-    [Export] public float WheelToBodyTorqueMultiplier { get; set; } = 1.0f;
+    [Export] public float VehicleMass { get; set; } = 1200.0f;
 
     /// <summary>
-    /// Tire stiffness per surface group; higher = the tire builds force over a smaller slip
-    /// angle, so the car answers the wheel more sharply.
+    /// How far below each ray origin the chassis floats, in metres. Rays sit at the top of the
+    /// travel, so this is the whole suspension length.
     /// </summary>
-    [Export] public Godot.Collections.Dictionary<string, float> TireStiffnesses { get; set; } = new()
+    [Export] public float RideHeight { get; set; } = 0.55f;
+
+    /// <summary>
+    /// Spring rate in N/m. At rest each corner carries <c>VehicleMass × 9.8 / 4</c> newtons, so
+    /// the car settles <c>mass × 9.8 / 4 / SpringStrength</c> into its travel — about 7 cm for a
+    /// 1200 kg car on the default.
+    /// </summary>
+    [Export] public float SpringStrength { get; set; } = 42000.0f;
+
+    /// <summary>
+    /// Damping in N per m/s. Too low and the car pogos off every kerb; too high and it refuses to
+    /// lean and reads as welded down. Roughly 8–10% of <see cref="SpringStrength"/> is a sane
+    /// starting point.
+    /// </summary>
+    [Export] public float SpringDamping { get; set; } = 3600.0f;
+
+    /// <summary>
+    /// Cap on the downward pull a ray applies when the ground falls away past
+    /// <see cref="RideHeight"/>, in newtons. See <see cref="GroundRay.MaxPullForce"/> — it keeps
+    /// the car glued over a crest without flattening the jump off a ramp.
+    /// </summary>
+    [Export] public float MaxPullForce { get; set; } = 4000.0f;
+
+    /// <summary>
+    /// Raises or lowers the centre of mass relative to the body origin, in metres. The single
+    /// biggest lever on how much the car leans and how readily it flips; negative is the safe
+    /// direction.
+    /// </summary>
+    [Export] public float CenterOfMassHeight { get; set; } = -0.25f;
+
+    // ---------------------------------------------------------------- Drive
+
+    /// <summary>Top speed in m/s. Multiply by 3.6 for km/h. A target, not an asymptote.</summary>
+    [ExportGroup("Drive")]
+    [Export] public float TopSpeed { get; set; } = 55.6f;
+
+    /// <summary>Top speed in reverse, in m/s.</summary>
+    [Export] public float ReverseTopSpeed { get; set; } = 14.0f;
+
+    /// <summary>
+    /// Largest drive force while the throttle is held, in newtons. Divide by
+    /// <see cref="VehicleMass"/> for the acceleration — the default on 1200 kg is 15 m/s², which
+    /// reaches <see cref="TopSpeed"/> in a bit under four seconds.
+    /// </summary>
+    [Export] public float MaxAccelForce { get; set; } = 18000.0f;
+
+    /// <summary>
+    /// Largest drive force with nothing held, in newtons. Engine braking and drag rolled into one
+    /// number, because there is no aero model. Keep it small: coasting should bleed slowly.
+    /// </summary>
+    [Export] public float MaxCoastForce { get; set; } = 3000.0f;
+
+    /// <summary>
+    /// Largest force while the brake is held against the direction of travel, in newtons. Bigger
+    /// than <see cref="MaxAccelForce"/>, the way real brakes out-muscle real engines.
+    /// </summary>
+    [Export] public float MaxBrakeForce { get; set; } = 30000.0f;
+
+    /// <summary>Throttle/brake smoothing, per second. High enough to stay responsive.</summary>
+    [Export] public float InputRampSpeed { get; set; } = 12.0f;
+
+    /// <summary>Speed below which holding the brake flips into reverse, in m/s.</summary>
+    [Export] public float ReverseEngageSpeed { get; set; } = 1.5f;
+
+    // ---------------------------------------------------------------- Grip
+
+    /// <summary>
+    /// Fraction of sideways velocity cancelled per step, per surface. <b>This is the tire
+    /// model.</b> 1.0 is on rails, 0.0 is a curling stone.
+    ///
+    /// It reads as a percentage rather than a force because the force needed is solved for first
+    /// — see <see cref="ProcessGrip"/>. Grip is therefore independent of speed and of mass, which
+    /// is not physical and is exactly what makes an arcade car predictable.
+    /// </summary>
+    [ExportGroup("Grip")]
+    [Export] public Godot.Collections.Dictionary<string, float> GripFactor { get; set; } = new()
     {
-        { SurfaceGroups.Road, 10.0f }, { SurfaceGroups.Dirt, 0.5f },
-        { SurfaceGroups.Grass, 0.5f }, { SurfaceGroups.Ice, 0.3f },
+        { SurfaceGroups.Road, 0.90f }, { SurfaceGroups.Dirt, 0.55f },
+        { SurfaceGroups.Grass, 0.38f }, { SurfaceGroups.Ice, 0.07f },
     };
 
     /// <summary>
-    /// Grip multiplier per surface group. This is the single biggest handling number.
-    ///
-    /// Road is 1.8 rather than the source project's arcade value of 3.0, because Master Track
-    /// wants cars that slide. Two reasons it matters:
-    ///
-    /// - <b>Drifting.</b> The rear has to be able to let go and stay gone. At 3.0 the tires
-    ///   simply never saturate at any speed the track allows.
-    /// - <b>Not rolling over.</b> Rollover threshold is geometry: half-track / CoG height.
-    ///   Grip above that number means the car tips before it slides, every time. Mass makes no
-    ///   difference to this — it cancels out of both sides.
-    ///
-    /// Keep an eye on the two together: if you raise this, raise the track width or lower the
-    /// centre of gravity to match, or the car will start flipping again.
+    /// What <see cref="GripFactor"/> is multiplied by while drifting. Lower is a wider, lazier
+    /// drift; at 1.0 the car just turns sideways and keeps gripping.
     /// </summary>
-    [Export] public Godot.Collections.Dictionary<string, float> CoefficientOfFriction { get; set; } = new()
-    {
-        { SurfaceGroups.Road, 1.8f }, { SurfaceGroups.Dirt, 1.5f },
-        { SurfaceGroups.Grass, 1.1f }, { SurfaceGroups.Ice, 0.45f },
-    };
-
-    /// <summary>Rolling resistance multiplier per surface group.</summary>
-    [Export] public Godot.Collections.Dictionary<string, float> RollingResistance { get; set; } = new()
-    {
-        { SurfaceGroups.Road, 1.0f }, { SurfaceGroups.Dirt, 2.0f },
-        { SurfaceGroups.Grass, 4.0f }, { SurfaceGroups.Ice, 0.8f },
-    };
+    [Export] public float DriftGripMultiplier { get; set; } = 0.28f;
 
     /// <summary>
-    /// Bonus grip proportional to lateral slip — the more the tire slides, the harder it grips
-    /// back. Effectively an anti-slide assist: it keeps a slide from running away, at the cost
-    /// of fighting the player when they're deliberately holding an angle.
+    /// Grip while no ray is touching anything. Not zero — a little sideways damping in the air
+    /// stops a car that took off mid-slide from windmilling all the way down.
     /// </summary>
-    [Export] public Godot.Collections.Dictionary<string, float> LateralGripAssist { get; set; } = new()
+    [Export] public float AirborneGripFactor { get; set; } = 0.05f;
+
+    /// <summary>
+    /// Top speed multiplier per surface. Cheaper and more legible than modelling rolling
+    /// resistance, and it gives the off-track penalty somewhere obvious to live.
+    /// </summary>
+    [Export] public Godot.Collections.Dictionary<string, float> SurfaceSpeedMultiplier { get; set; } = new()
     {
-        { SurfaceGroups.Road, 0.05f }, { SurfaceGroups.Dirt, 0.0f },
-        { SurfaceGroups.Grass, 0.0f }, { SurfaceGroups.Ice, 0.0f },
+        { SurfaceGroups.Road, 1.0f }, { SurfaceGroups.Dirt, 0.82f },
+        { SurfaceGroups.Grass, 0.62f }, { SurfaceGroups.Ice, 1.0f },
     };
 
+    // ---------------------------------------------------------------- Steering
+
     /// <summary>
-    /// Longitudinal grip as a ratio of lateral grip. Splitting the two is what lets the car be
-    /// loose sideways without being loose under power.
+    /// How fast the heading swings under full steering input, in degrees per second.
     ///
-    /// Road is 0.85, which is the fishtail window for this car. Against the rear axle's
-    /// capacity under load, <see cref="MaxDriveForce"/> lands at roughly:
-    ///
-    /// <code>
-    ///   0.65 -> 130%   permanent wheelspin, the car is on ice and never straightens
-    ///   0.85 -> 100%   breaks loose on power, hooks up as weight transfers  &lt;-- here
-    ///   1.00 ->  85%   always hooks up, the back end will not step out at all
-    /// </code>
-    ///
-    /// These are for the racer's 11000 N and 1200 kg. This number tracks
-    /// <see cref="MaxDriveForce"/>: the ratio above is what matters, not the value here, so
-    /// if you change the power, move this to match or the car changes character.
-    ///
-    /// Sitting right at the limit is what makes the slide throttle-controllable rather than
-    /// either permanent or impossible. Note this changes cornering grip too, even though
-    /// <see cref="CoefficientOfFriction"/> is untouched: the brush model shares one friction
-    /// budget between the two axes, so a rear wheel that is spinning has less grip sideways.
-    /// That coupling <i>is</i> the fishtail.
+    /// The heading is the direction the car is being <i>asked</i> to point. In Walaber's build it
+    /// is the camera rig's forward vector and the car chases the camera; here the vehicle owns it,
+    /// because this project's camera has free-look and using it would mean looking around the car
+    /// steered it. The maths is otherwise his.
     /// </summary>
-    [Export] public Godot.Collections.Dictionary<string, float> LongitudinalGripRatio { get; set; } = new()
-    {
-        { SurfaceGroups.Road, 0.85f }, { SurfaceGroups.Dirt, 0.5f },
-        { SurfaceGroups.Grass, 0.5f }, { SurfaceGroups.Ice, 0.5f },
-    };
-
-    [ExportSubgroup("Front Axle")]
-    [Export] public float FrontTireRadius { get; set; } = 0.3f;
-
-    /// <summary>Front tire width in mm. Doesn't set grip directly; it softens load sensitivity.</summary>
-    [Export] public float FrontTireWidth { get; set; } = 245.0f;
-
-    [Export] public float FrontWheelMass { get; set; } = 15.0f;
-
-    [ExportSubgroup("Rear Axle")]
-    [Export] public float RearTireRadius { get; set; } = 0.3f;
-
-    /// <summary>Rear tire width in mm.</summary>
-    [Export] public float RearTireWidth { get; set; } = 245.0f;
-
-    [Export] public float RearWheelMass { get; set; } = 15.0f;
-
-    // ---------------------------------------------------------------- Aerodynamics
-
-    /// <summary>Drag coefficient. Most cars are around 0.40; a slippery shape can reach 0.05.</summary>
-    [ExportGroup("Aerodynamics")]
-    [Export] public float CoefficientOfDrag { get; set; } = 0.3f;
-
-    /// <summary>Air density in kg/m³.</summary>
-    [Export] public float AirDensity { get; set; } = 1.225f;
-
-    /// <summary>Frontal area in m². A rough estimate is fine.</summary>
-    [Export] public float FrontalArea { get; set; } = 2.0f;
+    [ExportGroup("Steering")]
+    [Export] public float SteeringRate { get; set; } = 190.0f;
 
     /// <summary>
-    /// Downforce at <see cref="TopSpeed"/>, in multiples of the car's own weight. 1.5 is fast
-    /// GT territory; 0 turns the whole thing off.
+    /// How fast the heading is dragged back onto the car's actual facing, per second.
     ///
-    /// This exists because cornering radius is <c>v² / (μg)</c> — grip is flat with speed while
-    /// the force a corner demands grows with its square, so a car with no aero understeers
-    /// worse the faster it goes no matter what the steering is set to. Downforce scales with
-    /// v² as well, which is what keeps the radius from running away.
-    ///
-    /// It arrives as tire load rather than as a shove on the chassis; see
-    /// <see cref="Wheel.Downforce"/> for why. Because the tire model only reads it for a wheel
-    /// whose spring is loaded, an airborne car gets none of it — jump arcs are untouched.
+    /// This is what a trailing chase camera does for free in the original, and it is
+    /// load-bearing: without it a held stick would wind the heading round forever. With it the
+    /// heading settles at a fixed offset ahead of the car and the car turns at a steady rate — so
+    /// this and <see cref="SteeringRate"/> together set how tight the car corners.
     /// </summary>
-    [Export] public float DownforceG { get; set; } = 1.5f;
+    [Export] public float HeadingRecenterRate { get; set; } = 7.0f;
+
+    /// <summary>Torque per radian of heading error. The P term of the alignment controller.</summary>
+    [Export] public float AlignmentTorqueStrength { get; set; } = 90000.0f;
+
+    /// <summary>Torque per rad/s of yaw rate. The D term — what stops it oscillating.</summary>
+    [Export] public float AlignmentTorqueDamping { get; set; } = 22000.0f;
+
+    /// <summary>Ceiling on the alignment torque, in Nm.</summary>
+    [Export] public float AlignmentTorqueMax { get; set; } = 60000.0f;
 
     /// <summary>
-    /// Share of the downforce carried by the front axle. 0.5 is neutral; bias it rearward for
-    /// a car that stays settled at speed, forward for one that still points into a fast corner.
+    /// Alignment torque multiplier while airborne. Air steering with no grip to fight is far too
+    /// effective at full strength — the car pirouettes off every jump.
+    /// </summary>
+    [Export] public float AirborneSteerMultiplier { get; set; } = 0.35f;
+
+    /// <summary>
+    /// How hard the car rights itself toward level while airborne, in Nm per radian of tilt.
+    /// Nothing else stops a car that took off crooked from landing on its roof.
+    /// </summary>
+    [Export] public float AirborneUprightTorque { get; set; } = 24000.0f;
+
+    /// <summary>Damping on the righting torque, in Nm per rad/s.</summary>
+    [Export] public float AirborneUprightDamping { get; set; } = 8000.0f;
+
+    // ---------------------------------------------------------------- Drifting
+
+    /// <summary>
+    /// How far off the heading the car is commanded to sit while drifting, in degrees. Walaber's
+    /// number is 35, and it is the drift angle you actually see.
+    /// </summary>
+    [ExportGroup("Drifting")]
+    [Export] public float DriftAngle { get; set; } = 35.0f;
+
+    /// <summary>
+    /// How much of that angle the player can add or remove with the stick, in degrees. His is 15.
+    ///
+    /// This is the whole reason a drift here feels driven rather than survived: the car is already
+    /// committed to an arc and the stick tightens or opens it. Set it to 0 and a drift becomes a
+    /// cutscene.
+    /// </summary>
+    [Export] public float DriftSteerRange { get; set; } = 15.0f;
+
+    /// <summary>
+    /// How much steering input still swings the heading itself during a drift, 0..1. At 0 the
+    /// stick works only through <see cref="DriftSteerRange"/>, which is closest to the original.
     /// </summary>
     [Export(PropertyHint.Range, "0,1,0.01")]
-    public float DownforceBalance { get; set; } = 0.5f;
+    public float DriftHeadingInfluence { get; set; }
+
+    /// <summary>Minimum speed to start a drift, in m/s. Stops a standing car spinning on the spot.</summary>
+    [Export] public float DriftMinSpeed { get; set; } = 8.0f;
+
+    /// <summary>Speed at which an in-progress drift gives up, in m/s.</summary>
+    [Export] public float DriftBreakSpeed { get; set; } = 5.0f;
+
+    /// <summary>
+    /// How quickly the drift angle feeds in and out, per second. Instant looks like the car
+    /// teleported sideways; this is the snap of it.
+    /// </summary>
+    [Export] public float DriftBlendSpeed { get; set; } = 6.0f;
+
+    /// <summary>
+    /// Seconds of drift needed for each boost tier. Release before the first entry and the drift
+    /// pays nothing; the array's length is how many tiers there are.
+    /// </summary>
+    [Export] public float[] DriftTierTimes { get; set; } = { 0.55f, 1.3f, 2.2f };
+
+    // ---------------------------------------------------------------- Boost
+
+    /// <summary>
+    /// Speed added on top of <see cref="TopSpeed"/> by each drift tier, in m/s, indexed to match
+    /// <see cref="DriftTierTimes"/>.
+    ///
+    /// This is the mechanic in one number. Because <see cref="TopSpeed"/> is a target rather than
+    /// a balance point, raising it is all it takes to send the car past its normal ceiling — no
+    /// extra shove, nothing to fight, and it holds there for as long as the boost lasts.
+    /// </summary>
+    [ExportGroup("Boost")]
+    [Export] public float[] BoostTierSpeed { get; set; } = { 8.0f, 15.0f, 24.0f };
+
+    /// <summary>Seconds each tier's boost lasts, indexed to match <see cref="DriftTierTimes"/>.</summary>
+    [Export] public float[] BoostTierDuration { get; set; } = { 1.0f, 1.7f, 2.6f };
+
+    /// <summary>
+    /// Extra drive force while boosting, in newtons, on top of <see cref="MaxAccelForce"/>. The
+    /// raised ceiling alone would have the car drift up to its new top speed politely; this is
+    /// what makes a boost land as a shove.
+    /// </summary>
+    [Export] public float BoostAccelForce { get; set; } = 14000.0f;
+
+    /// <summary>
+    /// Ceiling on stacked boost speed, in m/s. Reached by chaining, never by one drift.
+    ///
+    /// <b>Boosts are additive.</b> Land a drift while a boost is still burning and its speed adds
+    /// to what is already there rather than replacing it, so a driver who keeps chaining ends up
+    /// a very long way over <see cref="TopSpeed"/> — which is the point. The default of 45 on the
+    /// racer's 55.6 puts the hard ceiling near 360 km/h. Raise it if chains should run further,
+    /// lower it if the track can't take it.
+    /// </summary>
+    [Export] public float MaxBoostSpeed { get; set; } = 45.0f;
+
+    /// <summary>
+    /// How fast the boost bleeds off once every burst has expired, in m/s per second. Slow enough
+    /// that running down from a big chain is a moment rather than a switch.
+    /// </summary>
+    [Export] public float BoostDecayRate { get; set; } = 14.0f;
+
+    /// <summary>
+    /// Grace window after a boost ends during which a fresh drift still counts as a chain, in
+    /// seconds. Without it a chain would demand frame-perfect re-entry.
+    /// </summary>
+    [Export] public float ChainGraceTime { get; set; } = 0.5f;
+
+    // ---------------------------------------------------------------- Nitro
+
+    /// <summary>
+    /// Boost charges the player starts a run with, spent one per press and refilled only by
+    /// <see cref="ResetNitro"/>.
+    ///
+    /// Nitro and drift boosts feed the same speed bonus, so they stack with each other and with a
+    /// chain exactly as two drift boosts would.
+    /// </summary>
+    [ExportGroup("Nitro")]
+    [Export] public int NitroCharges { get; set; } = 5;
+
+    /// <summary>Speed a nitro charge adds, in m/s.</summary>
+    [Export] public float NitroSpeed { get; set; } = 18.0f;
+
+    /// <summary>How long one charge burns for, in seconds.</summary>
+    [Export] public float NitroDuration { get; set; } = 1.5f;
+
+    /// <summary>Dead time after a charge before another can be spent, in seconds.</summary>
+    [Export] public float NitroCooldown { get; set; } = 0.4f;
 
     // ---------------------------------------------------------------- Airborne
 
     /// <summary>
-    /// Gravity multiplier while the car is off the ground and heading down. 1 is real gravity.
-    ///
-    /// The track is built on 40 m cubes, and a 40 m drop under real gravity is 2.9 seconds of
-    /// hang time — correct, and far too floaty to play. This only touches the descent, so a
-    /// ramp still launches the car exactly as high as it did; it just stops hanging up there.
-    ///
-    /// Applied as a force rather than by raising gravity itself on purpose. Spring rates are
-    /// derived against a hardcoded half-g, so a car that simply weighed three times as much
-    /// would sit on its bump stops. Airborne there is no load on the springs to get wrong.
+    /// Gravity multiplier while airborne and <i>descending</i>. The track is built on 40 m cubes,
+    /// and a 40 m drop under real gravity is 2.9 seconds of hang time — correct, and unplayable.
+    /// Leaving the ascent alone means a ramp still launches the car exactly as high.
     /// </summary>
     [ExportGroup("Airborne")]
     [Export] public float FallGravityMultiplier { get; set; } = 3.0f;
 
     /// <summary>
-    /// Terminal velocity in m/s — a hard ceiling on how fast the car can be moving *along*
-    /// gravity. 0 disables it.
-    ///
-    /// Not a feel knob: drag alone puts the real terminal velocity around 310 m/s, so a long
-    /// fall off the side of the board would otherwise keep accelerating until the per-step
-    /// movement started arguing with the collision solver. This is the guard rail for that.
+    /// Hard ceiling on speed along gravity, in m/s. Not a feel knob — it is the guard rail that
+    /// stops a fall off the edge of the board outrunning the collision solver. 0 disables it.
     /// </summary>
     [Export] public float MaxFallSpeed { get; set; } = 65.0f;
 
-    // ---------------------------------------------------------------- Nitro
+    // ---------------------------------------------------------------- Inputs
 
-    /// <summary>
-    /// Boosts the player starts a run with. Spent one at a time and never refilled — call
-    /// <see cref="ResetNitro"/> when a new run begins.
-    /// </summary>
-    [ExportGroup("Nitro")]
-    [Export] public int NitroCharges { get; set; } = 5;
-
-    /// <summary>How long one charge burns for, in seconds.</summary>
-    [Export] public float NitroDuration { get; set; } = 1.5f;
-
-    /// <summary>
-    /// Push in newtons, applied to the body along its nose rather than through the tires.
-    /// Divide by <see cref="VehicleMass"/> for the acceleration it adds: at the default 9000 N
-    /// on a 1200 kg car that is 7.5 m/s² on top of whatever the wheels are already doing.
-    ///
-    /// Going in at the body rather than the contact patch is deliberate. Fed through the
-    /// drivetrain a boost would be eaten by traction control, by wheelspin, by a rear axle
-    /// that is sideways, and by the drive curve being flat at the top of the range — it would
-    /// do least exactly when the player most expects a shove. This way it always lands.
-    /// </summary>
-    [Export] public float NitroForce { get; set; } = 9000.0f;
-
-    /// <summary>
-    /// Ceiling while boosting, as a multiple of <see cref="TopSpeed"/>. This is a hard cap:
-    /// both the drive curve and the nitro push itself fade out as the car approaches it, so
-    /// charges chained back to back can't walk the car up to an arbitrary speed. At the
-    /// racer's 55.6 m/s top speed the default puts the boosted ceiling at 250 km/h.
-    /// </summary>
-    [Export] public float NitroTopSpeedMultiplier { get; set; } = 1.25f;
-
-    /// <summary>Dead time after a burst ends before the next charge can be spent, in seconds.</summary>
-    [Export] public float NitroCooldown { get; set; } = 0.4f;
-
-    /// <summary>
-    /// Fraction of the boosted ceiling the nitro push holds full force to, before fading out.
-    /// Below this the shove is the full <see cref="NitroForce"/>; between here and the ceiling
-    /// it tapers to nothing, which is what stops the cap arriving as a wall.
-    /// </summary>
-    private const float NitroFullForceFraction = 0.75f;
-
-    // ---------------------------------------------------------------- Runtime state
-
-    public readonly List<Wheel> WheelArray = new();
-    public readonly List<Axle> Axles = new();
-    public Axle FrontAxle { get; private set; } = null!;
-    public Axle RearAxle { get; private set; } = null!;
-    public readonly List<Wheel> DriveWheels = new();
-
-    // ---- Controller inputs: an external script writes these every physics step ----
-
-    /// <summary>0..1 throttle.</summary>
+    /// <summary>0..1 throttle. Written by the controller every physics step.</summary>
     public float ThrottleInput;
 
-    /// <summary>-1..1; positive steers left, matching the source project.</summary>
+    /// <summary>−1..1 steering; positive steers left, matching the project's existing convention.</summary>
     public float SteeringInput;
 
-    /// <summary>0..1 brake.</summary>
+    /// <summary>0..1 brake / reverse.</summary>
     public float BrakeInput;
 
-    /// <summary>0..1 handbrake.</summary>
-    public float HandbrakeInput;
+    /// <summary>Whether the drift button is held. Replaces the old handbrake.</summary>
+    public bool DriftInput;
 
-    /// <summary>Whether the nitro button is held. The rising edge is what spends a charge.</summary>
+    /// <summary>Whether the nitro button is held. The rising edge spends a charge.</summary>
     public bool NitroInput;
 
-    // ---- Derived state, safe to read for HUD / effects / debug ----
+    /// <summary>
+    /// Mirrors <see cref="DriftInput"/>, so anything still phrased in terms of a handbrake keeps
+    /// working. The lever is gone; the button that replaced it does more.
+    /// </summary>
+    public float HandbrakeInput
+    {
+        get => DriftInput ? 1.0f : 0.0f;
+        set => DriftInput = value > 0.5f;
+    }
+
+    // ---------------------------------------------------------------- Reported state
 
     public bool IsVehicleReady { get; private set; }
+
+    /// <summary>Every ground ray, front axle first.</summary>
+    public readonly List<GroundRay> WheelArray = new();
+
+    /// <summary>Velocity in the body's own frame. −Z is forward.</summary>
     public Vector3 LocalVelocity { get; private set; } = Vector3.Zero;
 
     /// <summary>Speed in m/s. Multiply by 3.6 for km/h.</summary>
     public float Speed { get; private set; }
 
-    public float SteeringAmount { get; private set; }
+    /// <summary>Signed speed along the nose, in m/s. Negative means travelling backwards.</summary>
+    public float ForwardSpeed { get; private set; }
 
-    /// <summary>Steering after the <see cref="SteeringExponent"/> curve, before assists.</summary>
-    public float SteeringExponentAmount { get; private set; }
-
-    /// <summary>Final steering angle in radians, after the exponent and the countersteer assist.</summary>
-    public float TrueSteeringAmount { get; private set; }
+    /// <summary>Smoothed throttle, 0..1.</summary>
     public float ThrottleAmount { get; private set; }
+
+    /// <summary>Smoothed brake, 0..1.</summary>
     public float BrakeAmount { get; private set; }
 
-    /// <summary>
-    /// Direction of travel: 1 forward, -1 reverse. There is no gearbox — this only picks which
-    /// way drive force is applied. Kept as an int so input mapping and the HUD read naturally.
-    /// </summary>
+    /// <summary>1 forward, −1 reverse. Only picks which way drive force points; there is no gearbox.</summary>
     public int CurrentGear { get; private set; } = 1;
 
-    /// <summary>Drive force currently reaching the contact patch, in newtons.</summary>
-    public float DriveForce { get; private set; }
-
-    /// <summary>Drive torque handed to the axles this step, in Nm.</summary>
-    public float TorqueOutput { get; private set; }
-
-    /// <summary>How far into the speed range the car is, 0..1. Drives the fake-gear audio.</summary>
+    /// <summary>Speed as a fraction of the unboosted <see cref="TopSpeed"/>. Drives the engine note.</summary>
     public float SpeedFraction { get; private set; }
 
-    public float TrueTorqueSplit { get; private set; }
-    public bool IsBraking { get; private set; }
-    public bool TcsActive { get; private set; }
+    /// <summary>Where the car is being asked to point, in world space, flat to the ground plane.</summary>
+    public Vector3 HeadingDirection { get; private set; } = Vector3.Forward;
 
-    /// <summary>Fraction of drive force traction control is currently letting through, 0..1.</summary>
-    public float TcsFactor { get; private set; } = 1.0f;
-    /// <summary>Charges left in this run. Starts at <see cref="NitroCharges"/>.</summary>
+    /// <summary>Signed angle from the car's nose to <see cref="HeadingDirection"/>, in radians.</summary>
+    public float HeadingError { get; private set; }
+
+    /// <summary>Alignment torque applied this step, in Nm. For the debug overlay.</summary>
+    public float SteerTorque { get; private set; }
+
+    /// <summary>True when no ray reached anything.</summary>
+    public bool IsAirborne { get; private set; }
+
+    /// <summary>How many of the four rays are touching something.</summary>
+    public int GroundedRayCount { get; private set; }
+
+    /// <summary>Effective grip this step, after surface and drift. 1 is on rails, 0 is ice.</summary>
+    public float CurrentGrip { get; private set; }
+
+    /// <summary>Sideways speed in m/s. What the skid and squeal effects key off.</summary>
+    public float LateralSpeed { get; private set; }
+
+    /// <summary>Surface under the car, read off the rear rays. See <see cref="SurfaceGroups"/>.</summary>
+    public string SurfaceType { get; private set; } = SurfaceGroups.Road;
+
+    // ---- Drift ----
+
+    /// <summary>0 when not drifting, otherwise +1 or −1 for the direction of the slide.</summary>
+    public int DriftDirection { get; private set; }
+
+    /// <summary>True while a drift is being held.</summary>
+    public bool IsDrifting => DriftDirection != 0;
+
+    /// <summary>How far the drift angle is blended in, 0..1. Drives the visual pose.</summary>
+    public float DriftBlend { get; private set; }
+
+    /// <summary>Seconds the current drift has been held.</summary>
+    public float DriftTime { get; private set; }
+
+    /// <summary>Tier the current drift has earned so far: 0 for none, up to <c>DriftTierTimes.Length</c>.</summary>
+    public int DriftTier { get; private set; }
+
+    // ---- Boost ----
+
+    /// <summary>Speed currently added on top of <see cref="TopSpeed"/>, in m/s.</summary>
+    public float BoostSpeed { get; private set; }
+
+    /// <summary>Seconds left on the burst still running, 0 when none is.</summary>
+    public float BoostTimeRemaining { get; private set; }
+
+    /// <summary>
+    /// True while a burst is running. Virtual because a networked car is not simulated on every
+    /// machine — see <c>RacerController.IsBoosting</c>, which answers from the wire for a car
+    /// somebody else is driving. The physics below deliberately reads <see cref="BurstActive"/>
+    /// instead, so an override can never feed a replicated flag back into the simulation.
+    /// </summary>
+    public virtual bool IsBoosting => BurstActive;
+
+    /// <summary>Raw simulation state: is a burst actually running on this machine.</summary>
+    private bool BurstActive => BoostTimeRemaining > 0.0f;
+
+    /// <summary>How many boosts deep the current chain is. Resets once the grace window lapses.</summary>
+    public int ChainCount { get; private set; }
+
+    /// <summary>
+    /// Alias, so every existing effect — exhaust flames, camera FOV, HUD — lights up for drift
+    /// boosts as well as for nitro, which is what an arcade racer wants.
+    /// </summary>
+    public bool IsNitroActive => IsBoosting;
+
+    /// <summary>How much of the current burst is left, 1 at ignition down to 0.</summary>
+    public float NitroFraction { get; private set; }
+
+    /// <summary>Charges left in this run.</summary>
     public int NitroChargesRemaining { get; private set; }
 
-    /// <summary>Seconds left on the current burst, 0 when not boosting.</summary>
-    public float NitroTimeRemaining { get; private set; }
+    /// <summary>Fires when a boost starts, with the tier (0 for nitro) and the chain depth.</summary>
+    [Signal] public delegate void BoostStartedEventHandler(int tier, int chainCount);
 
-    /// <summary>True while a charge is burning.</summary>
-    public bool IsNitroActive => NitroTimeRemaining > 0.0f;
+    /// <summary>Fires when every burst has expired.</summary>
+    [Signal] public delegate void BoostEndedEventHandler();
 
-    /// <summary>How much of the current burst is left, 1 at ignition down to 0. For HUD and FX.</summary>
-    public float NitroFraction => NitroDuration > 0.0f
-        ? Mathf.Clamp(NitroTimeRemaining / NitroDuration, 0.0f, 1.0f)
-        : 0.0f;
-
-    /// <summary>Fires when a charge is spent, with the number left afterwards. For HUD, audio and FX.</summary>
+    /// <summary>Fires when a nitro charge is spent, with the number left.</summary>
     [Signal] public delegate void NitroFiredEventHandler(int chargesRemaining);
 
-    /// <summary>Fires when a burst burns out.</summary>
-    [Signal] public delegate void NitroEndedEventHandler();
+    /// <summary>Fires when a drift ends, with the tier it earned. 0 means it earned nothing.</summary>
+    [Signal] public delegate void DriftEndedEventHandler(int tier);
 
-    public bool StabilityActive { get; private set; }
-    public float StabilityYawTorque { get; private set; }
-    public Vector3 StabilityTorqueVector { get; private set; } = Vector3.Zero;
-    public Vector3 FrontAxlePosition { get; private set; } = Vector3.Zero;
-    public Vector3 RearAxlePosition { get; private set; } = Vector3.Zero;
+    // ---------------------------------------------------------------- Internals
 
-    /// <summary>Seconds of physics time since the vehicle came up. Used for ABS/shift timing.</summary>
-    public float DeltaTime { get; private set; }
-
-    /// <summary>Gravity as reported by the physics server, used by the bump stops.</summary>
-    public Vector3 CurrentGravity { get; private set; } = Vector3.Zero;
-
-    /// <summary>
-    /// True when no wheel's ray cast reaches anything — the car is properly in the air rather
-    /// than merely light on the springs. Deliberately the ray rather than the spring load, so
-    /// a wheel at full droop about to touch down doesn't count as flying.
-    /// </summary>
-    public bool IsAirborne
-    {
-        get
-        {
-            foreach (Wheel wheel in WheelArray)
-            {
-                if (wheel.IsColliding())
-                    return false;
-            }
-
-            return WheelArray.Count > 0;
-        }
-    }
-
-    /// <summary>
-    /// Strength of gravity in m/s². Falls back to 9.8 until the physics server has told us,
-    /// which it can't until the first <see cref="_IntegrateForces"/> after the body exists.
-    /// </summary>
-    private float GravityMagnitude
-        => CurrentGravity.LengthSquared() > 0.0f ? CurrentGravity.Length() : 9.8f;
-
-    /// <summary>Unit vector along gravity, with the same first-frame fallback.</summary>
-    private Vector3 GravityDirection
-        => CurrentGravity.LengthSquared() > 0.0f ? CurrentGravity.Normalized() : Vector3.Down;
-
-    public Vector3 VehicleInertia { get; private set; } = Vector3.Zero;
-
-    private Vector3 _previousGlobalPosition = Vector3.Zero;
-    private float _driveAxlesInertia;
-    private float _averageDriveWheelRadius;
-    private float _currentTorqueSplit;
-    private float _brakeForce;
-    private float _maxBrakeForce;
-    private float _handbrakeForce;
-    private float _maxHandbrakeForce;
-
-    /// <summary>Stops the forward/reverse swap flickering while the brake is held at a stop.</summary>
-    private float _directionSwapCooldown;
-
-    /// <summary>Last frame's <see cref="NitroInput"/>, so a held button only spends one charge.</summary>
-    private bool _nitroWasHeld;
-
-    /// <summary>Time until another charge may be spent. Covers the burst plus the dead time after it.</summary>
+    private float _headingYaw;
+    private float _driftBlendTarget;
+    private float _driftSteerAngle;
+    private float _chainWindow;
     private float _nitroLockout;
+    private bool _nitroWasHeld;
+    private bool _driftWasHeld;
+    private float _burstLength = 1.0f;
+    private Vector3 _gravity = Vector3.Down * 9.8f;
 
-    /// <summary>
-    /// How much of the countersteer assist is currently being let through, 0..1. It ramps
-    /// down toward <c>1 - |SteeringInput|</c> while the assist is pulling against the
-    /// driver's input and back to 1 when it isn't, so committing to the wheel makes the
-    /// assist release rather than fight.
-    ///
-    /// <b>This has to persist between steps.</b> It was previously a local re-initialised to
-    /// 1.0 every frame, which meant a single <c>SteeringSpeed * delta</c> step was the most it
-    /// could ever move — 0.965 at 120 Hz — and the release never happened at all.
-    /// </summary>
-    private float _steerCorrectionAmount = 1.0f;
+    private float GravityMagnitude => _gravity.LengthSquared() > 0.0f ? _gravity.Length() : 9.8f;
+    private Vector3 GravityDirection => _gravity.LengthSquared() > 0.0f ? _gravity.Normalized() : Vector3.Down;
 
     public override void _Ready()
     {
         Initialize();
     }
 
+    /// <summary>
+    /// Collect the rays, push the suspension setup into them and seed the heading. Safe to call
+    /// again after changing the tuning at runtime.
+    /// </summary>
+    public void Initialize()
+    {
+        if (FrontLeftWheel is not { } fl || FrontRightWheel is not { } fr
+            || RearLeftWheel is not { } rl || RearRightWheel is not { } rr)
+        {
+            GD.PushError($"[Vehicle] {Name}: all four ground rays must be assigned. Not simulating.");
+            return;
+        }
+
+        Mass = VehicleMass;
+        CenterOfMassMode = CenterOfMassModeEnum.Custom;
+        CenterOfMass = new Vector3(0.0f, CenterOfMassHeight, 0.0f);
+
+        WheelArray.Clear();
+        WheelArray.Add(fl);
+        WheelArray.Add(fr);
+        WheelArray.Add(rl);
+        WheelArray.Add(rr);
+
+        fl.Steers = true;
+        fr.Steers = true;
+
+        foreach (GroundRay ray in WheelArray)
+        {
+            ray.RestLength = RideHeight;
+            ray.SpringStrength = SpringStrength;
+            ray.SpringDamping = SpringDamping;
+            ray.MaxPullForce = MaxPullForce;
+
+            // Reaches past the ride height, so the ray still finds the road as the car tops a
+            // crest and the pull term has something to work against.
+            ray.TargetPosition = new Vector3(0.0f, -(RideHeight * 1.5f), 0.0f);
+            ray.AddException(this);
+        }
+
+        _headingYaw = GlobalRotation.Y;
+        HeadingDirection = -GlobalTransform.Basis.Z;
+
+        ResetNitro();
+        IsVehicleReady = true;
+    }
+
     public override void _IntegrateForces(PhysicsDirectBodyState3D state)
     {
-        CurrentGravity = state.TotalGravity;
+        _gravity = state.TotalGravity;
 
         if (MaxFallSpeed <= 0.0f)
             return;
 
-        // Clamped here rather than as a drag force because it has to be a hard ceiling: a
-        // force that merely opposes the fall still lets velocity creep past whatever number
-        // was asked for. Only the component along gravity is touched, so a car flung sideways
-        // off a ramp keeps every bit of its horizontal speed.
-        Vector3 down = state.TotalGravity.LengthSquared() > 0.0f
-            ? state.TotalGravity.Normalized()
-            : Vector3.Down;
-
+        // A hard clamp rather than a drag force: a force that merely opposes the fall still lets
+        // velocity creep past the number asked for. Only the component along gravity is touched,
+        // so a car flung sideways off a ramp keeps every bit of its horizontal speed.
+        Vector3 down = GravityDirection;
         float fallSpeed = state.LinearVelocity.Dot(down);
         if (fallSpeed > MaxFallSpeed)
             state.LinearVelocity -= down * (fallSpeed - MaxFallSpeed);
-    }
-
-    /// <summary>
-    /// Build the axles, push the per-axle tuning down into the wheels, and derive the spring
-    /// rates, damping, Ackermann, brake bias and centre of gravity from the setup. Safe to
-    /// call again after changing the tuning at runtime.
-    /// </summary>
-    public void Initialize()
-    {
-        if (FrontLeftWheel is not { } frontLeft || FrontRightWheel is not { } frontRight
-            || RearLeftWheel is not { } rearLeft || RearRightWheel is not { } rearRight)
-        {
-            GD.PushError($"[Vehicle] {Name}: all four wheel nodes must be assigned. " +
-                         "The vehicle will not simulate.");
-            return;
-        }
-
-        if (TireStiffnesses.Count == 0 || CoefficientOfFriction.Count == 0
-            || RollingResistance.Count == 0 || LateralGripAssist.Count == 0
-            || LongitudinalGripRatio.Count == 0)
-        {
-            GD.PushError($"[Vehicle] {Name}: every tire dictionary needs at least one surface type.");
-            return;
-        }
-
-        DriveCurve ??= BuildDefaultDriveCurve();
-
-        WheelArray.Clear();
-        Axles.Clear();
-        DriveWheels.Clear();
-        _driveAxlesInertia = 0.0f;
-        _averageDriveWheelRadius = 0.0f;
-
-        string defaultSurface = TireStiffnesses.Keys.First();
-
-        CenterOfMassMode = CenterOfMassModeEnum.Custom;
-        Mass = VehicleMass;
-        Vector3 centerOfGravity = CalculateCenterOfGravity(
-            FrontWeightDistribution, frontLeft, frontRight, rearLeft, rearRight);
-        centerOfGravity.Y += CenterOfGravityHeightOffset;
-        CenterOfMass = centerOfGravity;
-
-        FrontAxle = new Axle { TorqueVectoring = FrontTorqueVectoring };
-        FrontAxle.Wheels.Add(frontLeft);
-        FrontAxle.Wheels.Add(frontRight);
-        frontLeft.OppositeWheel = frontRight;
-        frontLeft.BeamAxle = FrontBeamAxle ? 1.0f : 0.0f;
-        frontRight.OppositeWheel = frontLeft;
-        frontRight.BeamAxle = FrontBeamAxle ? -1.0f : 0.0f;
-
-        RearAxle = new Axle { TorqueVectoring = RearTorqueVectoring, Handbrake = true };
-        RearAxle.Wheels.Add(rearLeft);
-        RearAxle.Wheels.Add(rearRight);
-        rearLeft.OppositeWheel = rearRight;
-        rearLeft.BeamAxle = RearBeamAxle ? 1.0f : 0.0f;
-        rearRight.OppositeWheel = rearLeft;
-        rearRight.BeamAxle = RearBeamAxle ? -1.0f : 0.0f;
-
-        Axles.Add(FrontAxle);
-        Axles.Add(RearAxle);
-
-        WheelArray.Add(frontLeft);
-        WheelArray.Add(frontRight);
-        WheelArray.Add(rearLeft);
-        WheelArray.Add(rearRight);
-
-        float maxTireRadius = Mathf.Max(FrontTireRadius, RearTireRadius);
-        FrontAxle.TireSizeCorrection = maxTireRadius / FrontTireRadius;
-        RearAxle.TireSizeCorrection = maxTireRadius / RearTireRadius;
-
-        FrontAxle.DifferentialLockTorque = FrontLockingDifferentialEngageTorque;
-        RearAxle.DifferentialLockTorque = RearLockingDifferentialEngageTorque;
-
-        foreach (Wheel wheel in WheelArray)
-        {
-            wheel.SurfaceType = defaultSurface;
-            wheel.TireStiffnesses = TireStiffnesses;
-            wheel.ContactPatch = ContactPatch;
-            wheel.BrakingGripMultiplier = BrakingGripMultiplier;
-            wheel.CoefficientOfFriction = CoefficientOfFriction;
-            wheel.RollingResistance = RollingResistance;
-            wheel.LateralGripAssist = LateralGripAssist;
-            wheel.LongitudinalGripRatio = LongitudinalGripRatio;
-            wheel.WheelToBodyTorqueMultiplier = WheelToBodyTorqueMultiplier;
-            wheel.HandbrakeLockedGrip = HandbrakeLockedGrip;
-            wheel.HandbrakeLockSlip = HandbrakeLockSlip;
-        }
-
-        // 4.9 = half of g, i.e. the static load on one of the two wheels on the axle.
-        float frontWeightPerWheel = VehicleMass * FrontWeightDistribution * 4.9f;
-        float frontSpringRate = CalculateSpringRate(frontWeightPerWheel, FrontSpringLength, FrontRestingRatio);
-        float frontDampingRate = CalculateDamping(frontWeightPerWheel, frontSpringRate, FrontDampingRatio);
-
-        foreach (Wheel wheel in FrontAxle.Wheels)
-        {
-            wheel.WheelMass = FrontWheelMass;
-            wheel.TireRadius = FrontTireRadius;
-            wheel.TireWidth = FrontTireWidth;
-            wheel.SteeringRatio = FrontSteeringRatio;
-            wheel.SpringLength = FrontSpringLength;
-            wheel.SpringRate = frontSpringRate;
-            wheel.Antiroll = frontSpringRate * FrontArbRatio;
-            wheel.SlowBump = frontDampingRate * FrontBumpDampMultiplier;
-            wheel.SlowRebound = frontDampingRate * FrontReboundDampMultiplier;
-            wheel.FastBump = frontDampingRate * FrontBumpDampMultiplier * 0.5f;
-            wheel.FastRebound = frontDampingRate * FrontReboundDampMultiplier * 0.5f;
-            wheel.BumpStopMultiplier = FrontBumpStopMultiplier;
-            wheel.MassOverWheel = VehicleMass * FrontWeightDistribution * 0.5f;
-            wheel.AbsPulseTime = FrontAbsPulseTime;
-            wheel.AbsSpinDifferenceThreshold = -Mathf.Abs(FrontAbsSpinDifferenceThreshold);
-        }
-
-        float rearWeightPerWheel = VehicleMass * (1.0f - FrontWeightDistribution) * 4.9f;
-        float rearSpringRate = CalculateSpringRate(rearWeightPerWheel, RearSpringLength, RearRestingRatio);
-        float rearDampingRate = CalculateDamping(rearWeightPerWheel, rearSpringRate, RearDampingRatio);
-
-        foreach (Wheel wheel in RearAxle.Wheels)
-        {
-            wheel.WheelMass = RearWheelMass;
-            wheel.TireRadius = RearTireRadius;
-            wheel.TireWidth = RearTireWidth;
-            wheel.SteeringRatio = RearSteeringRatio;
-            wheel.SpringLength = RearSpringLength;
-            wheel.SpringRate = rearSpringRate;
-            wheel.Antiroll = rearSpringRate * RearArbRatio;
-            wheel.SlowBump = rearDampingRate * RearBumpDampMultiplier;
-            wheel.SlowRebound = rearDampingRate * RearReboundDampMultiplier;
-            wheel.FastBump = rearDampingRate * RearBumpDampMultiplier * 0.5f;
-            wheel.FastRebound = rearDampingRate * RearReboundDampMultiplier * 0.5f;
-            wheel.BumpStopMultiplier = RearBumpStopMultiplier;
-            wheel.MassOverWheel = VehicleMass * (1.0f - FrontWeightDistribution) * 0.5f;
-            wheel.AbsPulseTime = RearAbsPulseTime;
-            wheel.AbsSpinDifferenceThreshold = -Mathf.Abs(RearAbsSpinDifferenceThreshold);
-        }
-
-        // Ackermann: the inside wheel has to turn tighter than the outside one.
-        float wheelBase = rearLeft.Position.Z - frontLeft.Position.Z;
-        float frontTrackWidth = frontRight.Position.X - frontLeft.Position.X;
-        float frontAckermann = CalculateAckermann(wheelBase, frontTrackWidth);
-        float rearTrackWidth = rearRight.Position.X - rearLeft.Position.X;
-        float rearAckermann = CalculateAckermann(wheelBase, rearTrackWidth);
-
-        ApplyWheelAlignment(frontLeft, frontAckermann, -FrontCamber, -FrontToe);
-        ApplyWheelAlignment(frontRight, -frontAckermann, FrontCamber, FrontToe);
-        ApplyWheelAlignment(rearLeft, rearAckermann, -RearCamber, -RearToe);
-        ApplyWheelAlignment(rearRight, -rearAckermann, RearCamber, RearToe);
-
-        if (FrontBrakeBias < 0.0f)
-        {
-            // Split the brakes the way the springs carry load under a 0.6/0.4 forward pitch.
-            float frontAxleSpringForce = CalculateAxleSpringForce(0.6f, FrontSpringLength, frontSpringRate);
-            float totalSpringForce = frontAxleSpringForce
-                                     + CalculateAxleSpringForce(0.4f, RearSpringLength, rearSpringRate);
-            FrontBrakeBias = frontAxleSpringForce / totalSpringForce;
-        }
-
-        FrontAxle.BrakeBias = FrontBrakeBias;
-        RearAxle.BrakeBias = 1.0f - FrontBrakeBias;
-
-        foreach (Wheel wheel in WheelArray)
-            wheel.Initialize();
-
-        if (FrontTorqueSplit > 0.0f || VariableTorqueSplit)
-            FrontAxle.IsDriveAxle = true;
-        if (FrontTorqueSplit < 1.0f || VariableTorqueSplit)
-            RearAxle.IsDriveAxle = true;
-
-        foreach (Axle axle in Axles)
-        {
-            axle.Inertia = 0.0f;
-            foreach (Wheel wheel in axle.Wheels)
-            {
-                axle.Inertia += wheel.WheelMoment;
-                if (!axle.IsDriveAxle)
-                    continue;
-                _driveAxlesInertia += wheel.WheelMoment;
-                DriveWheels.Add(wheel);
-                wheel.IsDriven = true;
-                _averageDriveWheelRadius += wheel.TireRadius;
-            }
-        }
-
-        if (DriveWheels.Count == 0)
-        {
-            GD.PushError($"[Vehicle] {Name}: no driven wheels. Check FrontTorqueSplit / VariableTorqueSplit.");
-            return;
-        }
-
-        _averageDriveWheelRadius /= DriveWheels.Count;
-        _previousGlobalPosition = GlobalPosition;
-
-        CalculateBrakeForce();
-        ResetNitro();
-
-        IsVehicleReady = true;
     }
 
     public override void _PhysicsProcess(double delta)
@@ -928,54 +558,223 @@ public partial class Vehicle : RigidBody3D
         if (!IsVehicleReady)
             return;
 
-        float dt = (float)delta;
+        var dt = (float)delta;
 
-        // The body's inertia isn't available on the first frame, and the stability assist
-        // needs it, so grab it as soon as the physics server can tell us.
-        if (VehicleInertia == Vector3.Zero)
-        {
-            PhysicsDirectBodyState3D? state = PhysicsServer3D.BodyGetDirectState(GetRid());
-            if (state != null)
-            {
-                Vector3 rigidbodyInertia = VehicleMath.Inverse(state.InverseInertia);
-                if (rigidbodyInertia.IsFinite())
-                {
-                    VehicleInertia = rigidbodyInertia * InertiaMultiplier;
-                    Inertia = VehicleInertia;
-                }
-            }
-        }
-
-        DeltaTime += dt;
-        // Velocity is measured from the actual movement rather than LinearVelocity so the
-        // wheels and the body agree, then smoothed to take the edge off collision spikes.
-        LocalVelocity = (GlobalTransform.Basis.Transposed()
-                         * ((GlobalTransform.Origin - _previousGlobalPosition) / dt))
-                        .Lerp(LocalVelocity, 0.5f);
-        _previousGlobalPosition = GlobalPosition;
-        Speed = LocalVelocity.Length();
-
-        ProcessDrag();
-        ProcessDownforce();
-        ProcessFallGravity();
-        ProcessBraking(dt);
-        ProcessSteering(dt);
-        ProcessThrottle(dt);
-        ProcessDirection(dt);
-        // Before ProcessDrive, so the drive curve sees this step's boosted speed ceiling.
-        ProcessNitro(dt);
+        ReadState();
+        ProcessSuspension();
+        ProcessInputRamp(dt);
+        ProcessDrift(dt);
+        ProcessBoost(dt);
         ProcessDrive(dt);
-        ProcessForces(dt);
-        ProcessStability();
+        ProcessGrip(dt);
+        ProcessSteering(dt);
+        ProcessAirborne();
+    }
+
+    public override void _Process(double delta)
+    {
+        if (!IsVehicleReady)
+            return;
+
+        foreach (GroundRay ray in WheelArray)
+            ray.UpdateVisual(this, (float)delta);
     }
 
     /// <summary>
-    /// Spend a nitro charge, if there is one to spend and the car isn't already boosting or
-    /// still inside the dead time after the last burst. Returns whether one was actually lit,
-    /// so a caller can play the "empty" click instead.
+    /// Velocity of a point on this body in world space, including the part that comes from
+    /// spinning. Each ground ray damps against its own corner rather than the centre of mass —
+    /// that difference is what damps roll and pitch instead of only bounce.
+    /// </summary>
+    public Vector3 VelocityAtPoint(Vector3 worldPoint)
+        => LinearVelocity + AngularVelocity.Cross(worldPoint - GlobalTransform * CenterOfMass);
+
+    private void ReadState()
+    {
+        LocalVelocity = GlobalTransform.Basis.Transposed() * LinearVelocity;
+        Speed = LinearVelocity.Length();
+        ForwardSpeed = -LocalVelocity.Z;
+        LateralSpeed = LocalVelocity.X;
+        SpeedFraction = TopSpeed > 0.0f ? Mathf.Clamp(Speed / TopSpeed, 0.0f, 1.0f) : 0.0f;
+    }
+
+    private void ProcessSuspension()
+    {
+        GroundedRayCount = 0;
+
+        foreach (GroundRay ray in WheelArray)
+        {
+            ray.ApplyGroundForce(this);
+            if (ray.IsGrounded)
+                GroundedRayCount++;
+        }
+
+        IsAirborne = GroundedRayCount == 0;
+
+        // Off a rear ray rather than averaged: the rears are what the car drives on, and one
+        // dictionary lookup beats blending four values that are nearly always the same number.
+        if (RearLeftWheel is { IsGrounded: true } rear)
+            SurfaceType = rear.SurfaceType;
+        else if (RearRightWheel is { IsGrounded: true } other)
+            SurfaceType = other.SurfaceType;
+    }
+
+    private void ProcessInputRamp(float delta)
+    {
+        float t = 1.0f - Mathf.Exp(-InputRampSpeed * delta);
+        ThrottleAmount = Mathf.Lerp(ThrottleAmount, Mathf.Clamp(ThrottleInput, 0.0f, 1.0f), t);
+        BrakeAmount = Mathf.Lerp(BrakeAmount, Mathf.Clamp(BrakeInput, 0.0f, 1.0f), t);
+    }
+
+    // ---------------------------------------------------------------- Drift
+
+    /// <summary>
+    /// Start, hold and end a drift, and pay a boost out when one ends having earned it.
     ///
-    /// Public so a pickup, a scripted sequence or an AI driver can fire one without having to
-    /// fake a button press.
+    /// A drift is a <i>state</i>, not a consequence: pressing the button while turning commits the
+    /// car to an angle, and the grip model plays along by handing most of its grip back. Nothing
+    /// here waits for the car to break traction on its own, which is why it triggers when the
+    /// player asks rather than when the physics happens to allow it.
+    /// </summary>
+    private void ProcessDrift(float delta)
+    {
+        bool wantsDrift = DriftInput;
+
+        if (IsDrifting)
+        {
+            if (!wantsDrift || Speed < DriftBreakSpeed)
+                EndDrift();
+        }
+        else if (wantsDrift && !_driftWasHeld && Speed >= DriftMinSpeed && !IsAirborne)
+        {
+            // Direction comes from the stick at the moment of the press. Held straight, the car
+            // takes the way it is already rotating, so a flick-then-press still goes where the
+            // player meant.
+            int dir = Mathf.Abs(SteeringInput) > 0.15f
+                ? (SteeringInput > 0.0f ? 1 : -1)
+                : (AngularVelocity.Y >= 0.0f ? 1 : -1);
+
+            DriftDirection = dir;
+            DriftTime = 0.0f;
+            DriftTier = 0;
+
+            // Entering a drift while a boost is alive — or just after one — is what makes a
+            // chain. See MaxBoostSpeed.
+            if (BurstActive || _chainWindow > 0.0f)
+                ChainCount++;
+            else
+                ChainCount = 0;
+        }
+
+        _driftWasHeld = wantsDrift;
+
+        if (IsDrifting)
+        {
+            DriftTime += delta;
+            DriftTier = TierFor(DriftTime);
+            _driftBlendTarget = 1.0f;
+            _driftSteerAngle = Mathf.Clamp(SteeringInput, -1.0f, 1.0f) * Mathf.DegToRad(DriftSteerRange);
+        }
+        else
+        {
+            _driftBlendTarget = 0.0f;
+            _driftSteerAngle = 0.0f;
+        }
+
+        DriftBlend = Mathf.Lerp(DriftBlend, _driftBlendTarget,
+                                1.0f - Mathf.Exp(-DriftBlendSpeed * delta));
+    }
+
+    private void EndDrift()
+    {
+        int tier = DriftTier;
+        DriftDirection = 0;
+        DriftTime = 0.0f;
+        DriftTier = 0;
+
+        EmitSignal(SignalName.DriftEnded, tier);
+
+        if (tier > 0)
+            GrantBoost(BoostTierSpeed[tier - 1], BoostTierDuration[tier - 1], tier);
+        else if (!BurstActive)
+            ChainCount = 0;
+    }
+
+    /// <summary>Which boost tier a drift of this length has earned. 0 means none.</summary>
+    private int TierFor(float heldFor)
+    {
+        var tier = 0;
+        int count = Mathf.Min(DriftTierTimes.Length,
+                              Mathf.Min(BoostTierSpeed.Length, BoostTierDuration.Length));
+
+        for (var i = 0; i < count; i++)
+        {
+            if (heldFor >= DriftTierTimes[i])
+                tier = i + 1;
+        }
+
+        return tier;
+    }
+
+    // ---------------------------------------------------------------- Boost
+
+    /// <summary>
+    /// Add a boost on top of whatever is already burning.
+    ///
+    /// <b>Additive, deliberately.</b> The speed goes on top of the current bonus rather than
+    /// replacing it, and the timer takes the longer of the two rather than restarting — so a chain
+    /// of three good drifts really does stack three lots of speed and leaves the car far past
+    /// <see cref="TopSpeed"/>. <see cref="MaxBoostSpeed"/> is the only thing that stops it.
+    /// </summary>
+    public void GrantBoost(float speed, float duration, int tier)
+    {
+        BoostSpeed = Mathf.Min(BoostSpeed + speed, MaxBoostSpeed);
+        BoostTimeRemaining = Mathf.Max(BoostTimeRemaining, duration);
+        _burstLength = Mathf.Max(BoostTimeRemaining, 0.001f);
+        _chainWindow = 0.0f;
+
+        EmitSignal(SignalName.BoostStarted, tier, ChainCount);
+    }
+
+    private void ProcessBoost(float delta)
+    {
+        if (_chainWindow > 0.0f)
+        {
+            _chainWindow = Mathf.Max(_chainWindow - delta, 0.0f);
+            if (_chainWindow <= 0.0f && !BurstActive && !IsDrifting)
+                ChainCount = 0;
+        }
+
+        if (_nitroLockout > 0.0f)
+            _nitroLockout = Mathf.Max(_nitroLockout - delta, 0.0f);
+
+        // Edge, not level: holding the button spends one charge, not all five.
+        if (NitroInput && !_nitroWasHeld)
+            TryActivateNitro();
+        _nitroWasHeld = NitroInput;
+
+        if (BurstActive)
+        {
+            BoostTimeRemaining = Mathf.Max(BoostTimeRemaining - delta, 0.0f);
+            if (!BurstActive)
+            {
+                _chainWindow = ChainGraceTime;
+                EmitSignal(SignalName.BoostEnded);
+            }
+        }
+        else if (BoostSpeed > 0.0f)
+        {
+            // Bleed rather than drop: coming off a big chain should be the car running down, not
+            // the speedometer being switched off.
+            BoostSpeed = Mathf.Max(BoostSpeed - BoostDecayRate * delta, 0.0f);
+        }
+
+        NitroFraction = Mathf.Clamp(BoostTimeRemaining / _burstLength, 0.0f, 1.0f);
+    }
+
+    /// <summary>
+    /// Spend a nitro charge if there is one and the dead time has passed. Returns whether one was
+    /// lit, so a caller can play the empty click instead. Public so a pickup, a scripted sequence
+    /// or an AI driver can fire one without faking a button press.
     /// </summary>
     public bool TryActivateNitro()
     {
@@ -983,108 +782,192 @@ public partial class Vehicle : RigidBody3D
             return false;
 
         NitroChargesRemaining--;
-        NitroTimeRemaining = NitroDuration;
         _nitroLockout = NitroDuration + NitroCooldown;
+        GrantBoost(NitroSpeed, NitroDuration, 0);
         EmitSignal(SignalName.NitroFired, NitroChargesRemaining);
         return true;
     }
 
-    /// <summary>Refill to <see cref="NitroCharges"/> and cancel any burst. Call when a run starts.</summary>
+    /// <summary>Refill the charges and cancel any boost. Call when a run starts.</summary>
     public void ResetNitro()
     {
         NitroChargesRemaining = NitroCharges;
-        NitroTimeRemaining = 0.0f;
+        BoostSpeed = 0.0f;
+        BoostTimeRemaining = 0.0f;
+        ChainCount = 0;
+        _chainWindow = 0.0f;
         _nitroLockout = 0.0f;
         _nitroWasHeld = false;
     }
 
-    private void ProcessNitro(float delta)
-    {
-        if (_nitroLockout > 0.0f)
-            _nitroLockout = Mathf.Max(_nitroLockout - delta, 0.0f);
-
-        if (IsNitroActive)
-        {
-            NitroTimeRemaining = Mathf.Max(NitroTimeRemaining - delta, 0.0f);
-            if (!IsNitroActive)
-                EmitSignal(SignalName.NitroEnded);
-        }
-
-        // Edge, not level: holding the button down burns one charge, not all five.
-        if (NitroInput && !_nitroWasHeld)
-            TryActivateNitro();
-        _nitroWasHeld = NitroInput;
-
-        if (!IsNitroActive)
-            return;
-
-        // Taper the push as the boosted ceiling comes up, so chaining charges runs into a
-        // speed limit rather than adding velocity forever.
-        float ceiling = GetNitroSpeedCeiling();
-        float fade = 1.0f - Mathf.Clamp(
-            Mathf.InverseLerp(ceiling * NitroFullForceFraction, ceiling, Speed), 0.0f, 1.0f);
-
-        if (fade <= 0.0f)
-            return;
-
-        // Along the nose, signed by the direction of travel the same way drive torque is, so
-        // boosting while reversing pushes the way the player is actually going.
-        Vector3 forward = -GlobalTransform.Basis.Z * CurrentGear;
-        ApplyCentralForce(forward * NitroForce * fade);
-    }
-
-    /// <summary>Speed ceiling in m/s that applies while boosting, for the current direction.</summary>
-    private float GetNitroSpeedCeiling()
-    {
-        float baseCeiling = CurrentGear == -1 ? ReverseTopSpeed : TopSpeed;
-        return baseCeiling * Mathf.Max(NitroTopSpeedMultiplier, 1.0f);
-    }
-
-    private void ProcessDrag()
-    {
-        float drag = 0.5f * AirDensity * Mathf.Pow(Speed, 2.0f) * FrontalArea * CoefficientOfDrag;
-        if (drag > 0.0f)
-            ApplyCentralForce(-LinearVelocity.Normalized() * drag);
-    }
+    // ---------------------------------------------------------------- Drive
 
     /// <summary>
-    /// Work out this step's aero load and hand each tire its share. Must run before
-    /// <see cref="ProcessForces"/>, which is where the tire model reads it.
+    /// Walaber's acceleration model: work out the force that would land the car exactly on its
+    /// target speed in one physics step, then refuse to apply more than a fixed amount of it.
     ///
-    /// Quoted against <see cref="TopSpeed"/> rather than as a raw coefficient because that is
-    /// the number anyone tuning this actually wants to reason about — "how many times its own
-    /// weight, flat out". Nothing clamps it at the top: under nitro the car goes past
-    /// <see cref="TopSpeed"/> and earns the extra grip that comes with it.
+    /// The clamp is the entire drivetrain. Well below the target the car pushes at
+    /// <see cref="MaxAccelForce"/> flat out; as it closes, the unclamped force falls under that on
+    /// its own and the car eases in and holds. No curve, no gears, no drag to balance — and
+    /// because the target is just a number, a boost that raises it works instantly and exactly.
     /// </summary>
-    private void ProcessDownforce()
+    private void ProcessDrive(float delta)
     {
-        float total = 0.0f;
-        if (DownforceG > 0.0f && TopSpeed > 0.0f)
-        {
-            float speedRatio = Speed / TopSpeed;
-            total = DownforceG * VehicleMass * GravityMagnitude * speedRatio * speedRatio;
-        }
+        // Reverse only once nearly stopped, so stamping the brake at speed brakes.
+        if (BrakeAmount > 0.1f && ForwardSpeed < ReverseEngageSpeed)
+            CurrentGear = -1;
+        else if (ThrottleAmount > 0.1f || ForwardSpeed > ReverseEngageSpeed)
+            CurrentGear = 1;
 
-        float frontPerWheel = total * DownforceBalance * 0.5f;
-        float rearPerWheel = total * (1.0f - DownforceBalance) * 0.5f;
+        float surface = SurfaceSpeedMultiplier.TryGetValue(SurfaceType, out float m) ? m : 1.0f;
 
-        foreach (Wheel wheel in FrontAxle.Wheels)
-            wheel.Downforce = frontPerWheel;
+        Vector3 forward = -GlobalTransform.Basis.Z;
+        float currentForwardSpeed = forward.Dot(LinearVelocity);
 
-        foreach (Wheel wheel in RearAxle.Wheels)
-            wheel.Downforce = rearPerWheel;
+        float desiredSpeed = CurrentGear == -1
+            ? -BrakeAmount * ReverseTopSpeed * surface
+            : ThrottleAmount * (TopSpeed + BoostSpeed) * surface;
+
+        // The acceleration that would close the whole gap this step, and the force behind it.
+        float accelForce = (desiredSpeed - currentForwardSpeed) / delta * Mass;
+
+        float maxForce;
+        if (CurrentGear == 1 && BrakeAmount > 0.05f && currentForwardSpeed > 0.0f)
+            maxForce = MaxBrakeForce;
+        else if (CurrentGear == -1 ? BrakeAmount > 0.05f : ThrottleAmount > 0.05f)
+            maxForce = MaxAccelForce + (BurstActive ? BoostAccelForce : 0.0f);
+        else
+            maxForce = MaxCoastForce;
+
+        // Nothing to push against in the air. Left in, a car would accelerate off a ramp.
+        if (IsAirborne)
+            maxForce = 0.0f;
+
+        ApplyCentralForce(forward * Mathf.Clamp(accelForce, -maxForce, maxForce));
     }
 
+    // ---------------------------------------------------------------- Grip
+
     /// <summary>
-    /// Push the car down harder while it is falling, so a 40 m drop doesn't take three seconds.
+    /// The tire model, in full: find the force that would cancel every bit of sideways velocity
+    /// this step, then apply a percentage of it.
     ///
-    /// Descent only. Applying it on the way up as well would cut jump height at the same time,
-    /// and the launch off a ramp is the part that's already right — it's the hang at the top
-    /// that reads as floaty. See <see cref="FallGravityMultiplier"/>.
+    /// At 1.0 the car cannot slide at all. At 0.9 × <see cref="DriftGripMultiplier"/> on tarmac it
+    /// keeps most of its sideways speed and slews. There is no slip curve, no load sensitivity and
+    /// no friction budget shared with acceleration — which means grip does not sag at speed, and a
+    /// drift holds for exactly as long as the player holds it.
     /// </summary>
-    private void ProcessFallGravity()
+    private void ProcessGrip(float delta)
     {
-        if (FallGravityMultiplier <= 1.0f || !IsAirborne)
+        float grip;
+        if (IsAirborne)
+        {
+            grip = AirborneGripFactor;
+        }
+        else
+        {
+            grip = GripFactor.TryGetValue(SurfaceType, out float g) ? g : 0.9f;
+
+            // On the drift's own ramp, so grip returns at the rate the car straightens rather
+            // than snapping back the instant the button comes up.
+            grip *= Mathf.Lerp(1.0f, DriftGripMultiplier, DriftBlend);
+        }
+
+        CurrentGrip = grip;
+
+        Vector3 side = GlobalTransform.Basis.X;
+        float instantSideAccel = -side.Dot(LinearVelocity) / delta;
+        ApplyCentralForce(side * (instantSideAccel * Mass * grip));
+    }
+
+    // ---------------------------------------------------------------- Steering
+
+    /// <summary>
+    /// Point the car at its heading with a PD controller, and offset that heading while drifting.
+    ///
+    /// The car has no steering angle and no front axle. What it has is a direction it is being
+    /// asked to face, a torque proportional to how far off it is, and damping proportional to how
+    /// fast it is already turning. That is why it answers the stick the same at 30 km/h and at
+    /// 300 — nothing here scales with speed or with grip.
+    /// </summary>
+    private void ProcessSteering(float delta)
+    {
+        float steer = Mathf.Clamp(SteeringInput, -1.0f, 1.0f);
+
+        // While drifting the stick mostly works through the drift offset instead, so the player is
+        // trimming the arc rather than fighting to leave it.
+        float authority = IsDrifting ? DriftHeadingInfluence : 1.0f;
+        _headingYaw += steer * Mathf.DegToRad(SteeringRate) * authority * delta;
+
+        // The heading trails the car, which is what a chase camera does for free in Walaber's
+        // build. Without it a held stick would wind the heading round forever instead of settling
+        // at a fixed offset — see HeadingRecenterRate.
+        _headingYaw = Mathf.LerpAngle(_headingYaw, GlobalRotation.Y,
+                                      1.0f - Mathf.Exp(-HeadingRecenterRate * delta));
+
+        var heading = new Vector3(-Mathf.Sin(_headingYaw), 0.0f, -Mathf.Cos(_headingYaw));
+
+        // The drift angle plus the player's trim inside it — Walaber's
+        // `deg_to_rad(35.0 * _drift_dir) + input_angle`, ramped by the drift blend.
+        if (DriftBlend > 0.001f)
+        {
+            float driftAngle = Mathf.DegToRad(DriftAngle) * DriftDirection * DriftBlend;
+            heading = heading.Rotated(Vector3.Up, driftAngle + _driftSteerAngle * DriftBlend);
+        }
+
+        HeadingDirection = heading;
+
+        // Flattened, so a car on a banking is still asked to turn about world up rather than
+        // about its own tilted roof.
+        Vector3 nose = -GlobalTransform.Basis.Z;
+        var noseFlat = new Vector3(nose.X, 0.0f, nose.Z);
+        if (noseFlat.LengthSquared() < 0.0001f)
+            return;
+
+        HeadingError = noseFlat.Normalized().SignedAngleTo(heading, Vector3.Up);
+
+        float yawRate = AngularVelocity.Dot(Vector3.Up);
+        float turnForce = Mathf.Clamp(
+            HeadingError * AlignmentTorqueStrength - yawRate * AlignmentTorqueDamping,
+            -AlignmentTorqueMax, AlignmentTorqueMax);
+
+        if (IsAirborne)
+            turnForce *= AirborneSteerMultiplier;
+
+        // Walaber's upright_factor: fade steering out as the car tips away from level, so a car on
+        // its side or mid-roll stops trying to steer and lets the righting torque do its work.
+        float uprightFactor = Mathf.Clamp(GlobalTransform.Basis.Y.Dot(Vector3.Up), 0.0f, 1.0f);
+
+        SteerTorque = turnForce * uprightFactor;
+        ApplyTorque(Vector3.Up * SteerTorque);
+    }
+
+    // ---------------------------------------------------------------- Airborne
+
+    private void ProcessAirborne()
+    {
+        if (!IsAirborne)
+            return;
+
+        // Level the car so it lands on its wheels: torque about the axis that would take its roof
+        // back to vertical, damped by however fast it is already rolling that way.
+        Vector3 up = GlobalTransform.Basis.Y;
+        Vector3 axis = up.Cross(Vector3.Up);
+        float tilt = Mathf.Acos(Mathf.Clamp(up.Dot(Vector3.Up), -1.0f, 1.0f));
+
+        if (axis.LengthSquared() > 0.0001f)
+        {
+            Vector3 righting = axis.Normalized() * (tilt * AirborneUprightTorque);
+
+            // Damp roll and pitch only; yaw belongs to the steering controller.
+            Vector3 spin = AngularVelocity - Vector3.Up * AngularVelocity.Dot(Vector3.Up);
+            ApplyTorque(righting - spin * AirborneUprightDamping);
+        }
+
+        // Descent only. Applying it on the way up would cut jump height at the same time, and the
+        // launch off a ramp is the part that is already right — it is the hang at the apex that
+        // reads as floaty.
+        if (FallGravityMultiplier <= 1.0f)
             return;
 
         Vector3 down = GravityDirection;
@@ -1092,506 +975,5 @@ public partial class Vehicle : RigidBody3D
             return;
 
         ApplyCentralForce(down * ((FallGravityMultiplier - 1.0f) * Mass * GravityMagnitude));
-    }
-
-    private void ProcessBraking(float delta)
-    {
-        if (BrakeInput < BrakeAmount)
-        {
-            BrakeAmount -= BrakingSpeed * delta;
-            if (BrakeInput > BrakeAmount)
-                BrakeAmount = BrakeInput;
-        }
-        else if (BrakeInput > BrakeAmount)
-        {
-            BrakeAmount += BrakingSpeed * delta;
-            if (BrakeInput < BrakeAmount)
-                BrakeAmount = BrakeInput;
-        }
-
-        IsBraking = BrakeAmount > 0.0f;
-
-        _brakeForce = BrakeAmount * _maxBrakeForce;
-        _handbrakeForce = HandbrakeInput * _maxHandbrakeForce;
-    }
-
-    private void ProcessSteering(float delta)
-    {
-        bool steerAssistEngaged = false;
-        float steeringSlip = GetMaxSteeringSlipAngle();
-
-        // Slower steering the faster you go, scaled by the lock available.
-        // At a standstill this divides by zero and goes infinite, which just means the
-        // steering snaps to the input — same as the original.
-        float steerSpeedCorrection = SteeringSpeed / (Speed * SteeringSpeedDecay) / MaxSteeringAngle;
-
-        // Turning back the other way uses the (usually faster) countersteer rate.
-        if (VehicleMath.SignF(SteeringInput) != VehicleMath.SignF(SteeringAmount))
-            steerSpeedCorrection = CountersteerSpeed / (Speed * SteeringSpeedDecay);
-
-        if (Mathf.Abs(steeringSlip) > SteeringSlipAssist)
-            steerAssistEngaged = true;
-
-        if (SteeringInput < SteeringAmount)
-        {
-            if (!steerAssistEngaged || steeringSlip < 0.0f)
-            {
-                SteeringAmount -= steerSpeedCorrection * delta;
-                if (SteeringInput > SteeringAmount)
-                    SteeringAmount = SteeringInput;
-            }
-            else
-            {
-                // Already sliding: unwind toward centre instead of adding more lock.
-                SteeringAmount += steerSpeedCorrection * delta;
-                if (SteeringAmount > 0.0f)
-                    SteeringAmount = 0.0f;
-            }
-        }
-        else if (SteeringInput > SteeringAmount)
-        {
-            if (!steerAssistEngaged || steeringSlip > 0.0f)
-            {
-                SteeringAmount += steerSpeedCorrection * delta;
-                if (SteeringInput < SteeringAmount)
-                    SteeringAmount = SteeringInput;
-            }
-            else
-            {
-                SteeringAmount -= steerSpeedCorrection * delta;
-                if (SteeringAmount < 0.0f)
-                    SteeringAmount = 0.0f;
-            }
-        }
-
-        float steeringAdjust = Mathf.Pow(Mathf.Abs(SteeringAmount), SteeringExponent)
-                               * VehicleMath.SignF(SteeringAmount);
-        SteeringExponentAmount = steeringAdjust;
-
-        // Countersteer assist: bias the wheels toward where the car is actually going.
-        float steerCorrection = (1.0f - Mathf.Abs(steeringAdjust))
-                                * Mathf.Clamp(Mathf.Asin(LocalVelocity.Normalized().X),
-                                              -MaxSteeringAngle, MaxSteeringAngle)
-                                * CountersteerAssist;
-
-        // Not moving forward fast enough for the assist to make sense.
-        if (LocalVelocity.Z > -0.5f)
-            steerCorrection = 0.0f;
-        else
-            steerCorrection /= -MaxSteeringAngle;
-
-        // Keeps the correction from latching on when it fights the driver's input. The floor
-        // is 1 - |SteeringInput|, so the harder the player commits the further it backs off.
-        if (VehicleMath.SignF(steeringAdjust + steerCorrection) != VehicleMath.SignF(SteeringInput)
-            && 1.0f - Mathf.Abs(SteeringInput) < _steerCorrectionAmount)
-            _steerCorrectionAmount = Mathf.Clamp(_steerCorrectionAmount - SteeringSpeed * delta, 0.0f, 1.0f);
-        else
-            _steerCorrectionAmount = Mathf.Clamp(_steerCorrectionAmount + SteeringSpeed * delta, 0.0f, 1.0f);
-
-        steerCorrection *= _steerCorrectionAmount;
-
-        TrueSteeringAmount = Mathf.Clamp(steeringAdjust + steerCorrection,
-                                         -MaxSteeringAngle, MaxSteeringAngle);
-
-        foreach (Wheel wheel in WheelArray)
-            wheel.Steer(steeringAdjust + steerCorrection, MaxSteeringAngle);
-    }
-
-    private void ProcessThrottle(float delta)
-    {
-        float throttleDelta = ThrottleSpeed * delta;
-
-        if (ThrottleInput < ThrottleAmount)
-        {
-            ThrottleAmount -= throttleDelta;
-            if (ThrottleInput > ThrottleAmount)
-                ThrottleAmount = ThrottleInput;
-        }
-        else
-        {
-            ThrottleAmount += throttleDelta;
-            if (ThrottleInput < ThrottleAmount)
-                ThrottleAmount = ThrottleInput;
-        }
-
-    }
-
-    /// <summary>
-    /// Pick whether drive force pushes the car forward or backward. There is no gearbox, so
-    /// this is just a direction flag: hold the brake at walking pace and the car swaps, which
-    /// is how the geared version behaved and what players expect from an automatic.
-    /// </summary>
-    private void ProcessDirection(float delta)
-    {
-        _directionSwapCooldown = Mathf.Max(0.0f, _directionSwapCooldown - delta);
-
-        if (_directionSwapCooldown > 0.0f || BrakeInput <= 0.75f || Speed >= DirectionSwapSpeed)
-            return;
-
-        // LocalVelocity.Z is negative moving forward, so only swap once the car has actually
-        // stopped going the way it currently points.
-        bool goingForward = LocalVelocity.Z < -0.1f;
-        bool goingBackward = LocalVelocity.Z > 0.1f;
-
-        if (CurrentGear == 1 && !goingForward)
-        {
-            CurrentGear = -1;
-            BrakeAmount = 0.0f;
-            _directionSwapCooldown = 0.4f;
-        }
-        else if (CurrentGear == -1 && !goingBackward)
-        {
-            CurrentGear = 1;
-            BrakeAmount = 0.0f;
-            _directionSwapCooldown = 0.4f;
-        }
-    }
-
-    /// <summary>
-    /// Drive force straight off the curve, then converted to axle torque.
-    ///
-    /// Force is expressed at the contact patch rather than at a crankshaft, so the curve says
-    /// exactly what the player feels and the tuning stays honest: <c>MaxDriveForce / mass</c>
-    /// is the launch acceleration, and the curve is how that fades toward
-    /// <see cref="TopSpeed"/>. Turning it back into torque here means the differential, wheel
-    /// spin and tire model downstream are completely unchanged — the car can still light up
-    /// its rears and be driven on the throttle.
-    /// </summary>
-    private float ComputeDriveTorque()
-    {
-        bool reversing = CurrentGear == -1;
-        float ceiling = reversing ? ReverseTopSpeed : TopSpeed;
-
-        // Deliberately off the *unboosted* ceiling: this is what the engine note is pitched
-        // from, and rescaling it under nitro would drop the revs at the moment of the shove.
-        // It already clamps at 1, so the car just sits on the limiter past top speed.
-        SpeedFraction = Mathf.Clamp(Speed / Mathf.Max(ceiling, 0.001f), 0.0f, 1.0f);
-
-        // The curve, though, is sampled against the boosted ceiling, so the wheels keep pulling
-        // past where they would normally have run out of drive.
-        if (IsNitroActive)
-            ceiling = GetNitroSpeedCeiling();
-
-        float driveFraction = Mathf.Clamp(Speed / Mathf.Max(ceiling, 0.001f), 0.0f, 1.0f);
-        float available = DriveCurve?.SampleBaked(driveFraction) ?? 1.0f;
-        if (reversing)
-            available *= ReverseForceRatio;
-
-        DriveForce = MaxDriveForce * Mathf.Max(available, 0.0f) * ThrottleAmount;
-
-        // Traction control: fade drive out as the driven wheels overrun the road speed.
-        // SpinVelocityDiff is signed by the wheel's direction of rotation, so multiplying by
-        // CurrentGear makes "spinning faster than the road" positive whichever way we're going.
-        if (TractionControlMaxWheelSpin > 0.0f)
-        {
-            float wheelSpin = 0.0f;
-            foreach (Wheel wheel in DriveWheels)
-                wheelSpin = Mathf.Max(wheelSpin, wheel.SpinVelocityDiff * CurrentGear);
-
-            float excess = wheelSpin - TractionControlMaxWheelSpin;
-            TcsFactor = excess <= 0.0f
-                ? 1.0f
-                : Mathf.Clamp(1.0f - excess / Mathf.Max(TractionControlFadeRange, 0.001f), 0.0f, 1.0f);
-            TcsActive = TcsFactor < 1.0f;
-            DriveForce *= TcsFactor;
-        }
-        else
-        {
-            TcsFactor = 1.0f;
-            TcsActive = false;
-        }
-
-        TorqueOutput = DriveForce * _averageDriveWheelRadius * CurrentGear;
-        return TorqueOutput;
-    }
-
-    private void ProcessDrive(float delta)
-    {
-        float driveTorque = ComputeDriveTorque();
-        float driveInertia = DrivetrainInertia;
-        bool isSlipping = GetIsAWheelSlipping();
-
-        if (VariableTorqueSplit)
-        {
-            if (isSlipping && ThrottleAmount > 0.1f)
-                _currentTorqueSplit = Mathf.Clamp(_currentTorqueSplit + delta / VariableSplitSpeed, 0.0f, 1.0f);
-            else
-                _currentTorqueSplit = Mathf.Clamp(_currentTorqueSplit - delta / VariableSplitSpeed, 0.0f, 1.0f);
-        }
-
-        // Same coupling formula as the clutch, but keeping the two axles together, with a
-        // split so one axle can be favoured.
-        TrueTorqueSplit = Mathf.Lerp(FrontTorqueSplit, FrontVariableSplit, _currentTorqueSplit);
-        Axle axleA = FrontAxle;
-        Axle axleB = RearAxle;
-        if (TrueTorqueSplit <= 0.5f)
-        {
-            axleA = RearAxle;
-            axleB = FrontAxle;
-        }
-
-        float axleDifference = axleA.GetSpin() - axleB.GetSpin();
-        float a = axleA.Inertia * axleB.Inertia * axleDifference / delta;
-        float b = axleA.Inertia;
-        float c = axleB.Inertia * driveTorque;
-        float transferTorque = (a - b + c) / (axleA.Inertia + axleB.Inertia);
-        transferTorque = Mathf.Clamp(transferTorque, -Mathf.Abs(driveTorque), Mathf.Abs(driveTorque))
-                         * (1.0f - Mathf.Abs((0.5f - TrueTorqueSplit) * 2.0f));
-        float transferTorque2 = driveTorque - transferTorque;
-
-        ProcessAxleDrive(axleB, transferTorque, driveInertia, delta);
-        ProcessAxleDrive(axleA, transferTorque2, driveInertia, delta);
-    }
-
-    private void ProcessAxleDrive(Axle axle, float torque, float driveInertia, float delta)
-    {
-        if (!axle.IsDriveAxle)
-        {
-            torque = 0.0f;
-            driveInertia = 0.0f;
-        }
-
-        bool allowAbs = true;
-        float handbrakeTorque = 0.0f;
-
-        // The handbrake is a cable straight onto this axle: it skips the bias split the
-        // hydraulics go through, and there is no ABS on it. Note this is gated on the lever
-        // actually being pulled — upstream killed the rear ABS unconditionally here, which is
-        // why RearAbsPulseTime and RearAbsSpinDifferenceThreshold have never done anything.
-        if (axle.Handbrake && _handbrakeForce > 0.0f)
-        {
-            handbrakeTorque = _handbrakeForce;
-            allowAbs = false;
-        }
-
-        if (axle.IsDriveAxle && axle.DifferentialLockTorque >= 0.0f)
-        {
-            if (Mathf.Abs(torque) > axle.DifferentialLockTorque)
-            {
-                // Locked: force both wheels to the same speed, then vector torque to the
-                // outside wheel based on steering.
-                axle.RotationSplit = 0.5f + axle.TorqueVectoring * -SteeringInput;
-                float coupleSpin = axle.GetAverageSpin();
-                axle.Wheels[0].Spin = coupleSpin * axle.RotationSplit * 2.0f;
-                axle.Wheels[1].Spin = coupleSpin * (1.0f - axle.RotationSplit) * 2.0f;
-                axle.RotationSplit = axle.RotationSplit * 2.0f - 1.0f;
-            }
-            else if (torque != 0.0f)
-            {
-                // Open: let the wheel with less grip take the torque, within limits.
-                float leftReactionTorqueRatio = -Mathf.Abs(axle.Wheels[0].GetReactionTorque() / torque);
-                float rightReactionTorqueRatio = Mathf.Abs(axle.Wheels[1].GetReactionTorque() / torque);
-                axle.RotationSplit = Mathf.Max(axle.RotationSplit, leftReactionTorqueRatio);
-                axle.RotationSplit = Mathf.Min(axle.RotationSplit, rightReactionTorqueRatio);
-            }
-        }
-
-        float rotationSum = 0.0f;
-        float split = (axle.RotationSplit + 1.0f) * 0.5f;
-        float wheelBrakeTorque = _brakeForce * 0.5f * axle.BrakeBias + handbrakeTorque;
-        axle.AppliedSplit = axle.RotationSplit;
-
-        // How locked the tire model should treat this wheel as being. The wheel scales it by
-        // its own slip, so this is only ever permission to let go, never a command to.
-        float handbrakeAmount = handbrakeTorque > 0.0f ? HandbrakeInput : 0.0f;
-        axle.Wheels[0].HandbrakeAmount = handbrakeAmount;
-        axle.Wheels[1].HandbrakeAmount = handbrakeAmount;
-
-        rotationSum += axle.Wheels[0].ProcessTorque(
-            torque * split, driveInertia, wheelBrakeTorque, allowAbs, delta);
-        rotationSum += axle.Wheels[1].ProcessTorque(
-            torque * (1.0f - split), driveInertia, wheelBrakeTorque, allowAbs, delta);
-        axle.RotationSplit = Mathf.Clamp(rotationSum, -1.0f, 1.0f);
-    }
-
-    private void ProcessForces(float delta)
-    {
-        // Each wheel needs the *other* wheel's compression for the antiroll bar, so the left
-        // value is stashed before it gets overwritten.
-        foreach (Axle axle in Axles)
-        {
-            float previousCompressionLeft = axle.SuspensionCompressionLeft;
-            axle.SuspensionCompressionLeft =
-                axle.Wheels[0].ProcessForces(axle.SuspensionCompressionRight, IsBraking, delta);
-            axle.SuspensionCompressionRight =
-                axle.Wheels[1].ProcessForces(previousCompressionLeft, IsBraking, delta);
-        }
-    }
-
-    private void ProcessStability()
-    {
-        bool isStabilityOn = false;
-
-        if (EnableStability)
-        {
-            StabilityYawTorque = 0.0f;
-            var planeXz = new Vector2(LocalVelocity.X, LocalVelocity.Z);
-            if (planeXz.Y < 0.0f && planeXz.Length() > 1.0f)
-            {
-                planeXz = planeXz.Normalized();
-                float yawAngle = 1.0f - Mathf.Abs(planeXz.Dot(Vector2.Up));
-                if (yawAngle > StabilityYawEngageAngle
-                    && VehicleMath.SignF(AngularVelocity.Y) == VehicleMath.SignF(planeXz.X))
-                {
-                    StabilityYawTorque = (yawAngle - StabilityYawEngageAngle) * StabilityYawStrength;
-                    StabilityYawTorque *= VehicleInertia.Y
-                                          * Mathf.Clamp(Mathf.Abs(AngularVelocity.Y) - 0.5f, 0.0f, 1.0f);
-
-                    // Fade the assist out under the handbrake. It exists to stop the car
-                    // rotating away from its direction of travel, which is precisely what the
-                    // player just asked for; left on, it cancels the slide as fast as the rear
-                    // tires can start it.
-                    StabilityYawTorque *= 1.0f - Mathf.Clamp(
-                        HandbrakeInput * HandbrakeStabilitySuppression, 0.0f, 1.0f);
-                }
-            }
-
-            StabilityTorqueVector = Vector3.Zero;
-            if (GetWheelContactCount() < 3)
-            {
-                // Airborne: spring the roof back toward up and damp the tumble.
-                StabilityTorqueVector =
-                    GlobalTransform.Basis.Y.Cross(Vector3.Up) * VehicleInertia * StabilityUprightSpring
-                    + -AngularVelocity * StabilityUprightDamping;
-                ApplyTorque(StabilityTorqueVector);
-            }
-            else
-            {
-                StabilityYawTorque *= StabilityYawGroundMultiplier;
-            }
-
-            if (StabilityYawTorque != 0.0f)
-            {
-                isStabilityOn = true;
-                StabilityYawTorque *= VehicleMath.SignF(-LocalVelocity.X);
-                ApplyTorque(GlobalTransform.Basis.Y * StabilityYawTorque);
-            }
-        }
-
-        StabilityActive = isStabilityOn;
-    }
-
-    // ---------------------------------------------------------------- Queries
-
-    public int GetWheelContactCount()
-    {
-        int contactCount = 0;
-        foreach (Wheel wheel in WheelArray)
-        {
-            if (wheel.IsColliding())
-                contactCount++;
-        }
-        return contactCount;
-    }
-
-    public bool GetIsAWheelSlipping()
-    {
-        foreach (Wheel wheel in DriveWheels)
-        {
-            if (!wheel.LimitSpin)
-                return true;
-        }
-        return false;
-    }
-
-    public float GetDrivetrainSpin()
-    {
-        if (DriveWheels.Count == 0)
-            return 0.0f;
-
-        float driveSpin = 0.0f;
-        foreach (Wheel wheel in DriveWheels)
-            driveSpin += wheel.Spin;
-
-        return driveSpin / DriveWheels.Count;
-    }
-
-    private float GetMaxSteeringSlipAngle()
-    {
-        float steeringSlip = 0.0f;
-        foreach (Wheel wheel in FrontAxle.Wheels)
-        {
-            if (Mathf.Abs(steeringSlip) < Mathf.Abs(wheel.SlipVector.X))
-                steeringSlip = wheel.SlipVector.X;
-        }
-        return steeringSlip;
-    }
-
-    // ---------------------------------------------------------------- Setup maths
-
-    private float CalculateAverageTireFriction(float weight, string surface)
-    {
-        float friction = 0.0f;
-        foreach (Wheel wheel in WheelArray)
-            friction += wheel.GetFriction(weight / WheelArray.Count, surface);
-        return friction;
-    }
-
-    private void CalculateBrakeForce()
-    {
-        float friction = CalculateAverageTireFriction(VehicleMass * 9.8f, SurfaceGroups.Road);
-        _maxBrakeForce = friction * BrakingGripMultiplier * _averageDriveWheelRadius
-                         / WheelArray.Count * BrakeForceMultiplier;
-
-        // Per rear wheel, and off the same friction term as the footbrake so the two stay in
-        // proportion when the tires or the mass change. Upstream divided by the wheel radius
-        // where the footbrake multiplies by it, which left the handbrake on a different scale
-        // to everything around it and too weak to reliably lock the axle.
-        _maxHandbrakeForce = _maxBrakeForce * 0.5f * HandbrakeForceMultiplier;
-    }
-
-    private Vector3 CalculateCenterOfGravity(float frontDistribution,
-                                             Wheel frontLeft, Wheel frontRight,
-                                             Wheel rearLeft, Wheel rearRight)
-    {
-        FrontAxlePosition = frontLeft.Position.Lerp(frontRight.Position, 0.5f);
-        RearAxlePosition = rearLeft.Position.Lerp(rearRight.Position, 0.5f);
-        return RearAxlePosition.Lerp(FrontAxlePosition, frontDistribution);
-    }
-
-    /// <summary>Spring rate (N/mm) that puts the spring at <paramref name="restingRatio"/> under static load.</summary>
-    private static float CalculateSpringRate(float weight, float springLength, float restingRatio)
-    {
-        float correctedRestingRatio = springLength * restingRatio / springLength;
-        float targetCompression = springLength * correctedRestingRatio * 1000.0f;
-        return weight / targetCompression;
-    }
-
-    private static float CalculateDamping(float weight, float springRate, float dampingRatio)
-        => dampingRatio * 2.0f * Mathf.Sqrt(springRate * weight) * 0.01f;
-
-    private static float CalculateAxleSpringForce(float compression, float springLength, float springRate)
-        => springLength * compression * 1000.0f * springRate * 2.0f;
-
-    private float CalculateAckermann(float wheelBase, float trackWidth)
-        => Mathf.Atan(wheelBase * Mathf.Tan(MaxSteeringAngle)
-                      / (wheelBase - trackWidth * 0.5f * Mathf.Tan(MaxSteeringAngle)))
-           / MaxSteeringAngle - 1.0f;
-
-    private static void ApplyWheelAlignment(Wheel wheel, float ackermann, float camber, float toe)
-    {
-        wheel.Ackermann = ackermann;
-        Vector3 rotation = wheel.Rotation;
-        rotation.Z = camber;
-        wheel.Rotation = rotation;
-        wheel.Toe = toe;
-    }
-
-    /// <summary>
-    /// The drive curve used when none was authored: full force off the line, still near full
-    /// through the midrange, then falling to nothing at <see cref="TopSpeed"/>.
-    ///
-    /// The long flat section is what makes a car read as fast — force that starts bleeding away
-    /// immediately feels like it's giving up. Reaching exactly 0 at the end makes the top speed
-    /// a real ceiling instead of something the car creeps toward forever.
-    /// </summary>
-    private static Curve BuildDefaultDriveCurve()
-    {
-        var curve = new Curve();
-        curve.AddPoint(new Vector2(0.0f, 1.0f));
-        curve.AddPoint(new Vector2(0.55f, 0.9f));
-        curve.AddPoint(new Vector2(0.85f, 0.45f));
-        curve.AddPoint(new Vector2(1.0f, 0.0f));
-        return curve;
     }
 }

@@ -24,8 +24,11 @@ public readonly struct VehicleInputState
     /// <summary>-1..1. Positive steers <b>left</b>, matching the vehicle's convention.</summary>
     public float Steering { get; init; }
 
-    /// <summary>0..1.</summary>
-    public float Handbrake { get; init; }
+    /// <summary>
+    /// Whether the drift button is held. What used to be the handbrake: the lever is gone, and
+    /// the button now commits the car to a drift angle rather than locking an axle.
+    /// </summary>
+    public bool Drift { get; init; }
 
     /// <summary>
     /// Whether the nitro button is *held*, not whether it was just pressed. The vehicle finds
@@ -46,8 +49,8 @@ public readonly struct VehicleInputState
             Throttle = Mathf.Pow(Strength(actions.Throttle), 2.0f),
             Brake = Strength(actions.Brake),
             Steering = Strength(actions.SteerLeft) - Strength(actions.SteerRight),
-            Handbrake = Strength(actions.Handbrake),
-            Nitro = !string.IsNullOrEmpty(actions.Nitro) && Input.IsActionPressed(actions.Nitro),
+            Drift = Pressed(actions.Drift),
+            Nitro = Pressed(actions.Nitro),
         };
 
     /// <summary>
@@ -62,7 +65,7 @@ public readonly struct VehicleInputState
         vehicle.ThrottleInput = Throttle;
         vehicle.BrakeInput = Brake;
         vehicle.SteeringInput = Steering;
-        vehicle.HandbrakeInput = Handbrake;
+        vehicle.DriftInput = Drift;
         vehicle.NitroInput = Nitro;
 
         if (vehicle.CurrentGear != -1)
@@ -74,6 +77,9 @@ public readonly struct VehicleInputState
 
     private static float Strength(string action)
         => string.IsNullOrEmpty(action) ? 0.0f : Input.GetActionStrength(action);
+
+    private static bool Pressed(string action)
+        => !string.IsNullOrEmpty(action) && Input.IsActionPressed(action);
 }
 
 /// <summary>
@@ -87,16 +93,22 @@ public partial class VehicleInputActions : Resource
     [Export] public string Brake { get; set; } = "racer_brake";
     [Export] public string SteerLeft { get; set; } = "racer_steer_left";
     [Export] public string SteerRight { get; set; } = "racer_steer_right";
-    [Export] public string Handbrake { get; set; } = "racer_handbrake";
+    /// <summary>
+    /// Commit to a drift. Still mapped to the old <c>racer_handbrake</c> action so existing
+    /// keyboard and pad bindings carry over — the button is in the same place, it just does
+    /// something else now.
+    /// </summary>
+    [Export] public string Drift { get; set; } = "racer_handbrake";
+
     [Export] public string Nitro { get; set; } = "racer_nitro";
 
     /// <summary>
     /// Put the car back on its wheels. Deliberately its own action rather than a <c>ui_*</c> one:
-    /// Godot's <c>ui_accept</c> includes Space, which would fight the handbrake every time you
+    /// Godot's <c>ui_accept</c> includes Space, which would fight the drift button every time you
     /// tried to slide the car.
     /// </summary>
     [Export] public string Reset { get; set; } = "racer_reset";
 
-    // No clutch or shift actions: there is no gearbox. Drive force comes off a speed curve,
-    // and reverse is selected by holding the brake at a standstill.
+    // No clutch or shift actions: there is no gearbox and no drive curve. Drive force is a
+    // clamped solve toward a target speed, and reverse is selected by holding the brake.
 }

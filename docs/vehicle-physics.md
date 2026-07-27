@@ -1,63 +1,90 @@
 # Vehicle physics
 
-Master Track drives on a C# port of
-[Godot-Easy-Vehicle-Physics](https://github.com/DAShoe1/Godot-Easy-Vehicle-Physics) (GEVP),
-a ray-cast rigid-body vehicle. Godot's built-in `VehicleBody3D` is gone — nothing in the
-project references it any more.
+Master Track drives on an **arcade drift model**: a rigid body held up by four ray-cast
+springs, with no tire model at all. It is a port of the approach Walaber describes for
+Parking Garage Rally Circuit in
+[Arcade Drift Car Physics Explained](https://www.youtube.com/watch?v=wOAAitKoV9M).
 
-Licence and credits: [`assets/gevp/ATTRIBUTION.md`](../assets/gevp/ATTRIBUTION.md).
+The previous physics — a C# port of
+[Godot-Easy-Vehicle-Physics](https://github.com/DAShoe1/Godot-Easy-Vehicle-Physics), with a
+brush tire model, real spring rates, differentials, ABS and traction control — is gone. It is
+still on `main` if you want to compare.
 
----
-
-## Why a port and not the addon
-
-The upstream project is GDScript. Master Track is a C# project, and `RacerController` has to
-**be** the vehicle body: it carries the multiplayer authority, the `[Rpc]` hazard warnings and
-the peer-ownership checks, all of which want to sit on the same node as the physics.
-
-C# cannot inherit from a GDScript class. Keeping the addon as-is would have forced the racer
-into a composition shape — a GDScript `Vehicle` root with a C# child poking at it through
-`Call()` — and split the networking away from the body it is about. Porting keeps one
-language, one node, and lets `RacerController : Vehicle` stay a two-line change.
-
-The cost is that this no longer tracks upstream automatically. The port is from commit
-`c392257` (2025-08-17).
+Licence and credits: [`assets/gevp/ATTRIBUTION.md`](../../assets/gevp/ATTRIBUTION.md).
 
 ---
 
-## Layout
+## The whole model
 
-| File | Ported from | What it is |
+The car is a hovercraft wearing a car. Four ideas, in the order they run each physics step:
+
+| Step | What it does | Where |
 |---|---|---|
-| `scripts/vehicles/Vehicle.cs` | `vehicle.gd` | Body, motor, clutch, gearbox, differentials, assists. Every tuning knob lives here. |
-| `scripts/vehicles/Wheel.cs` | `wheel.gd` | One ray-cast wheel: suspension, brush tire model, ABS. |
-| `scripts/vehicles/Axle.cs` | `Axle` inner class | A pair of wheels, their brake bias and diff state. |
-| `scripts/vehicles/VehicleInput.cs` | `vehicle_controllergd.gd` | Input as a value + the action-name map. |
-| `scripts/vehicles/VehicleInputController.cs` | `vehicle_controllergd.gd` | Drop-in node that drives a vehicle from local input. |
-| `scripts/vehicles/VehicleDebugOverlay.cs` | `debug.gd` + `debug_ui.gd` | The tuning overlay. |
-| `scripts/vehicles/EngineSound.cs` | `engine_sound.gd` | RPM-pitched engine sample. |
-| `scripts/vehicles/WheelSmoke.cs` | `wheel_smoke.gd` | Tire smoke on slip. |
-| `scripts/vehicles/SurfaceGroups.cs` | — | Names of the surface node groups. |
-| `scripts/ui/VehicleHud.cs` | `gui.gd` | Speed / RPM / gear readout. |
+| **Suspension** | Each ray applies `(compression × k) − (closing speed × c)` along **world up** | `GroundRay.ApplyGroundForce` |
+| **Drive** | Solve for the force that reaches target speed in one step, clamp it | `Vehicle.ProcessDrive` |
+| **Grip** | Solve for the force that cancels all sideways velocity, keep a % of it | `Vehicle.ProcessGrip` |
+| **Steering** | PD torque pointing the body at a heading vector | `Vehicle.ProcessSteering` |
 
-Not brought across: the demo cars, the demo track, the Kenney car-kit meshes, and
-`camera.gd` — the project already has a better third-person rig in
-`scripts/racer/CameraRig.cs`.
+There are no wheels. `WheelFL` and friends are ray casts that hold up a corner and carry a
+decorative mesh; they have no spin, no brakes, no drive and no tire forces.
+
+### Why "solve then clamp"
+
+Both the drive and the grip force are worked out the same way: *what force would get this
+exactly where I want it in a single step?* — then most of that force is thrown away.
+
+```csharp
+float instantAccel = (desiredSpeed - currentForwardSpeed) / delta;
+float force = instantAccel * Mass;
+ApplyCentralForce(forward * Mathf.Clamp(force, -maxForce, maxForce));
+```
+
+The clamp **is** the drivetrain. Well below the target the car pushes at `MaxAccelForce` flat
+out; as it closes on the target the unclamped force drops under the clamp on its own and the
+car eases in and holds. No curve, no gears, no drag to balance against.
+
+The consequence that matters: **top speed is a number, not an equilibrium.** In the old model
+top speed was where drive force and drag happened to cancel, so pushing past it meant fighting
+the whole drivetrain. Here, raising the target raises the speed, instantly and exactly. That is
+what makes the boost system below possible.
+
+Grip works identically, except the target sideways speed is always zero and the fraction kept
+is `GripFactor`. That fraction is the entire tire model. It does not vary with load, speed or
+how much of the friction budget acceleration is using — which is unphysical, and is exactly why
+the car is predictable.
 
 ---
 
-## Surfaces — the one thing that will bite you
+## Steering has no steering angle
 
-A wheel identifies what it is driving on by reading the **first node group** on whatever its
-ray cast hits, and looking that name up in the vehicle's tire dictionaries.
+The front wheels turning is cosmetic (`GroundRay.VisualSteerAngle`). What actually steers the
+car is a PD controller that torques the body toward `HeadingDirection`:
 
-**Every drivable collider must be in a surface group** — `Road`, `Dirt` or `Grass` (see
-`SurfaceGroups`) — **and it must be the first group on that node.** Put gameplay groups on
-after the surface group, or on a different node.
+```csharp
+turnForce = HeadingError * AlignmentTorqueStrength - yawRate * AlignmentTorqueDamping;
+ApplyTorque(Vector3.Up * Mathf.Clamp(turnForce, -Max, Max) * uprightFactor);
+```
 
-A collider with no groups leaves the wheel on whatever surface it was already on. A collider
-whose first group isn't a known surface logs one warning and is likewise ignored (upstream
-would throw here).
+**This is the one deliberate deviation from the video.** Walaber points the car at
+`camera_rig_01.global_basis.z` — the camera *is* the steering reference, and the car chases it.
+That can't port literally: [`CameraRig.cs`](../scripts/racer/CameraRig.cs) is a child of the car
+with free-look on right-mouse, so coupling steering to it would mean looking around the car
+steered it into a wall. The vehicle owns the heading instead. The maths is otherwise his.
+
+The heading is pushed by the stick and dragged back toward the car's own facing:
+
+```csharp
+_headingYaw += steer * SteeringRate * delta;
+_headingYaw = LerpAngle(_headingYaw, GlobalRotation.Y, 1 - exp(-HeadingRecenterRate * delta));
+```
+
+That recentre is what a trailing chase camera gives Walaber for free, and it is load-bearing —
+without it a held stick winds the heading round forever. With it, the heading settles at a fixed
+offset ahead of the car and the car turns at a steady rate. **`SteeringRate` and
+`HeadingRecenterRate` together set how tight the car corners**; neither means much alone.
+
+Nothing in the steering scales with speed or grip, so the car answers the stick the same at
+30 km/h and at 300.
 
 ---
 
@@ -66,211 +93,203 @@ would throw here).
 | Action | Key | Pad |
 |---|---|---|
 | Throttle | `W` / `↑` | Right trigger |
-| Brake | `S` / `↓` | Left trigger |
+| Brake / reverse | `S` / `↓` | Left trigger |
 | Steer | `A` `D` / `←` `→` | Left stick |
-| Handbrake | `Space` | A |
+| **Drift** | `Space` | A |
 | Nitro | `Shift` | B |
-| Clutch | `C` | Left stick click |
-| Auto/manual gearbox | `T` | LB |
-| Shift up | `F` / `+` | X |
-| Shift down | `R` / `-` | Y |
+| Reset | see `racer_reset` | — |
 | Physics debug overlay | `` ` `` | Right stick click |
 | Cycle debug pages | `,` `.` | D-pad ← → |
 | Free-look camera | hold right mouse | — |
 
-Holding the brake at a standstill swaps between first and reverse — that is the gearbox
-working as designed, not a bug.
+The drift button is still bound to the `racer_handbrake` action, so existing keyboard and pad
+bindings carry over — the button is in the same place, it just does something else now. The
+clutch and shift bindings are gone: there is no gearbox, and reverse engages by holding the
+brake below `ReverseEngageSpeed`.
 
 ---
 
-## Tuning
+## Drifting
 
-Everything is on the `Racer` root node in `scenes/Racer.tscn`, grouped in the inspector.
-Turn the overlay on with `` ` `` and page through with `,` / `.` — the numbers only start
-making sense once you can see what the tires are doing.
+A drift is a **state you ask for**, not something the physics decides has happened. Press the
+drift button above `DriftMinSpeed` and:
 
-Start here:
+- the heading is offset by `DriftAngle` (35°) in the drift direction,
+- `GripFactor` is multiplied by `DriftGripMultiplier` (0.28), so the car actually slews,
+- both ramp in over `DriftBlendSpeed` rather than snapping.
 
-- **`VehicleMass`, `FrontWeightDistribution`** — spring rates, damping and brake bias are all
-  *derived* from these. Set them before touching anything else.
-- **`CenterOfGravityHeightOffset`** — the single biggest lever on how much the car rolls and
-  how easily it spins.
-- **`MaxDriveForce` + `DriveCurve`** — power. The curve's X axis is `speed / TopSpeed`, and
-  `MaxDriveForce / VehicleMass` is the launch acceleration in m/s². Move
-  `LongitudinalGripRatio["Road"]` with it: what sets the car's character is the ratio between
-  the two, not either on its own.
-- **`CoefficientOfFriction["Road"]`** — overall grip.
-- **`FrontTorqueSplit` / `VariableTorqueSplit`** — 0 is RWD, 1 is FWD. The racer ships as
-  plain RWD (`VariableTorqueSplit` is off); turn it on to blend toward AWD under slip.
-- **Assists** — `SteeringSlipAssist`, `CountersteerAssist`, `TractionControlMaxWheelSpin`,
-  `EnableStability`. Turn these down for a car that bites, up for one that flatters.
-- **`DownforceG`** — what stops the car understeering worse and worse as it speeds up. See
-  **Aero and airborne** below; reach for it before you touch `MaxSteeringAngle`.
+Direction comes from the stick at the moment of the press; held straight, the car takes
+whichever way it is already rotating.
+
+### Steering inside a drift
+
+This is the part worth protecting. While drifting, the stick adds **±`DriftSteerRange`** (15°)
+on top of the drift angle:
+
+```gdscript
+camera_fwd.rotated(Vector3.UP, deg_to_rad(35.0 * _drift_dir) + steer_input * deg_to_rad(15.0))
+```
+
+The car is already committed to an arc and the stick tightens or opens it. That is why a drift
+here reads as *driven* rather than *survived*. Set `DriftSteerRange` to 0 and a drift becomes a
+cutscene.
+
+By default the stick does **not** also swing the heading during a drift
+(`DriftHeadingInfluence = 0`), which is closest to the original. Raise it if drifts feel like
+they can't be aimed.
+
+---
+
+## Boost, and chaining
+
+Holding a drift earns tiers by time (`DriftTierTimes`, default 0.55 / 1.3 / 2.2 s). Releasing
+pays out the tier reached:
+
+- `BoostTierSpeed` (8 / 15 / 24 m/s) is **added to `TopSpeed`**,
+- `BoostTierDuration` (1.0 / 1.7 / 2.6 s) is how long it holds,
+- `BoostAccelForce` (14000 N) is added to `MaxAccelForce` so it lands as a shove rather than a
+  polite climb.
+
+**Boosts are additive.** Start a new drift while a boost is still burning — or inside
+`ChainGraceTime` after it — and the next payout stacks on top of what is already there instead
+of replacing it:
+
+```csharp
+BoostSpeed = Mathf.Min(BoostSpeed + speed, MaxBoostSpeed);
+BoostTimeRemaining = Mathf.Max(BoostTimeRemaining, duration);
+```
+
+So a driver who keeps chaining ends up a very long way over `TopSpeed`. `MaxBoostSpeed` (45 m/s)
+is the only thing that stops it — on the racer's 55.6 that is a hard ceiling near 360 km/h.
+When every burst expires the bonus **bleeds** off at `BoostDecayRate` rather than dropping, so
+coming down off a big chain is a moment of the car running out rather than a switch.
+
+Nitro feeds the same bonus (`GrantBoost`), so charges stack with drift boosts and with each
+other exactly the same way. `IsNitroActive` is now an alias for `IsBoosting`, which means the
+exhaust flames, camera FOV kick and HUD all fire on drift boosts too.
+
+`ChainCount` and the `BoostStarted(tier, chainCount)` signal are there for UI — nothing reads
+them yet.
+
+---
+
+## Tuning order
+
+Everything is on the `Racer` root in [`scenes/Racer.tscn`](../scenes/Racer.tscn), grouped in the
+inspector. Turn the overlay on with `` ` `` and page with `,` / `.` — the **Drift and Boost**
+page prints tier, chain depth and the live speed ceiling.
+
+Work in this order; later steps assume earlier ones are settled.
+
+1. **`VehicleMass`, `RideHeight`, `SpringStrength`, `SpringDamping`** — how the car sits. The
+   car settles `mass × 9.8 / 4 / SpringStrength` into its travel; the default is about 7 cm of
+   a 55 cm ride height. Damping around 8–10% of the spring rate.
+2. **`CenterOfMassHeight`** — still the single biggest lever on lean and on flipping. Negative
+   is the safe direction.
+3. **`TopSpeed`, `MaxAccelForce`** — `MaxAccelForce / VehicleMass` is the acceleration in m/s².
+4. **`GripFactor["Road"]`** — how much the car slides at all.
+5. **`SteeringRate` + `HeadingRecenterRate`** — cornering. Together, not separately.
+6. **`DriftAngle`, `DriftGripMultiplier`, `DriftSteerRange`** — how a drift feels.
+7. **`DriftTierTimes`, `BoostTierSpeed`, `MaxBoostSpeed`** — how the boost economy pays out.
 
 **Physics tick rate must stay at 120 Hz or higher** (`project.godot` sets it). The overlay
-shouts at you in red if it drops. Handling changes when you change the tick rate.
+shouts in red if it drops. The solve-then-clamp forces divide by `delta`, so the clamp is what
+keeps them stable — but the drift and boost timings are still tick-sensitive.
 
-### Aero and airborne
+### Ray geometry
 
-Two additions that aren't in GEVP. Both exist because the track is built on **40 m cubes**,
-which makes this a much bigger world than a normal car sim is tuned for.
+A ray sits at the **top of the travel**. The body floats `RideHeight` below it (less the static
+compression), so the ground ends up at `ray Y − RideHeight + compression` in body space. All
+four rays sit at `Y = 0.34` on the racer with `RideHeight = 0.55`.
 
-Cornering radius is `v² / (μg)`. Grip is flat with speed, the force a corner demands grows with
-its square, so with no aero the car understeers worse the faster it goes — at 200 km/h on
-1.8 μ the radius is about 186 m, against a 40 m tile. No amount of steering lock fixes that,
-because above roughly 23 km/h the car is grip-limited rather than lock-limited.
+`TireRadius` is now **only** where the visible wheel mesh sits relative to the contact point —
+it has no effect on physics. `TireWidth` is metres (was millimetres) and is read only by
+`SkidMarks` for the strip width. The mesh goes under the ray's `WheelNode` and must face **+Z**.
 
-- **`DownforceG`** (1.5) — downforce at `TopSpeed`, as a multiple of the car's own weight.
-  Scales with v², so it's absent when you're crawling and largest exactly where the problem is.
-  0 disables it.
-- **`DownforceBalance`** (0.5) — front's share. Rearward for stability at speed, forward to
-  keep the nose alive in a fast corner.
+---
 
-It arrives as **tire load, not a force on the chassis**. Pressing the body down would be the
-physical route, but spring rates are derived so static weight already sits at `RestingRatio`
-(half) of the travel — one g of downforce would park the car on its bump stops. Adding it to
-the normal load in the brush model instead means grip without the ride height collapsing. It
-also means an airborne wheel gets none of it, so **jump arcs are unchanged**.
+## Layout
 
-Falling is the other half. A 40 m drop under real gravity is **2.9 seconds** of hang time,
-which is correct and unplayable:
+| File | What it is |
+|---|---|
+| `scripts/vehicles/Vehicle.cs` | The whole model. Every tuning knob lives here. |
+| `scripts/vehicles/GroundRay.cs` | One corner: ray, spring, surface read, wheel mesh. |
+| `scripts/vehicles/VehicleInput.cs` | Input as a value + the action-name map. |
+| `scripts/vehicles/BodyLean.cs` | The visual pose — roll, drift yaw, squat and dive. |
+| `scripts/vehicles/TireSlip.cs` | One shared "how hard are we sliding" number. |
+| `scripts/vehicles/VehicleDebugOverlay.cs` | The tuning overlay. |
+| `scripts/vehicles/SkidMarks.cs`, `TireSqueal.cs`, `WheelSmoke.cs` | Slide effects. |
+| `scripts/vehicles/EngineSound.cs`, `FakeGearbox.cs` | Engine note, pitched off `SpeedFraction`. |
 
-| Fall gravity | Hang time, one cube | Impact |
-|---|---|---|
-| 1.0× | 2.86 s | 28 m/s |
-| 2.5× | 1.81 s | 44 m/s |
-| **3.0×** (default) | **1.65 s** | 49 m/s |
-| 4.0× | 1.43 s | 56 m/s |
+Deleted with the old model: `Wheel.cs`, `Axle.cs`, `VehicleMath.cs`, and `scenes/racer_old.tscn`
+(an unreferenced CC96-era snapshot that pointed at `Wheel.cs`).
+
+---
+
+## Body pose
+
+[`BodyLean.cs`](../scripts/vehicles/BodyLean.cs) poses the visible shell and touches nothing
+else — no collision shape, no rays. Walaber calls this "posing the car", and it is a separate
+system on purpose: real weight transfer on a body with a low centre of mass is far too subtle to
+read from a chase camera directly behind it.
+
+The old version derived everything from *measured* lateral g, which is why it was so restrained —
+measured g is honest, and honest is not the goal. This one is driven mostly by what the player is
+**asking for**, so the shell answers the stick before the physics catches up:
+
+- **Roll** — `LeanRoll` 9°, plus `DriftRoll` 7° more at full drift.
+- **Drift yaw** — `DriftYaw` 8°, so the shell sits further sideways than the body actually is.
+  This is what makes a drift read as a drift from behind rather than as hard cornering.
+- **Pitch** — `SquatPitch` under power, `DivePitch` under braking, `BoostPitch` on top while a
+  boost burns.
+
+Raise `LeanRoll` and `DriftRoll` first if the car still looks too flat.
+
+---
+
+## Surfaces
+
+Unchanged: a `GroundRay` identifies what it is on by the **first node group** on whatever it
+hits, looked up in `GripFactor` and `SurfaceSpeedMultiplier`.
+
+**Every drivable collider must be in a surface group** — `Road`, `Dirt`, `Grass` or `Ice` (see
+`SurfaceGroups`) — **and it must be the first group on that node.** Put gameplay groups on after
+the surface group, or on a different node. An unknown or missing group leaves the ray on
+whatever surface it was already on and warns once.
+
+`SurfaceSpeedMultiplier` is the off-track penalty: it scales the target speed rather than adding
+rolling resistance, which is cheaper and much easier to reason about.
+
+---
+
+## Airborne
+
+Unchanged in spirit from the old model — both of these are about the 40 m tile scale rather than
+about the car.
 
 - **`FallGravityMultiplier`** (3.0) — extra gravity while airborne **and descending only**.
   Leaving the ascent alone means a ramp still launches the car exactly as high; it just stops
-  hanging at the apex. That asymmetry is what reads as weight rather than heaviness.
+  hanging at the apex.
 - **`MaxFallSpeed`** (65 m/s) — terminal velocity, clamped along gravity in `_IntegrateForces`.
-  Not a feel knob: drag alone puts the real terminal velocity near 310 m/s, so this is the
-  guard rail that keeps a fall off the edge of the board from outrunning the collision solver.
-  Horizontal speed is untouched. 0 disables it.
+  Not a feel knob: it is the guard rail that stops a fall off the edge of the board outrunning
+  the collision solver.
 
-Don't reach for global gravity or `gravity_scale` instead. `CalculateSpringRate` is fed a
-hardcoded `4.9` (half of g), so a car that simply weighed more would sit bottomed out.
+New, and needed because there is no suspension geometry to land on:
 
-### Nitro
+- **`AirborneUprightTorque` / `AirborneUprightDamping`** — levels the car so it lands on its
+  wheels.
+- **`AirborneSteerMultiplier`** (0.35) — air steering at full strength pirouettes the car off
+  every jump.
+- **`MaxPullForce`** — the spring term goes negative when the ground drops away past the ride
+  height, which glues the car over a crest. Left unbounded it also yanks the nose down off a
+  ramp and kills the jump, so it is capped rather than removed.
 
-Five charges per run, spent one per press, never refilled — `ResetNitro()` on the vehicle puts
-them back and is what a race start should call. `TryActivateNitro()` fires one without a button
-press, for pickups or AI. Both `NitroFired(chargesRemaining)` and `NitroEnded()` are signals, so
-audio and VFX can hang off them without polling.
-
-The push goes in at the **body**, along the nose, not through the drivetrain. Routed through the
-wheels a boost gets eaten by traction control, by wheelspin, by a rear axle that is sideways and
-by the drive curve being flat at the top of the range — it would do least exactly when the player
-expects most. Applied to the body it lands whatever the car is doing.
-
-Knobs are under **Nitro**:
-
-- **`NitroForce`** (9000 N) — the shove. Divide by `VehicleMass` for the acceleration it adds:
-  7.5 m/s² on the 1200 kg racer, on top of whatever the wheels are already doing.
-- **`NitroTopSpeedMultiplier`** (1.25) — hard speed cap while boosting, as a multiple of
-  `TopSpeed`. 250 km/h on the racer's 200. Both the drive curve *and* the push itself fade out
-  approaching it, so charges chained back to back hit a limit instead of stacking velocity.
-- **`NitroCharges`** (5), **`NitroDuration`** (1.5 s), **`NitroCooldown`** (0.4 s dead time
-  after a burst, so all five can't be dumped in one press-mash).
-
-`SpeedFraction` deliberately stays scaled to the *unboosted* top speed — it is what the engine
-note is pitched from, and rescaling it under nitro would drop the revs at the moment of the shove.
-
-### Handbrake
-
-Four knobs under **Braking → Handbrake**, in the order worth reaching for:
-
-- **`HandbrakeLockedGrip`** (0.15) — lateral grip a locked rear tire keeps. This is the one
-  that decides whether the car rotates. Lower slides more; 0 is a rear axle on ice.
-- **`HandbrakeStabilitySuppression`** (1.0) — how much of the yaw stability assist the lever
-  switches off. At 0 the assist stays on and will cancel the slide as fast as the tires can
-  start it, whatever the other three say. Turn it down only if you want a car that resists
-  being thrown around.
-- **`HandbrakeForceMultiplier`** (1.5) — handbrake torque per rear wheel as a multiple of the
-  total footbrake torque. Above ~1 the rears lock more or less on contact, so this mostly
-  changes how fast they get there, not whether.
-- **`HandbrakeLockSlip`** (0.7) — how much longitudinal slip counts as fully locked. Raise it
-  for a slide that takes longer to build.
-
-Grip is given up in proportion to the slip the tires actually produced, not to the button, so
-a stationary car keeps its grip however hard the lever is pulled. A straight-line handbrake
-pull still gives a straight skid: locking the rears makes the car unstable in yaw, it doesn't
-create yaw. Carry a little steering into it and the back end goes.
-
-### Wheel geometry
-
-A wheel's `RayCast3D` node sits at the **top of the suspension travel**, not at the wheel
-centre. At rest the wheel centre hangs `SpringLength × RestingRatio` below it. So for a wheel
-centre at ride height `r` with tire radius `t`:
-
-```
-raycast Y = t + SpringLength × RestingRatio
-```
-
-That is why the racer's front rays sit at `0.475` and the rears at `0.5` — different spring
-lengths, same 0.4 m wheel centre, level body. If you change a spring length, move the ray.
-
-The mesh goes under the wheel's `WheelNode` (a plain `Node3D`), and must face **+Z**.
-
----
-
-## Deviations from upstream
-
-Behaviour is identical at default settings. These are the deliberate changes:
-
-1. **Language.** C#, `MasterTrack.Vehicles` namespace, PascalCase members. Every export keeps
-   its meaning and default.
-2. **Unknown surface groups warn once and keep the previous surface** instead of throwing.
-3. **A missing `TorqueCurve` falls back to a flat curve** with a warning instead of crashing.
-4. **`BrakeForceMultiplier` is actually applied.** Upstream declares it and never reads it.
-   The default of `1.0` reproduces the original exactly.
-5. **A wheel adds its own vehicle as a ray-cast exception**, so a ray starting on the
-   chassis' surface can never hit the car it belongs to.
-6. **The debug overlay is one `Control`** rather than a `Node` plus a child `Control`, and it
-   rebuilds its draw list every frame instead of keeping a dictionary of named shapes.
-7. **Input is a value type** (`VehicleInputState`) separate from where it was sampled, so the
-   same mapping can later be fed from the network for server reconciliation.
-8. **Input actions use the project's `snake_case` names** (`racer_accelerate`,
-   `racer_steer_left`, …) rather than upstream's `"Throttle"`, `"Steer Left"`, …
-9. **`can_sleep = false` on the racer body**, so a car waiting on the start line can't be put
-   to sleep by the physics server.
-10. **The handbrake actually breaks the rear axle loose.** Upstream's handbrake adds its force
-    into the shared brake force and then sends it through the front:rear bias split, so the
-    axle it is meant to over-brake receives the smaller share of it — and because the shared
-    field is never reset within a step, the force leaks onto whichever axle is processed
-    afterwards. Here it is a separate torque applied straight to the handbrake axle, and three
-    things that were cancelling the slide are stood down while the lever is up: the yaw
-    stability assist (`HandbrakeStabilitySuppression`), the braking grip bonus, and the rear
-    tires' lateral grip (`HandbrakeLockedGrip`). See **Handbrake** under Tuning.
-11. **Rear ABS works.** Upstream disables ABS on the handbrake axle unconditionally, which
-    left `RearAbsPulseTime` and `RearAbsSpinDifferenceThreshold` inert. It is now disabled only
-    while the handbrake is actually pulled.
-12. **Downforce**, which GEVP has no concept of. Added as tire normal load rather than a body
-    force, for the ride-height reason in **Aero and airborne**. Set `DownforceG = 0` for
-    upstream behaviour.
-13. **Fall gravity and terminal velocity.** Also not upstream — both are about the 40 m tile
-    scale rather than the car. `FallGravityMultiplier = 1` and `MaxFallSpeed = 0` restore plain
-    Godot gravity.
-
-Two GDScript behaviours are reproduced on purpose rather than "fixed":
-
-- **`GearRatioAt` wraps negative indices** the way GDScript arrays do. The transmission
-  genuinely relies on this: in neutral or reverse it computes a gear RPM from index `-1` or
-  `-2` before deciding whether to use it.
-- **`VehicleMath.SignF` returns a float and returns `0` for `0`**, matching GDScript's
-  `signf`. C#'s `Math.Sign`/`Mathf.Sign` return `int`, and several force calculations depend
-  on multiplying by an exact zero.
-
-Three exports remain **inert**, exactly as upstream: `MotorBrake`, `ThrottleSteeringAdjust`
-and `AutomaticTimeBetweenShifts`. They are declared, documented and never read. They're kept
-so a tune copied from a GEVP car transfers cleanly.
+Drive force is cut to zero while airborne. There is nothing to push against, and without the cut
+a car accelerates off a ramp.
 
 ---
 
 ## Known noise
 
-One warning at exit is expected and harmless: Godot reports the looping engine sample as a
-leaked `AudioStreamWAV` during shutdown. It's a teardown-order quirk with autoplay looping
-audio, not a runtime problem.
+Two warnings at exit are expected and predate all of this: `2 ObjectDB instances were leaked`
+and `1 resources still in use`. Ignore them.

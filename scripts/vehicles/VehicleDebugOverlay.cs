@@ -28,7 +28,7 @@ public partial class VehicleDebugOverlay : Control, IVehicleObserver
     [Export] public bool ShowDebug { get; set; }
 
     private static readonly string[] DebugSets =
-        { "All", "Inputs", "Tire Forces", "Suspension Forces", "Drivetrain", "Stability" };
+        { "All", "Inputs", "Grip", "Suspension", "Drift and Boost", "Steering" };
 
     private int _currentDebugSet;
 
@@ -84,14 +84,8 @@ public partial class VehicleDebugOverlay : Control, IVehicleObserver
         string set = DebugSets[_currentDebugSet];
         Basis basis = vehicle.GlobalTransform.Basis;
         Vector3 centerOfGravity = vehicle.GlobalTransform * vehicle.CenterOfMass;
-        Vector3 frontAxle = vehicle.GlobalTransform * vehicle.FrontAxlePosition;
-        Vector3 rearAxle = vehicle.GlobalTransform * vehicle.RearAxlePosition;
-        Vector3 centerAxle = frontAxle.Lerp(rearAxle, 0.5f);
 
         Circle(centerOfGravity, 2.0f, Colors.Blue);
-        Circle(frontAxle, 2.0f, Colors.Green);
-        Circle(rearAxle, 2.0f, Colors.Green);
-        Circle(centerAxle, 2.0f, Colors.Green);
 
         Text($"Debug: {set}", new Vector2(10, 100), Colors.White);
 
@@ -103,78 +97,81 @@ public partial class VehicleDebugOverlay : Control, IVehicleObserver
 
         switch (set)
         {
-            case "Tire Forces":
-                Text("Tire Slip", new Vector2(10, 120), Colors.Yellow);
-                Text("Tire Force", new Vector2(10, 140), Colors.Red);
+            case "Grip":
+                Text($"Surface: {vehicle.SurfaceType}", new Vector2(10, 120), Colors.White);
+                Text($"Grip: {vehicle.CurrentGrip:F2}", new Vector2(10, 140), Colors.Yellow);
+                Text($"Sideways: {vehicle.LateralSpeed:F1} m/s", new Vector2(10, 160), Colors.Orange);
+                Text($"Grounded rays: {vehicle.GroundedRayCount}/4", new Vector2(10, 180), Colors.White);
                 break;
 
-            case "Suspension Forces":
-                Text("Total Suspension Force", new Vector2(10, 120), Colors.Red);
-                Text("Antiroll Bar Force", new Vector2(10, 140), Colors.Blue);
-                Text("Damping Force", new Vector2(10, 160), Colors.Yellow);
-                Text("Current Suspension Length", new Vector2(10, 180), Colors.Green);
+            case "Suspension":
+                Text("Spring Force", new Vector2(10, 120), Colors.Red);
+                Text("Compression", new Vector2(10, 140), Colors.Green);
                 break;
 
             case "Inputs":
-                Text("Steering Input", new Vector2(10, 120), Colors.Gray);
-                Text("Assisted Steering Input", new Vector2(10, 140), Colors.White);
-                Text("Throttle Input", new Vector2(10, 160), Colors.Green);
-                Text("Drive Force", new Vector2(10, 180), Colors.Aqua);
-                Text("Speed / Top Speed", new Vector2(10, 200), Colors.DeepSkyBlue);
-                Text("Brake Input", new Vector2(10, 220), Colors.Red);
-                Text("Handbrake Input", new Vector2(10, 240), Colors.Orange);
-                Text("Nitro Remaining", new Vector2(10, 260), Colors.Violet);
+                Text("Throttle", new Vector2(10, 120), Colors.Green);
+                Text("Speed / Top Speed", new Vector2(10, 140), Colors.DeepSkyBlue);
+                Text("Brake", new Vector2(10, 160), Colors.Red);
+                Text("Drift", new Vector2(10, 180), Colors.Orange);
+                Text("Boost Remaining", new Vector2(10, 200), Colors.Violet);
+                Text($"{vehicle.Speed * 3.6f:F0} km/h", new Vector2(10, 230), Colors.White);
                 break;
 
-            case "Drivetrain":
-                Text("Torque Split", new Vector2(10, 120), Colors.Orange);
+            case "Drift and Boost":
+                Text($"Drift: {(vehicle.IsDrifting ? vehicle.DriftDirection > 0 ? "LEFT" : "RIGHT" : "-")}",
+                     new Vector2(10, 120), Colors.Orange);
+                Text($"Held: {vehicle.DriftTime:F2} s   Tier: {vehicle.DriftTier}",
+                     new Vector2(10, 140), Colors.Orange);
+                Text($"Boost: +{vehicle.BoostSpeed:F1} m/s for {vehicle.BoostTimeRemaining:F2} s",
+                     new Vector2(10, 160), Colors.Violet);
+                Text($"Chain: {vehicle.ChainCount}", new Vector2(10, 180), Colors.Violet);
+                Text($"Ceiling: {(vehicle.TopSpeed + vehicle.BoostSpeed) * 3.6f:F0} km/h",
+                     new Vector2(10, 200), Colors.DeepSkyBlue);
+                Text($"Nitro charges: {vehicle.NitroChargesRemaining}", new Vector2(10, 220), Colors.White);
                 break;
 
-            case "Stability":
-                Text("Yaw Torque", new Vector2(10, 120), Colors.Red);
-                Text("Keep Upright Torque", new Vector2(10, 140), Colors.Magenta);
+            case "Steering":
+                Text("Heading", new Vector2(10, 120), Colors.White);
+                Text("Nose", new Vector2(10, 140), Colors.Gray);
+                Text($"Error: {Mathf.RadToDeg(vehicle.HeadingError):F1} deg",
+                     new Vector2(10, 160), Colors.Yellow);
+                Text($"Torque: {vehicle.SteerTorque:F0} Nm", new Vector2(10, 180), Colors.Aqua);
                 break;
         }
 
         if (set is "Inputs" or "All")
-            BuildInputBars(vehicle, basis, centerOfGravity, frontAxle);
+            BuildInputBars(vehicle, basis, centerOfGravity);
 
-        if (set is "Drivetrain" or "All")
-            BuildDrivetrain(vehicle, frontAxle, rearAxle, centerAxle);
+        if (set is "Steering" or "Drift and Boost" or "All")
+            BuildSteering(vehicle, centerOfGravity);
 
-        if (set is "Stability" or "All")
-            BuildStability(vehicle, basis, centerOfGravity, frontAxle, rearAxle);
-
-        BuildWheels(vehicle, set);
+        BuildRays(vehicle, set);
     }
 
-    private void BuildInputBars(Vehicle vehicle, Basis basis, Vector3 cog, Vector3 frontAxle)
+    /// <summary>
+    /// The heading the car is being asked to point at, against where its nose actually is. The
+    /// gap between the two is the entire steering model — see <see cref="Vehicle.ProcessSteering"/>.
+    /// </summary>
+    private void BuildSteering(Vehicle vehicle, Vector3 cog)
     {
-        // Where the driver asked the wheels to point, versus where the assists put them.
-        Line(frontAxle, basis * new Vector3(-Mathf.Sin(vehicle.SteeringInput * vehicle.MaxSteeringAngle),
-                                            0.0f,
-                                            -Mathf.Cos(vehicle.SteeringInput * vehicle.MaxSteeringAngle)),
-             Colors.Gray);
-        Line(frontAxle, basis * new Vector3(-Mathf.Sin(vehicle.TrueSteeringAmount),
-                                            0.0f,
-                                            -Mathf.Cos(vehicle.TrueSteeringAmount)),
-             Colors.White);
+        Line(cog, vehicle.HeadingDirection * 3.0f, Colors.White);
+        Line(cog, -vehicle.GlobalTransform.Basis.Z * 3.0f, Colors.Gray);
+    }
 
+    private void BuildInputBars(Vehicle vehicle, Basis basis, Vector3 cog)
+    {
         // A row of 0..1 bars beside the car: each gets a black "full scale" backing line.
         Vector3 barOrigin = cog + basis.X * 1.5f;
-        float driveFraction = vehicle.MaxDriveForce > 0.0f
-            ? vehicle.DriveForce / vehicle.MaxDriveForce
-            : 0.0f;
 
         Bar(barOrigin, basis, vehicle.ThrottleAmount, Colors.Green, 0.0f);
-        Bar(barOrigin, basis, driveFraction, Colors.Aqua, 2.0f);
-        Bar(barOrigin, basis, vehicle.SpeedFraction, Colors.DeepSkyBlue, 4.0f);
-        Bar(barOrigin, basis, vehicle.BrakeAmount, Colors.Red, 6.0f);
-        Bar(barOrigin, basis, vehicle.HandbrakeInput, Colors.Orange, 8.0f);
+        Bar(barOrigin, basis, vehicle.SpeedFraction, Colors.DeepSkyBlue, 2.0f);
+        Bar(barOrigin, basis, vehicle.BrakeAmount, Colors.Red, 4.0f);
+        Bar(barOrigin, basis, vehicle.DriftBlend, Colors.Orange, 6.0f);
 
         // Time left on the burst, not charges left — the bar is per-boost, and the count is on
         // the HUD. It reads as a fuse burning down.
-        Bar(barOrigin, basis, vehicle.NitroFraction, Colors.Violet, 10.0f);
+        Bar(barOrigin, basis, vehicle.NitroFraction, Colors.Violet, 8.0f);
     }
 
     private void Bar(Vector3 origin, Basis basis, float value, Color color, float screenOffsetX)
@@ -184,73 +181,25 @@ public partial class VehicleDebugOverlay : Control, IVehicleObserver
         Line(origin, basis.Y * value, color, offset);
     }
 
-    private void BuildDrivetrain(Vehicle vehicle, Vector3 frontAxle, Vector3 rearAxle, Vector3 centerAxle)
+    private void BuildRays(Vehicle vehicle, string set)
     {
-        float split = vehicle.TrueTorqueSplit;
-        Line(centerAxle, (frontAxle - centerAxle) * split, Colors.Orange);
-        Line(centerAxle, (rearAxle - centerAxle) * (1.0f - split), Colors.Orange);
-
-        float frontSplit = (vehicle.FrontAxle.AppliedSplit + 1.0f) * 0.5f;
-        Line(frontAxle, (vehicle.FrontAxle.Wheels[0].GlobalPosition - frontAxle) * frontSplit * split,
-             Colors.Orange);
-        Line(frontAxle, (vehicle.FrontAxle.Wheels[1].GlobalPosition - frontAxle) * (1.0f - frontSplit) * split,
-             Colors.Orange);
-
-        float rearSplit = (vehicle.RearAxle.AppliedSplit + 1.0f) * 0.5f;
-        Line(rearAxle, (vehicle.RearAxle.Wheels[0].GlobalPosition - rearAxle) * rearSplit * (1.0f - split),
-             Colors.Orange);
-        Line(rearAxle, (vehicle.RearAxle.Wheels[1].GlobalPosition - rearAxle) * (1.0f - rearSplit) * (1.0f - split),
-             Colors.Orange);
-    }
-
-    private void BuildStability(Vehicle vehicle, Basis basis, Vector3 cog,
-                                Vector3 frontAxle, Vector3 rearAxle)
-    {
-        Vector3 normalized = vehicle.StabilityTorqueVector.Normalized();
-        Line(cog,
-             new Vector3(normalized.Z, 0.0f, normalized.X) * vehicle.StabilityTorqueVector.Length() * 0.001f,
-             Colors.Magenta);
-
-        if (vehicle.StabilityYawStrength == 0.0f)
-            return;
-
-        float yaw = vehicle.StabilityYawTorque * 0.001f / vehicle.StabilityYawStrength;
-        Line(frontAxle, basis.X * yaw, Colors.Red);
-        Line(rearAxle, -basis.X * yaw, Colors.Red);
-    }
-
-    private void BuildWheels(Vehicle vehicle, string set)
-    {
-        foreach (Wheel wheel in vehicle.WheelArray)
+        foreach (GroundRay ray in vehicle.WheelArray)
         {
-            // Green = the tire is inside its force limit, red = it's saturated and slipping.
-            Circle(wheel.GlobalPosition, 2.0f, wheel.LimitSpin ? Colors.Green : Colors.Red);
-            Basis wheelBasis = wheel.GlobalTransform.Basis;
+            // Green = this corner is on the ground, red = it is in the air.
+            Circle(ray.GlobalPosition, 2.0f, ray.IsGrounded ? Colors.Green : Colors.Red);
 
-            if (set is "Suspension Forces" or "All")
-            {
-                Line(wheel.GlobalPosition, wheelBasis.Y * wheel.SpringForce * 0.0002f, Colors.Red);
-                Line(wheel.GlobalPosition,
-                     wheelBasis.Y * (wheel.AntirollForce + wheel.DampingForce) * 0.0002f, Colors.Blue);
-                Line(wheel.GlobalPosition, wheelBasis.Y * wheel.DampingForce * 0.0002f, Colors.Yellow);
+            if (set is not ("Suspension" or "All") || !ray.IsGrounded)
+                continue;
 
-                // A travel gauge offset to whichever side of the car this wheel is on.
-                var gaugeOffset = new Vector2(4.0f * VehicleMath.SignF(wheel.Position.X), 0.0f);
-                Line(wheel.GlobalPosition, -wheelBasis.Y, Colors.DarkGreen, gaugeOffset);
-                Line(wheel.GlobalPosition,
-                     -wheelBasis.Y * (wheel.SpringCurrentLength / wheel.SpringLength),
-                     Colors.Green, gaugeOffset);
-            }
+            // Along world up, because that is the direction the spring actually pushes.
+            Line(ray.GlobalPosition, Vector3.Up * ray.SpringForce * 0.00004f, Colors.Red);
 
-            if (set is "Tire Forces" or "All")
-            {
-                Vector3 force = (wheelBasis.X * wheel.ForceVector.X
-                                 + wheelBasis.Z * wheel.ForceVector.Y) * 0.0002f;
-                Vector3 slip = (wheelBasis.X * -wheel.SlipVector.X
-                                + wheelBasis.Z * -wheel.SlipVector.Y) * 2.0f;
-                Line(wheel.LastCollisionPoint, force, Colors.Red);
-                Line(wheel.LastCollisionPoint, slip, Colors.Yellow);
-            }
+            // A travel gauge offset to whichever side of the car this corner is on.
+            var gaugeOffset = new Vector2(ray.Position.X >= 0.0f ? 4.0f : -4.0f, 0.0f);
+            Line(ray.GlobalPosition, Vector3.Down, Colors.DarkGreen, gaugeOffset);
+            Line(ray.GlobalPosition,
+                 Vector3.Down * Mathf.Clamp(1.0f - ray.Compression / Mathf.Max(ray.RestLength, 0.001f), 0.0f, 1.0f),
+                 Colors.Green, gaugeOffset);
         }
     }
 

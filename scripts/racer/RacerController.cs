@@ -6,9 +6,9 @@ using MasterTrack.Vehicles;
 namespace MasterTrack.Racer;
 
 /// <summary>
-/// A Racer's car in third person. The driving comes from <see cref="Vehicle"/> — a ray-cast
-/// rigid body with real suspension, a brush tire model, a gearbox and a stack of assists —
-/// so this class is only about *who* is driving and what they're told.
+/// A Racer's car in third person. The driving comes from <see cref="Vehicle"/> — a hovercraft on
+/// four ray-cast springs, with drift and chained boosts — so this class is only about *who* is
+/// driving and what they're told.
 ///
 /// Input is read locally by the owning peer for responsiveness; every other peer sees this car
 /// through a MultiplayerSynchronizer carrying its pose. That's what puts the racers on the Track
@@ -82,11 +82,11 @@ public partial class RacerController : Vehicle
 	[Export] public bool NetNitro { get; set; }
 
 	/// <summary>
-	/// Whether this car is burning nitro, from whichever source is authoritative for it: its own
+	/// Whether this car is boosting, from whichever source is authoritative for it: its own
 	/// simulation if we are driving it, the replicated flag if someone else is. What the cosmetic
 	/// effects should read.
 	/// </summary>
-	public bool IsBoosting => IsRemote ? NetNitro : IsNitroActive;
+	public override bool IsBoosting => IsRemote ? NetNitro : base.IsBoosting;
 
 	/// <summary>
 	/// How often the recovery pose is refreshed, in seconds. Coarse on purpose: it wants to be
@@ -97,7 +97,7 @@ public partial class RacerController : Vehicle
 	/// <summary>How square to the ground the car must be for a pose to count as recoverable.</summary>
 	private const float RecoveryUprightDot = 0.7f;
 
-	/// <summary>Wheels that must be touching something for a pose to count as recoverable.</summary>
+	/// <summary>Ground rays that must be touching something for a pose to count as recoverable.</summary>
 	private const int RecoveryGroundedWheels = 3;
 
 	/// <summary>The last place this car was upright on solid ground. Where a reset puts it back.</summary>
@@ -162,12 +162,15 @@ public partial class RacerController : Vehicle
 	/// Put this car's model on the rig: the body, and the four rims.
 	///
 	/// The rims are scaled rather than taken as they come. Each variant's wheels were modelled at
-	/// a different radius (see <c>assets/cars/README.md</c>) while <c>Wheel.cs</c> positions the
-	/// hub without ever scaling it, so an unscaled rim renders sunk into the road or floating
-	/// above it. Scaling to the rig's own <see cref="Vehicle.FrontTireRadius"/> means all three
+	/// a different radius (see <c>assets/cars/README.md</c>) while <c>GroundRay.cs</c> positions
+	/// the hub without ever scaling it, so an unscaled rim renders sunk into the road or floating
+	/// above it. Scaling to each ray's own <see cref="GroundRay.TireRadius"/> means all three
 	/// variants sit right *and* handle identically — which is the point for this playtest. Random
 	/// assignment of different handling would confound exactly what the playtest is measuring:
 	/// you could not tell feedback about the physics from feedback about which car someone drew.
+	///
+	/// Note the wheels are pure decoration now: they carry no tire model, no spin and no drive.
+	/// Their radius only decides where the mesh sits relative to the contact point.
 	/// </summary>
 	private void ApplyVariant()
 	{
@@ -178,8 +181,8 @@ public partial class RacerController : Vehicle
 		if (GetNodeOrNull<Node3D>("BodyRig") is { } bodyRig)
 			SwapModel(bodyRig, "BodyModel", variant.BodyPath, Transform3D.Identity);
 
-		float front = FrontTireRadius / variant.ModelledFrontRadius;
-		float rear = RearTireRadius / variant.ModelledRearRadius;
+		float front = (FrontLeftWheel?.TireRadius ?? 0.3f) / variant.ModelledFrontRadius;
+		float rear = (RearLeftWheel?.TireRadius ?? 0.3f) / variant.ModelledRearRadius;
 
 		SwapRim("WheelFL/WheelFLHub", "RimFL", variant.RimLeftPath, front);
 		SwapRim("WheelFR/WheelFRHub", "RimFR", variant.RimRightPath, front);
@@ -306,14 +309,7 @@ public partial class RacerController : Vehicle
 		if (!IsVehicleReady || GlobalBasis.Y.Dot(Vector3.Up) < RecoveryUprightDot)
 			return;
 
-		int grounded = 0;
-		foreach (Wheel wheel in WheelArray)
-		{
-			if (wheel.IsColliding())
-				grounded++;
-		}
-
-		if (grounded >= RecoveryGroundedWheels)
+		if (GroundedRayCount >= RecoveryGroundedWheels)
 			_recoveryPose = GlobalTransform;
 	}
 

@@ -85,13 +85,16 @@ and a client can't place a tile by lying about its shape.
 
 ## Driving
 
-The car runs on a C# port of
-[Godot-Easy-Vehicle-Physics](https://github.com/DAShoe1/Godot-Easy-Vehicle-Physics) — a
-ray-cast rigid body with real suspension, a brush tire model, a clutch and gearbox, and a
-stack of driver assists. Godot's built-in `VehicleBody3D` is no longer used anywhere.
+The car is an **arcade drift model** — a rigid body on four ray-cast springs with no tire model
+at all, following the approach Walaber describes for Parking Garage Rally Circuit. Drive force
+and grip are each a one-step solve that gets clamped; steering is a torque pointing the body at
+a heading vector. Godot's built-in `VehicleBody3D` is not used anywhere.
 
-Full write-up, tuning guide and the deviations from upstream:
-**[`docs/vehicle-physics.md`](docs/vehicle-physics.md)**.
+Holding the drift button commits the car to a 35° angle you can still steer ±15° inside, and
+releasing a long enough drift pays out a boost that **stacks** with any boost still burning — so
+chained drifts run the car a long way over its normal top speed.
+
+Full write-up and tuning guide: **[`docs/vehicle-physics.md`](docs/vehicle-physics.md)**.
 
 Surfaces are read from **node groups** — every drivable collider must be in `Road`, `Dirt`,
 `Grass` or `Ice`, and it has to be that node's *first* group.
@@ -118,10 +121,10 @@ master-track/
 	├── networking/
 	│   ├── NetworkManager.cs     # autoload: host/join, peer lifecycle
 	│   └── GameManager.cs        # autoload: roles, rounds, game state
-	├── vehicles/                 # the ported vehicle physics
-	│   ├── Vehicle.cs            # body, motor, clutch, gearbox, assists — all tuning
-	│   ├── Wheel.cs              # one raycast wheel: suspension, tires, ABS
-	│   ├── Axle.cs               # a pair of wheels + their differential
+	├── vehicles/                 # the arcade drift physics
+	│   ├── Vehicle.cs            # the whole model — all tuning lives here
+	│   ├── GroundRay.cs          # one corner: ray, spring, surface, wheel mesh
+	│   ├── BodyLean.cs           # the visual pose: roll, drift yaw, squat/dive
 	│   ├── VehicleInput.cs       # input as a value + the action map
 	│   ├── VehicleDebugOverlay.cs# the tuning overlay
 	│   ├── SurfaceGroups.cs      # Road / Dirt / Grass / Ice group names
