@@ -154,7 +154,7 @@ Nothing in the steering scales with speed or grip, so the car answers the stick 
 | Brake / reverse | `S` / `↓` | Left trigger |
 | Steer | `A` `D` / `←` `→` | Left stick |
 | **Drift** | `Space` | A |
-| **Flip** (airborne) | `W` nose up / `S` nose down | Triggers |
+| **Flip** (airborne) | `W` nose **down** / `S` nose **up** | Triggers |
 | **Turn** (airborne) | `A` `D` / `←` `→` | Left stick |
 | Nitro | `Shift` | B |
 | Reset | see `racer_reset` | — |
@@ -466,7 +466,8 @@ acceleration that keeps adding for as long as the button is held, which lets the
 into a spin it cannot recover from. Releasing drives the rate back to zero, which is also what
 bleeds off a tumble from a bad take-off; there is no separate damping term.
 
-- **`AirPitchRate`** (140 °/s) — throttle pitches the nose **up**, brake pitches it **down**.
+- **`AirPitchRate`** (140 °/s) — brake pitches the nose **up**, throttle pitches it **down**;
+  flight-stick sense, where pushing forward drops the nose.
   Those two pedals do nothing at all in the air (drive is scaled by `GroundFraction`, which is
   zero), so they were free, and they are the pair the player's thumbs are already on. 140 °/s is
   a bit over two seconds per full rotation.

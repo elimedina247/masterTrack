@@ -335,8 +335,8 @@ public partial class Vehicle : RigidBody3D
     // ---------------------------------------------------------------- Airborne
 
     /// <summary>
-    /// Fastest the car flips in the air, in degrees per second. Throttle pitches the nose up,
-    /// brake pitches it down.
+    /// Fastest the car flips in the air, in degrees per second. Brake pitches the nose up,
+    /// throttle pitches it down — flight-stick sense, where pushing forward drops the nose.
     ///
     /// Those two pedals do nothing at all in the air — drive force is scaled by
     /// <see cref="GroundFraction"/>, which is zero — so they are free, and they are the pair the
@@ -1026,8 +1026,12 @@ public partial class Vehicle : RigidBody3D
         AirTime += delta;
 
         // Throttle and brake are dead weight in the air, so they fly the car instead.
-        float pitchInput = Mathf.Clamp(ThrottleInput, 0.0f, 1.0f)
-                           - Mathf.Clamp(BrakeInput, 0.0f, 1.0f);
+        //
+        // Brake is nose up, throttle is nose down — flight-stick sense, where pushing forward on
+        // the control puts the nose down. A positive torque about the car's +X pitches the nose
+        // up, so the brake is the positive term.
+        float pitchInput = Mathf.Clamp(BrakeInput, 0.0f, 1.0f)
+                           - Mathf.Clamp(ThrottleInput, 0.0f, 1.0f);
         float yawInput = Mathf.Clamp(SteeringInput, -1.0f, 1.0f);
 
         // Rate control, not torque. Each axis is driven toward a target angular rate, so the
