@@ -513,8 +513,30 @@ rolling resistance, which is cheaper and much easier to reason about.
 
 ## Airborne
 
-Gravity in the air is now **just gravity**. There is no extra fall multiplier and no auto-level:
-both were the last surviving pieces of the previous physics, and both were removed on purpose.
+Gravity in the air is **just gravity** — there is no fall multiplier and no auto-level, both of
+which were the last surviving pieces of the previous physics and were removed on purpose.
+
+But gravity itself is **2 g**. The racer sets `gravity_scale = 2.0` on the rigid body, because at
+1 g the car floats: a 40 m drop hangs for 2.86 seconds, which is correct and unplayable.
+
+**Mass is not the knob here, and reaching for it is the natural mistake.** A 1200 kg car and a
+4800 kg car fall at exactly the same rate — gravity is an acceleration and mass cancels out.
+Making the car heavier only makes it accelerate and corner worse. Airtime comes from gravity and
+from launch speed, nothing else.
+
+| `gravity_scale` | 40 m drop | Small ramp hop | Impact from 40 m |
+|---|---|---|---|
+| 1.0 | 2.86 s | 1.63 s | 28.0 m/s |
+| **2.0** | **2.02 s** | **0.82 s** | **39.6 m/s** |
+| 3.0 | 1.65 s | 0.54 s | 48.5 m/s |
+
+Symmetric, unlike the old descent-only multiplier: it tightens the whole arc rather than just the
+hang, which is what reads as weight rather than as the car being yanked down at the apex.
+
+**If you change it, scale the springs with it.** They carry `mass × g / 4` at rest, so at 2 g the
+car sinks to 14 cm of static compression instead of 7 and loses a third of its travel. The scene
+runs `SpringStrength = 84000` and `SpringDamping = 7200` — both exactly double the code defaults —
+which puts the ride height back where it was.
 
 The aerial controls are **orientation only**. They apply torque and nothing else — no drive, no
 grip, no thrust. See **In the air the car is a projectile** above for why that has to hold.

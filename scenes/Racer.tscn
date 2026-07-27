@@ -21,11 +21,14 @@ size = Vector3(1.2, 0.42, 2.25)
 
 [node name="Racer" type="RigidBody3D" unique_id=1098173407 node_paths=PackedStringArray("FrontLeftWheel", "FrontRightWheel", "RearLeftWheel", "RearRightWheel")]
 can_sleep = false
+gravity_scale = 2.0
 script = ExtResource("1_racer")
 FrontLeftWheel = NodePath("WheelFL")
 FrontRightWheel = NodePath("WheelFR")
 RearLeftWheel = NodePath("WheelRL")
 RearRightWheel = NodePath("WheelRR")
+SpringStrength = 84000.0
+SpringDamping = 7200.0
 
 [node name="FlatShade" type="Node" parent="." unique_id=610255931]
 script = ExtResource("13_flatshade")

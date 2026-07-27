@@ -57,9 +57,13 @@ public partial class Vehicle : RigidBody3D
     [Export] public float RideHeight { get; set; } = 0.55f;
 
     /// <summary>
-    /// Spring rate in N/m. At rest each corner carries <c>VehicleMass × 9.8 / 4</c> newtons, so
-    /// the car settles <c>mass × 9.8 / 4 / SpringStrength</c> into its travel — about 7 cm for a
-    /// 1200 kg car on the default.
+    /// Spring rate in N/m. At rest each corner carries <c>VehicleMass × g / 4</c> newtons, so the
+    /// car settles <c>mass × g / 4 / SpringStrength</c> into its travel.
+    ///
+    /// <b>Scale this with <c>gravity_scale</c>.</b> The racer runs at 2 g to keep jumps from
+    /// floating (see docs/vehicle-physics.md), so the scene sets 84000 rather than the 42000 here
+    /// — which is what keeps the static compression at 7 cm rather than letting the car sink to
+    /// 14 and lose a third of its suspension travel.
     /// </summary>
     [Export] public float SpringStrength { get; set; } = 42000.0f;
 
