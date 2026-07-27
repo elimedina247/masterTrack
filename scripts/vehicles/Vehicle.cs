@@ -442,18 +442,6 @@ public partial class Vehicle : RigidBody3D
     /// <summary>Surface under the car, read off the rear rays. See <see cref="SurfaceGroups"/>.</summary>
     public string SurfaceType { get; private set; } = SurfaceGroups.Road;
 
-    /// <summary>
-    /// Rotation the visible wheels should take from the body pose, on top of their own steering
-    /// and roll. Written by <see cref="BodyLean"/> and read by every <see cref="GroundRay"/>.
-    ///
-    /// The ground rays are children of the chassis, not of the posed shell — they have to be, or
-    /// the pose would swing the ray casts around and the suspension would read the road from the
-    /// wrong places. Left alone that means the shell yaws a long way into a drift while the
-    /// wheels stay square to the chassis, which looks broken. This carries the rotation across
-    /// without carrying the translation, so the wheels turn with the body but stay planted on
-    /// their contact patches.
-    /// </summary>
-    public Basis WheelPose { get; set; } = Basis.Identity;
 
     // ---- Drift ----
 
@@ -561,9 +549,8 @@ public partial class Vehicle : RigidBody3D
         WheelArray.Add(rl);
         WheelArray.Add(rr);
 
-        fl.Steers = true;
-        fr.Steers = true;
-
+        // Which corners look like they steer is a WheelVisual's business, not a ray's — the rays
+        // never turn, because there is no steering angle in the physics to turn them by.
         foreach (GroundRay ray in WheelArray)
         {
             ray.RestLength = RideHeight;
@@ -618,15 +605,6 @@ public partial class Vehicle : RigidBody3D
         ProcessGrip(dt);
         ProcessSteering(dt);
         ProcessAirborne();
-    }
-
-    public override void _Process(double delta)
-    {
-        if (!IsVehicleReady)
-            return;
-
-        foreach (GroundRay ray in WheelArray)
-            ray.UpdateVisual(this, (float)delta);
     }
 
     /// <summary>

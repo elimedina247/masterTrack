@@ -25,8 +25,9 @@ The car is a hovercraft wearing a car. Four ideas, in the order they run each ph
 | **Grip** | Solve for the force that cancels all sideways velocity, keep a % of it | `Vehicle.ProcessGrip` |
 | **Steering** | PD torque pointing the body at a heading vector | `Vehicle.ProcessSteering` |
 
-There are no wheels. `WheelFL` and friends are ray casts that hold up a corner and carry a
-decorative mesh; they have no spin, no brakes, no drive and no tire forces.
+There are no wheels. `WheelFL` and friends are ray casts that hold up a corner and report what
+it is standing on; they have no spin, no brakes, no drive and no tire forces. The wheels you can
+see are `WheelVisual` nodes hanging off the posed shell — see **Body pose** below.
 
 ### Why "solve then clamp"
 
@@ -57,7 +58,7 @@ the car is predictable.
 
 ## Steering has no steering angle
 
-The front wheels turning is cosmetic (`GroundRay.VisualSteerAngle`). What actually steers the
+The front wheels turning is cosmetic (`WheelVisual.VisualSteerAngle`). What actually steers the
 car is a PD controller that torques the body toward `HeadingDirection`:
 
 ```csharp
@@ -242,9 +243,9 @@ A ray sits at the **top of the travel**. The body floats `RideHeight` below it (
 compression), so the ground ends up at `ray Y − RideHeight + compression` in body space. All
 four rays sit at `Y = 0.34` on the racer with `RideHeight = 0.55`.
 
-`TireRadius` is now **only** where the visible wheel mesh sits relative to the contact point —
-it has no effect on physics. `TireWidth` is metres (was millimetres) and is read only by
-`SkidMarks` for the strip width. The mesh goes under the ray's `WheelNode` and must face **+Z**.
+`TireWidth` lives on the ray, is in metres (was millimetres), and is read only by `SkidMarks` for
+the strip width. `TireRadius` lives on the `WheelVisual` instead, because it is purely about where
+the mesh sits. The mesh goes under the `WheelVisual` and must face **+Z**.
 
 ---
 
@@ -253,7 +254,8 @@ it has no effect on physics. `TireWidth` is metres (was millimetres) and is read
 | File | What it is |
 |---|---|
 | `scripts/vehicles/Vehicle.cs` | The whole model. Every tuning knob lives here. |
-| `scripts/vehicles/GroundRay.cs` | One corner: ray, spring, surface read, wheel mesh. |
+| `scripts/vehicles/GroundRay.cs` | One corner: ray, spring, surface read. Physics only. |
+| `scripts/vehicles/WheelVisual.cs` | One visible wheel, parented to the posed shell. |
 | `scripts/vehicles/VehicleInput.cs` | Input as a value + the action-name map. |
 | `scripts/vehicles/BodyLean.cs` | The visual pose — roll, drift yaw, squat and dive. |
 | `scripts/vehicles/TireSlip.cs` | One shared "how hard are we sliding" number. |
@@ -298,25 +300,49 @@ makes the nose point into the slide.
 
 `MaxHeadingYaw` (40°) stops a spin or a hard collision twisting the shell off its chassis.
 
-### The wheels have to come with it
+### The wheels are children of the shell
 
-The ground rays are children of the **chassis**, not of the posed shell — they have to be, or the
-pose would swing the ray casts around and the suspension would read the road from the wrong
-places. Left alone that means the shell yaws 35° into a drift while the wheels stay square to the
-chassis, and the car looks like its shell has come loose.
+**The wheels are decoration and nothing else.** No force in the game is applied at a wheel, so
+there is nothing tying a wheel mesh to the ray cast that holds that corner up — which means the
+mesh is free to live wherever it looks best.
 
-`BodyLean` therefore publishes `Vehicle.WheelPose`, a rotation each `GroundRay` composes into its
-wheel. Rotation only, never translation, so the wheels turn with the body but stay planted on
-their contact patches.
+It looks best under the **posed shell**. `WheelVisual` nodes are children of `BodyRig`, so they
+inherit the body's roll, yaw and pitch for free and the car reads as one object. The alternative
+— parenting them to the chassis and trying to bolt the rotation back on afterwards — is what made
+the wheels stay square while the body swung 35° into a drift, and what drove them into ramps: the
+placement ran on the rendered frame while the contact point came off the last physics tick, and on
+a ramp the two disagree.
 
-- **`WheelYawFollow`** (1.0) — wants to be 1. This is the fix.
-- **`WheelRollFollow`** (0.0) — deliberately off. A real wheel stays flat on the road while the
-  body leans over it, and at up to 16° of roll, wheels that leaned with the body would visibly
-  lift off their contact patches. Turn it up only if you want the whole car to read as one rigid
-  lump.
+The ray casts stay on the **chassis**. They have to: hanging them off the shell would swing the
+probes around with the pose and the suspension would read the road from the wrong places.
 
-Pitch is never passed on: on a wheel it is a rotation about the axle axis, indistinguishable from
-rolling a little further.
+So a `WheelVisual` computes exactly one thing per frame — how far below its rest position to hang
+so the tire lands on the road — from its ray's contact point **in world space**, then measured
+against its own parent. That last part is what makes it immune to the pose: however far the shell
+has leaned over this corner, the answer is still "put the hub `TireRadius` above the tarmac".
+
+| Export | Default | |
+|---|---|---|
+| `MaxDroop` | 0.30 | How far it hangs in the air |
+| `MaxLift` | 0.50 | Bump travel. Must cover the springs bottoming out — see below |
+| `TravelResponse` | 30 | How fast it closes on the road |
+| `ReboundRatio` | 0.55 | Extends slower than it compresses, which is what reads as damping |
+
+Place the node at the wheel's **static** centre height so travel reads zero at rest.
+
+`MaxLift` is the one to be careful with. Clamping it short does not keep the wheel out of the
+bodywork — it drives the wheel *through the road*, because the hub stops rising while the tarmac
+keeps coming up to meet it. A wheel clipping an arch is much the lesser evil.
+
+### Suspension you can see
+
+There is nothing faked here. The wheels are pinned to the road and the **body springs above
+them**, which is exactly what the four ray casts are already doing to the rigid body — so hitting
+a kerb compresses the visible suspension because the car really did compress.
+
+The only cosmetic liberty is `ReboundRatio`: the wheel snaps up over a bump and eases back down
+rather than moving at the same rate both ways, because symmetric travel reads as a mechanism and
+asymmetric travel reads as a damped spring.
 
 Raise `LeanRoll` and `DriftRoll` if the car still looks too flat, and `HeadingYawFollow` if it
 doesn't look sideways enough.

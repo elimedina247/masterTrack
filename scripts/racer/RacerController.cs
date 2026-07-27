@@ -181,24 +181,29 @@ public partial class RacerController : Vehicle
 		if (GetNodeOrNull<Node3D>("BodyRig") is { } bodyRig)
 			SwapModel(bodyRig, "BodyModel", variant.BodyPath, Transform3D.Identity);
 
-		float front = (FrontLeftWheel?.TireRadius ?? 0.3f) / variant.ModelledFrontRadius;
-		float rear = (RearLeftWheel?.TireRadius ?? 0.3f) / variant.ModelledRearRadius;
-
-		SwapRim("WheelFL/WheelFLHub", "RimFL", variant.RimLeftPath, front);
-		SwapRim("WheelFR/WheelFRHub", "RimFR", variant.RimRightPath, front);
-		SwapRim("WheelRL/WheelRLHub", "RimRL", variant.RimLeftPath, rear);
-		SwapRim("WheelRR/WheelRRHub", "RimRR", variant.RimRightPath, rear);
+		// The wheels hang off the posed shell, not off the ground rays — see WheelVisual.
+		SwapRim("BodyRig/WheelFLHub", "RimFL", variant.RimLeftPath, variant.ModelledFrontRadius);
+		SwapRim("BodyRig/WheelFRHub", "RimFR", variant.RimRightPath, variant.ModelledFrontRadius);
+		SwapRim("BodyRig/WheelRLHub", "RimRL", variant.RimLeftPath, variant.ModelledRearRadius);
+		SwapRim("BodyRig/WheelRRHub", "RimRR", variant.RimRightPath, variant.ModelledRearRadius);
 	}
 
 	/// <summary>
 	/// Swap one rim, keeping the node's own orientation. All four rim nodes carry the same axle
 	/// rotation and the left/right mirroring is baked into the assets, so that transform is the
 	/// asset convention rather than anything per-variant — it must survive the swap.
+	///
+	/// The rim is scaled to the hub's own <see cref="WheelVisual.TireRadius"/>, which is also what
+	/// decides where the hub sits above the road, so every variant's wheels end up the same size
+	/// and sitting right whatever radius they were modelled at.
 	/// </summary>
-	private void SwapRim(string hubPath, string rimName, string scenePath, float scale)
+	private void SwapRim(string hubPath, string rimName, string scenePath, float modelledRadius)
 	{
 		if (GetNodeOrNull<Node3D>(hubPath) is not { } hub)
 			return;
+
+		float radius = hub is WheelVisual wheel ? wheel.TireRadius : 0.3f;
+		float scale = modelledRadius > 0.0f ? radius / modelledRadius : 1.0f;
 
 		Transform3D axle = hub.GetNodeOrNull<Node3D>(rimName)?.Transform ?? Transform3D.Identity;
 		SwapModel(hub, rimName, scenePath, axle.Scaled(new Vector3(scale, scale, scale)));

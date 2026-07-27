@@ -5,41 +5,27 @@ namespace MasterTrack.Vehicles;
 /// <summary>
 /// One corner of the hovercraft: a ray cast down from the chassis with a spring and damper on it.
 ///
-/// This is <b>not</b> a wheel. It carries no tire model, no brakes, no spin and no drive torque —
-/// grip and drive live on the body in <see cref="Vehicle"/>, applied as central forces. All this
-/// does is hold that corner of the car off the ground and report what it is standing on. The
-/// wheel you can see is decoration hung off <see cref="WheelNode"/>.
+/// This is <b>not</b> a wheel, and it carries no wheel. It has no tire model, no brakes, no spin
+/// and no drive torque — grip and drive live on the body in <see cref="Vehicle"/>, applied as
+/// central forces. All this does is hold that corner of the car off the ground and report what it
+/// is standing on.
 ///
-/// Place these at the <b>top of the suspension travel</b>, the same as the old ray-cast wheels:
-/// the body hangs <see cref="RestLength"/> below the ray origin at rest.
+/// The visible wheel is a <see cref="WheelVisual"/> parented to the <i>posed shell</i>, which
+/// reads this ray's contact point and nothing else. Keeping the two apart is what lets the shell
+/// lean and swing while the wheels stay on the road: a mesh hung off this node would be locked to
+/// the chassis and would visibly come adrift from the body it belongs to.
+///
+/// Place these at the <b>top of the suspension travel</b>: the body hangs
+/// <see cref="RestLength"/> below the ray origin at rest.
 /// </summary>
 [GlobalClass]
 public partial class GroundRay : RayCast3D
 {
     /// <summary>
-    /// The visible wheel for this corner. Positioned at the contact patch plus
-    /// <see cref="TireRadius"/> every frame, so it tracks the ground rather than the body.
-    /// Optional — leave it unset for an invisible probe.
+    /// Width of the tire in metres. Read by <see cref="SkidMarks"/> for the strip width, and by
+    /// nothing else.
     /// </summary>
-    [Export] public Node3D? WheelNode { get; set; }
-
-    /// <summary>
-    /// Radius of the visible wheel, in metres. Only used to sit the mesh on the road and to
-    /// pick a rolling speed for it; nothing in the physics reads it.
-    /// </summary>
-    [Export] public float TireRadius { get; set; } = 0.3f;
-
-    /// <summary>Width of the visible wheel in metres. Read by <see cref="SkidMarks"/> for the strip width.</summary>
     [Export] public float TireWidth { get; set; } = 0.25f;
-
-    /// <summary>
-    /// Whether this corner's visible wheel turns with the steering. Front corners only, and
-    /// purely cosmetic — steering is a torque on the body, not an angle on a wheel.
-    /// </summary>
-    [Export] public bool Steers { get; set; }
-
-    /// <summary>Visible steering lock in degrees, at full input. Cosmetic.</summary>
-    [Export] public float VisualSteerAngle { get; set; } = 28.0f;
 
     // ---------------------------------------------------------------- Set by the vehicle
 
@@ -113,15 +99,6 @@ public partial class GroundRay : RayCast3D
     /// <summary>Spring + damper force actually applied this step, in newtons. For the debug overlay.</summary>
     public float SpringForce { get; private set; }
 
-    /// <summary>Rolling angle of the visible wheel, radians. Cosmetic.</summary>
-    private float _spin;
-
-    /// <summary>Where this corner was last frame, for measuring how far the wheel rolled.</summary>
-    private Vector3 _lastPosition;
-
-    /// <summary>Guards the first frame, where there is no previous position to subtract.</summary>
-    private bool _hasLastPosition;
-
     /// <summary>Warned once per node about an unknown surface group, so a bad tile isn't a log flood.</summary>
     private bool _warnedUnknownSurface;
 
@@ -185,57 +162,6 @@ public partial class GroundRay : RayCast3D
         // normal-aligned spring shoves the car sideways off a banked or bumpy surface, which on
         // this track reads as the road spitting you off rather than as suspension.
         vehicle.ApplyForce(Vector3.Up * force, origin - vehicle.GlobalPosition);
-    }
-
-    /// <summary>
-    /// Sit the visible wheel on the road, roll it, and turn it if this corner steers. Cosmetic
-    /// only, and safe to call from <c>_Process</c> at frame rate rather than tick rate.
-    ///
-    /// Reads the ray itself rather than the state <see cref="ApplyGroundForce"/> cached, because
-    /// a car somebody else is driving is frozen and never simulated on this machine — off the
-    /// cached state every remote car in a race would drive around with its wheels hanging.
-    /// </summary>
-    public void UpdateVisual(Vehicle vehicle, float delta)
-    {
-        if (WheelNode is not { } wheel)
-            return;
-
-        // Droop to full travel when there's nothing under us, so a car in the air has its wheels
-        // hanging rather than tucked into the arches.
-        float drop = IsColliding()
-            ? Mathf.Clamp(GlobalPosition.DistanceTo(GetCollisionPoint()), 0.0f, RestLength)
-            : RestLength;
-
-        wheel.Position = new Vector3(0.0f, -(drop - TireRadius), 0.0f);
-
-        // Positive SteeringInput is left, and a positive rotation about local +Y swings the wheel's
-        // −Z toward −X, which is also left. The two already agree; negating it here was the bug
-        // that had the wheels pointing the wrong way.
-        float steer = Steers ? vehicle.SteeringInput * Mathf.DegToRad(VisualSteerAngle) : 0.0f;
-
-        // Rolled from road speed rather than from a simulated spin, because there is no spin to
-        // simulate — the wheels are along for the ride.
-        //
-        // Measured from how far this node actually moved, not from the body's velocity: a car
-        // somebody else is driving is a frozen puppet whose pose is assigned rather than
-        // integrated, so its LinearVelocity is permanently zero and its wheels would never turn.
-        if (TireRadius > 0.0f && delta > 0.0f)
-        {
-            Vector3 here = GlobalPosition;
-            float travelled = _hasLastPosition
-                ? -vehicle.GlobalTransform.Basis.Z.Dot(here - _lastPosition)
-                : 0.0f;
-            _lastPosition = here;
-            _hasLastPosition = true;
-
-            _spin = Mathf.Wrap(_spin + travelled / TireRadius, 0.0f, Mathf.Tau);
-        }
-
-        // Body pose first, then this wheel's own steer and roll inside it — the same order the
-        // parts would sit in if the whole visible car were one posed model, which is how the
-        // reference build does it. See Vehicle.WheelPose for why the rays can't just be children
-        // of the posed shell.
-        wheel.Basis = vehicle.WheelPose * Basis.FromEuler(new Vector3(_spin, steer, 0.0f));
     }
 
     /// <summary>

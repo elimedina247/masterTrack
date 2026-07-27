@@ -14,6 +14,7 @@
 [ext_resource type="AudioStream" uid="uid://dgdniy4n8opr4" path="res://assets/gevp/sounds/tires_squal_loop.wav" id="12_squealwav"]
 [ext_resource type="Script" uid="uid://cqcu0hi3lcv4l" path="res://scripts/vehicles/FlatShade.cs" id="13_flatshade"]
 [ext_resource type="Script" uid="uid://eq5bg7e2kp0x" path="res://scripts/vehicles/NitroFlame.cs" id="14_nitroflame"]
+[ext_resource type="Script" path="res://scripts/vehicles/WheelVisual.cs" id="15_wheelvis"]
 
 [sub_resource type="BoxShape3D" id="Shape_body"]
 size = Vector3(1.2, 0.42, 2.25)
@@ -38,57 +39,71 @@ VehicleNode = NodePath("..")
 
 [node name="BodyModel" parent="BodyRig" unique_id=381378014 instance=ExtResource("5_body")]
 
+[node name="WheelFLHub" type="Node3D" parent="BodyRig" unique_id=2005797641 node_paths=PackedStringArray("Ray", "VehicleNode")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.65, 0.1, -1.05)
+script = ExtResource("15_wheelvis")
+Ray = NodePath("../../WheelFL")
+VehicleNode = NodePath("../..")
+TireRadius = 0.24
+Steers = true
+
+[node name="RimFL" parent="BodyRig/WheelFLHub" unique_id=1344968929 instance=ExtResource("6_rimL")]
+transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 0, 0, 0)
+
+[node name="WheelFRHub" type="Node3D" parent="BodyRig" unique_id=792764335 node_paths=PackedStringArray("Ray", "VehicleNode")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.65, 0.1, -1.05)
+script = ExtResource("15_wheelvis")
+Ray = NodePath("../../WheelFR")
+VehicleNode = NodePath("../..")
+TireRadius = 0.24
+Steers = true
+
+[node name="RimFR" parent="BodyRig/WheelFRHub" unique_id=505105242 instance=ExtResource("7_rimR")]
+transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 0, 0, 0)
+
+[node name="WheelRLHub" type="Node3D" parent="BodyRig" unique_id=2137350578 node_paths=PackedStringArray("Ray", "VehicleNode")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.65, 0.22, 1)
+script = ExtResource("15_wheelvis")
+Ray = NodePath("../../WheelRL")
+VehicleNode = NodePath("../..")
+TireRadius = 0.36
+
+[node name="RimRL" parent="BodyRig/WheelRLHub" unique_id=1281835724 instance=ExtResource("6_rimL")]
+transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 0, 0, 0)
+
+[node name="WheelRRHub" type="Node3D" parent="BodyRig" unique_id=1439235055 node_paths=PackedStringArray("Ray", "VehicleNode")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.65, 0.22, 1)
+script = ExtResource("15_wheelvis")
+Ray = NodePath("../../WheelRR")
+VehicleNode = NodePath("../..")
+TireRadius = 0.36
+
+[node name="RimRR" parent="BodyRig/WheelRRHub" unique_id=509893854 instance=ExtResource("7_rimR")]
+transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 0, 0, 0)
+
 [node name="Collision" type="CollisionShape3D" parent="." unique_id=1227752201]
 transform = Transform3D(1.1, 0, 0, 0, 1.1, 0, 0, 0, 1.1, 0, 0.59, 0)
 shape = SubResource("Shape_body")
 
-[node name="WheelFL" type="RayCast3D" parent="." unique_id=1070422898 node_paths=PackedStringArray("WheelNode")]
+[node name="WheelFL" type="RayCast3D" parent="." unique_id=1070422898]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.65, 0.34, -1.05)
 script = ExtResource("3_groundray")
-WheelNode = NodePath("WheelFLHub")
-TireRadius = 0.24
 TireWidth = 0.245
 
-[node name="WheelFLHub" type="Node3D" parent="WheelFL" unique_id=2005797641]
-
-[node name="RimFL" parent="WheelFL/WheelFLHub" unique_id=1344968929 instance=ExtResource("6_rimL")]
-transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 0, 0, 0)
-
-[node name="WheelFR" type="RayCast3D" parent="." unique_id=1918792808 node_paths=PackedStringArray("WheelNode")]
+[node name="WheelFR" type="RayCast3D" parent="." unique_id=1918792808]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.65, 0.34, -1.05)
 script = ExtResource("3_groundray")
-WheelNode = NodePath("WheelFRHub")
-TireRadius = 0.24
 TireWidth = 0.245
 
-[node name="WheelFRHub" type="Node3D" parent="WheelFR" unique_id=792764335]
-
-[node name="RimFR" parent="WheelFR/WheelFRHub" unique_id=505105242 instance=ExtResource("7_rimR")]
-transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 0, 0, 0)
-
-[node name="WheelRL" type="RayCast3D" parent="." unique_id=1855873150 node_paths=PackedStringArray("WheelNode")]
+[node name="WheelRL" type="RayCast3D" parent="." unique_id=1855873150]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.65, 0.34, 1)
 script = ExtResource("3_groundray")
-WheelNode = NodePath("WheelRLHub")
-TireRadius = 0.36
 TireWidth = 0.245
 
-[node name="WheelRLHub" type="Node3D" parent="WheelRL" unique_id=2137350578]
-
-[node name="RimRL" parent="WheelRL/WheelRLHub" unique_id=1281835724 instance=ExtResource("6_rimL")]
-transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 0, 0, 0)
-
-[node name="WheelRR" type="RayCast3D" parent="." unique_id=152667777 node_paths=PackedStringArray("WheelNode")]
+[node name="WheelRR" type="RayCast3D" parent="." unique_id=152667777]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.65, 0.34, 1)
 script = ExtResource("3_groundray")
-WheelNode = NodePath("WheelRRHub")
-TireRadius = 0.36
 TireWidth = 0.245
-
-[node name="WheelRRHub" type="Node3D" parent="WheelRR" unique_id=1439235055]
-
-[node name="RimRR" parent="WheelRR/WheelRRHub" unique_id=509893854 instance=ExtResource("7_rimR")]
-transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 0, 0, 0)
 
 [node name="NitroFlame" type="Node3D" parent="." unique_id=1660429712 node_paths=PackedStringArray("VehicleNode")]
 script = ExtResource("14_nitroflame")

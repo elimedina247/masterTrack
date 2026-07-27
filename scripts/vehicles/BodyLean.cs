@@ -79,30 +79,8 @@ public partial class BodyLean : Node3D
     /// </summary>
     [Export] public float MaxHeadingYaw { get; set; } = 40.0f;
 
-    // ---------------------------------------------------------------- Wheels
-
-    /// <summary>
-    /// How much of the shell's yaw the visible wheels take, 0..1.
-    ///
-    /// Wants to be 1: the ground rays are children of the chassis rather than the posed shell, so
-    /// without this the body swings a long way into a drift while the wheels stay square to the
-    /// chassis, and the car looks like its shell has come loose. See
-    /// <see cref="Vehicle.WheelPose"/>.
-    /// </summary>
-    [ExportGroup("Wheels")]
-    [Export(PropertyHint.Range, "0,1,0.01")]
-    public float WheelYawFollow { get; set; } = 1.0f;
-
-    /// <summary>
-    /// How much of the shell's roll the visible wheels take, 0..1.
-    ///
-    /// Deliberately 0 by default, unlike the yaw. A real wheel stays flat on the road while the
-    /// body leans over it, and at the roll angles this pose uses — up to 16° — wheels that leaned
-    /// with the body would visibly lift off their own contact patches. Dial it up only if you
-    /// want the whole car to read as one rigid lump.
-    /// </summary>
-    [Export(PropertyHint.Range, "0,1,0.01")]
-    public float WheelRollFollow { get; set; }
+    // The wheels need no wiring here. They are WheelVisual nodes parented to this one, so they
+    // inherit the whole pose for free — which is the entire reason they were moved under it.
 
     // ---------------------------------------------------------------- Pitch
 
@@ -186,12 +164,6 @@ public partial class BodyLean : Node3D
         Vector3 origin = pivot - basis * pivot + new Vector3(sideways, 0.0f, 0.0f);
 
         Transform = _rest * new Transform3D(basis, origin);
-
-        // Hand the wheels the part of the pose they should share. Rotation only, and no pitch:
-        // pitch is about the axle axis, so on a wheel it is indistinguishable from rolling a
-        // little further and only muddies the spin.
-        vehicle.WheelPose = Basis.FromEuler(
-            new Vector3(0.0f, yaw * WheelYawFollow, roll * WheelRollFollow));
     }
 
     /// <summary>
