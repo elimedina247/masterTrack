@@ -29,6 +29,58 @@ There are no wheels. `WheelFL` and friends are ray casts that hold up a corner a
 it is standing on; they have no spin, no brakes, no drive and no tire forces. The wheels you can
 see are `WheelVisual` nodes hanging off the posed shell — see **Body pose** below.
 
+### Every force on the car
+
+The complete list. If the car does something, it is one of these — there is nothing else, and
+nothing from the old physics survives.
+
+Order matters: they run in this sequence inside one `_PhysicsProcess`, and each one reads the
+velocity as it stood at the top of the step.
+
+| # | Force / torque | Where it acts | Grounded | Airborne |
+|---|---|---|---|---|
+| 0 | **Gravity** (Godot's own, 9.8) | centre of mass | always | always |
+| 1 | **Spring + damper**, ×4 | each ray, along **world up** | yes | — |
+| 1b | **Bump stop** | folded into #1 past 60% travel | yes | — |
+| 1c | **Downward pull** | each ray, capped + faded | over crests | — |
+| 2 | **Drive / brake** | centre of mass, along nose | × `GroundFraction` | zero |
+| 3 | **Grip** | centre of mass, along `Basis.X` | full | 5%, flattened |
+| 4 | **Steering torque** (PD → heading) | about **world up** | yes | **stood down** |
+| 5 | **Flip rate torque** | about car's `Basis.X` | — | yes |
+| 5b | **Air yaw rate torque** | about **world up** | — | yes |
+| 6 | **Upright assist torque** | about `up × worldUp` | — | after 1 s, if no input |
+| 7 | **Fall gravity** | centre of mass, down | — | descending only |
+| 8 | **Terminal velocity clamp** | `_IntegrateForces`, velocity | always | always |
+
+Things that are **not** in the list, and that people expect to be:
+
+- **No aerodynamic drag.** Coasting slows via `MaxCoastForce` (#2), which is a flat force, not a
+  v² term. There is no downforce either.
+- **No rolling resistance.** Off-road is `SurfaceSpeedMultiplier` scaling the *target speed*
+  in #2, not a force.
+- **No engine, gearbox, clutch, differential, or per-wheel drive.** `CurrentGear` is a direction
+  flag.
+- **No tire model.** #3 is the whole of it, and it is one number per surface.
+- **No anti-roll bar, camber, toe, Ackermann, ABS or traction control.**
+- **No roll control in the air.** Pitch and yaw only.
+
+### Two ways this bites, both now fixed
+
+Worth knowing because the same shape can recur.
+
+**A percentage-per-step force is enormous.** #3 removes `grip` of the velocity along its axis
+*every physics step*. At 120 Hz, even the 5% airborne value removes 99.8% of that component
+inside one second. On the ground that is exactly right — an upright car's `Basis.X` is horizontal,
+so all it deletes is sideways speed. Roll the car in mid-air and `Basis.X` tilts, and the same
+force starts deleting **fall speed** just as efficiently. Gravity appeared to switch off whenever
+you spun. The axis is now flattened while airborne.
+
+**An early return skipped the gravity.** Fall gravity (#7) used to sit at the end of
+`ProcessAirborne` behind `if (UprightAssist <= 0) return;`. The upright assist is zero exactly
+when the player is flying the car, so *starting a flip turned the extra gravity off*. It is its
+own method now and is called unconditionally. Nothing about how the car is rotating has any
+business deciding how hard it falls.
+
 ### Why "solve then clamp"
 
 Both the drive and the grip force are worked out the same way: *what force would get this

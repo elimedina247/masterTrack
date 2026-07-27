@@ -982,6 +982,26 @@ public partial class Vehicle : RigidBody3D
         CurrentGrip = grip;
 
         Vector3 side = GlobalTransform.Basis.X;
+
+        // In the air the grip axis is flattened, because there is no tire up there to justify it
+        // touching vertical velocity.
+        //
+        // This matters far more than the small AirborneGripFactor suggests. The force removes a
+        // *percentage of the velocity along this axis every physics step* — at 120 Hz, even 5%
+        // per step is 99.8% of it gone inside a second. On the ground that is fine, because an
+        // upright car's X axis is horizontal and the only thing being deleted is sideways speed.
+        // Roll the car in mid-air and X tilts, at which point the same force starts deleting the
+        // car's fall speed just as efficiently — and gravity appears to switch off whenever you
+        // spin.
+        if (IsAirborne)
+        {
+            side -= Vector3.Up * side.Dot(Vector3.Up);
+            if (side.LengthSquared() < 0.0001f)
+                return;
+
+            side = side.Normalized();
+        }
+
         float instantSideAccel = -side.Dot(LinearVelocity) / delta;
         ApplyCentralForce(side * (instantSideAccel * Mass * grip));
     }
@@ -1097,24 +1117,35 @@ public partial class Vehicle : RigidBody3D
 
         UprightAssist = assist * (1.0f - rotationInput);
 
-        if (UprightAssist <= 0.0f)
-            return;
-
         Vector3 up = GlobalTransform.Basis.Y;
         Vector3 axis = up.Cross(Vector3.Up);
-        float tilt = Mathf.Acos(Mathf.Clamp(up.Dot(Vector3.Up), -1.0f, 1.0f));
 
-        if (axis.LengthSquared() > 0.0001f)
+        if (UprightAssist > 0.0f && axis.LengthSquared() > 0.0001f)
         {
+            float tilt = Mathf.Acos(Mathf.Clamp(up.Dot(Vector3.Up), -1.0f, 1.0f));
+
             // Damps roll and pitch only; yaw is the player's while they are in the air.
             Vector3 spin = AngularVelocity - Vector3.Up * AngularVelocity.Dot(Vector3.Up);
             Vector3 righting = axis.Normalized() * (tilt * AirborneUprightTorque);
             ApplyTorque((righting - spin * AirborneUprightDamping) * UprightAssist);
         }
 
-        // Descent only. Applying it on the way up would cut jump height at the same time, and the
-        // launch off a ramp is the part that is already right — it is the hang at the apex that
-        // reads as floaty.
+        ApplyFallGravity();
+    }
+
+    /// <summary>
+    /// The extra gravity that stops a 40 m drop hanging for three seconds. Descent only: applying
+    /// it on the way up would cut jump height at the same time, and the launch off a ramp is the
+    /// part that is already right — it is the hang at the apex that reads as floaty.
+    ///
+    /// <b>Its own method, and called unconditionally.</b> It used to sit at the end of
+    /// <see cref="ProcessAirborne"/> behind an early return that bailed out when the upright
+    /// assist was zero — which is exactly when the player is flying the car. Starting a flip
+    /// therefore switched the extra gravity off and the car floated. How the car is rotating has
+    /// no business deciding how hard it falls.
+    /// </summary>
+    private void ApplyFallGravity()
+    {
         if (FallGravityMultiplier <= 1.0f)
             return;
 
