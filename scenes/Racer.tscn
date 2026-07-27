@@ -14,7 +14,7 @@
 [ext_resource type="AudioStream" uid="uid://dgdniy4n8opr4" path="res://assets/gevp/sounds/tires_squal_loop.wav" id="12_squealwav"]
 [ext_resource type="Script" uid="uid://cqcu0hi3lcv4l" path="res://scripts/vehicles/FlatShade.cs" id="13_flatshade"]
 [ext_resource type="Script" uid="uid://eq5bg7e2kp0x" path="res://scripts/vehicles/NitroFlame.cs" id="14_nitroflame"]
-[ext_resource type="Script" path="res://scripts/vehicles/WheelVisual.cs" id="15_wheelvis"]
+[ext_resource type="Script" uid="uid://d1camux0pgphx" path="res://scripts/vehicles/WheelVisual.cs" id="15_wheelvis"]
 
 [sub_resource type="BoxShape3D" id="Shape_body"]
 size = Vector3(1.2, 0.42, 2.25)
@@ -26,9 +26,6 @@ FrontLeftWheel = NodePath("WheelFL")
 FrontRightWheel = NodePath("WheelFR")
 RearLeftWheel = NodePath("WheelRL")
 RearRightWheel = NodePath("WheelRR")
-VehicleMass = 1200.0
-RideHeight = 0.55
-TopSpeed = 55.6
 
 [node name="FlatShade" type="Node" parent="." unique_id=610255931]
 script = ExtResource("13_flatshade")

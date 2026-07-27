@@ -97,6 +97,7 @@ Nothing in the steering scales with speed or grip, so the car answers the stick 
 | Brake / reverse | `S` / `↓` | Left trigger |
 | Steer | `A` `D` / `←` `→` | Left stick |
 | **Drift** | `Space` | A |
+| **Flip** (airborne) | `W` nose up / `S` nose down | Triggers |
 | Nitro | `Shift` | B |
 | Reset | see `racer_reset` | — |
 | Physics debug overlay | `` ` `` | Right stick click |
@@ -366,26 +367,68 @@ rolling resistance, which is cheaper and much easier to reason about.
 
 ## Airborne
 
-Unchanged in spirit from the old model — both of these are about the 40 m tile scale rather than
-about the car.
+Three things used to conspire to hold the car flat, and between them they made flips impossible
+and made ramps feel like the body was being pressed downward the whole way up. All three are now
+tuned or gated:
 
-- **`FallGravityMultiplier`** (3.0) — extra gravity while airborne **and descending only**.
-  Leaving the ascent alone means a ramp still launches the car exactly as high; it just stops
-  hanging at the apex.
+- **`FallGravityMultiplier`** (2.0, was 3.0) — extra gravity while airborne **and descending
+  only**. Leaving the ascent alone means a ramp still launches the car exactly as high; it just
+  stops hanging at the apex. **This is the air-time knob, so it is also the flip knob** — every
+  multiple of it is time the player does not have to rotate in. The 3.0 was inherited from the
+  physics this replaced and cut air time by 40%.
+
+  | Multiplier | Hang time, one cube | Impact |
+  |---|---|---|
+  | 1.0 | 2.86 s | 28 m/s |
+  | **2.0** | **2.02 s** | **40 m/s** |
+  | 3.0 | 1.65 s | 49 m/s |
+
 - **`MaxFallSpeed`** (65 m/s) — terminal velocity, clamped along gravity in `_IntegrateForces`.
   Not a feel knob: it is the guard rail that stops a fall off the edge of the board outrunning
   the collision solver.
 
-New, and needed because there is no suspension geometry to land on:
-
 - **`AirborneUprightTorque` / `AirborneUprightDamping`** — levels the car so it lands on its
-  wheels.
+  wheels. It does **not** engage on take-off; see below.
+
 - **`AirborneSteerMultiplier`** (0.35) — air steering at full strength pirouettes the car off
   every jump.
-- **`MaxPullForce`** (11000 N, near a full g) — the spring term goes negative when the ground
-  drops away past the ride height, which glues the car over a crest. It does **not** flatten real
-  jumps: a ray that has left the road entirely finds nothing to pull against, so the reach of the
-  ray is what separates "following a crease" from "airborne", not the strength of this.
+
+- **`MaxPullForce`** (11000 N, near a full g) and **`PullFadeDistance`** (0.12 m) — the spring
+  term goes negative when the ground drops away past the ride height, which glues the car over a
+  crest. The fade is what separates a crease from a cliff: a crease drops the road away by
+  centimetres and wants holding onto, an edge drops it away by everything and wants letting go
+  of. Without the fade, a pull strong enough to follow a crease also sucks the car back down off
+  every jump.
+
+### The auto-level has to yield
+
+A righting torque that engages the moment the last ray leaves the road is a righting torque that
+makes flips impossible. Worse, it fires in a stream of tiny corrections every time the car goes
+light crossing a ramp's creases — each one an order to be flat that the slope then has to undo,
+which is what made climbs feel like the body was fighting the road.
+
+So it is gated on air time:
+
+- **`UprightGraceTime`** (1.0 s) — nothing at all. The car keeps whatever rotation it left the
+  ground with, holds its nose-up angle off the top of a climb, and a flip the player started
+  stays flipping.
+- **`UprightFadeTime`** (0.8 s) — fades in after that, so a long flight straightens up rather
+  than snapping level.
+- Suppressed entirely, along with `AirPitchDamping`, while the player is asking for rotation.
+
+`UprightAssist` on the overlay's **Airborne** page is the number to watch when a jump won't flip.
+Anything above 0 is the car being told to be flat, and it should read 0 for the whole of a normal
+jump.
+
+### Flying the car
+
+- **`AirPitchTorque`** (30000 Nm) — throttle pitches the nose **up**, brake pitches it **down**.
+  Those two pedals do nothing at all in the air (drive is scaled by `GroundFraction`, which is
+  zero), so they were free, and they are the pair the player's thumbs are already on.
+- **`AirPitchDamping`** (4000 Nm per rad/s) — bleeds off a tumble picked up from a bad take-off,
+  but only while the player is *not* asking for rotation, so it never quietly kills a flip.
+
+Roll is not bound yet — steering still yaws in the air.
 
 ### Drive and grip scale with `GroundFraction`, not with `IsAirborne`
 

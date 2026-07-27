@@ -64,10 +64,22 @@ public partial class GroundRay : RayCast3D
     ///
     /// The spring term goes negative once the ground is further away than the ride height, which
     /// sucks the car onto the road over a crest — worth keeping, it's a lot of what stops an
-    /// arcade car pogoing. Left unbounded it also yanks the nose down off a ramp and kills the
-    /// jump, so it's capped rather than removed. 0 disables the pull entirely.
+    /// arcade car pogoing. 0 disables the pull entirely.
+    ///
+    /// Paired with <see cref="PullFadeDistance"/>, which is what keeps it off real jumps.
     /// </summary>
-    public float MaxPullForce { get; set; } = 4000.0f;
+    public float MaxPullForce { get; set; } = 11000.0f;
+
+    /// <summary>
+    /// How far the ground may recede past <see cref="RestLength"/> before the downward pull has
+    /// faded to nothing, in metres.
+    ///
+    /// Short, deliberately. A crease on a ramp drops the road away by centimetres and wants
+    /// holding onto; an edge drops it away by everything and wants letting go of. This is the
+    /// line between them — and without it, a pull strong enough to follow a crease also sucks the
+    /// car back down off every jump.
+    /// </summary>
+    public float PullFadeDistance { get; set; } = 0.12f;
 
     // ---------------------------------------------------------------- Reported state
 
@@ -152,9 +164,20 @@ public partial class GroundRay : RayCast3D
             force += into * into * BumpStopStrength * SpringStrength * (Compression - stopStart);
         }
 
-        // See MaxPullForce: the downward half is capped, the upward half isn't.
+        // The downward half is capped and faded out; the upward half is neither.
+        //
+        // The fade is what separates a crease from a cliff. Following a crease means the ground
+        // has receded by centimetres and the car should be held onto it; going over an edge means
+        // it has receded by everything and the car should be allowed to fly. A flat cap can't
+        // tell those apart, so a strong enough pull to do the first sucks the car back down out
+        // of the second and there are no jumps left in the game.
         if (force < 0.0f)
-            force = Mathf.Max(force, -MaxPullForce);
+        {
+            float pastRest = -Compression;
+            float fade = 1.0f - Mathf.Clamp(pastRest / Mathf.Max(PullFadeDistance, 0.001f),
+                                            0.0f, 1.0f);
+            force = Mathf.Max(force * fade, -MaxPullForce);
+        }
 
         SpringForce = force;
 

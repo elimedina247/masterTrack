@@ -28,7 +28,7 @@ public partial class VehicleDebugOverlay : Control, IVehicleObserver
     [Export] public bool ShowDebug { get; set; }
 
     private static readonly string[] DebugSets =
-        { "All", "Inputs", "Grip", "Suspension", "Drift and Boost", "Steering" };
+        { "All", "Inputs", "Grip", "Suspension", "Drift and Boost", "Steering", "Airborne" };
 
     private int _currentDebugSet;
 
@@ -129,6 +129,22 @@ public partial class VehicleDebugOverlay : Control, IVehicleObserver
                 Text($"Ceiling: {(vehicle.TopSpeed + vehicle.BoostSpeed) * 3.6f:F0} km/h",
                      new Vector2(10, 200), Colors.DeepSkyBlue);
                 Text($"Nitro charges: {vehicle.NitroChargesRemaining}", new Vector2(10, 220), Colors.White);
+                break;
+
+            case "Airborne":
+                Text($"Grounded: {vehicle.GroundedRayCount}/4  ({vehicle.GroundFraction:P0})",
+                     new Vector2(10, 120), Colors.White);
+                Text($"Air time: {vehicle.AirTime:F2} s", new Vector2(10, 140), Colors.Aqua);
+
+                // The number to watch when a jump won't flip: anything above 0 is the car being
+                // told to be flat, and it should read 0 for the whole of a normal jump.
+                Text($"Upright assist: {vehicle.UprightAssist:P0}", new Vector2(10, 160),
+                     vehicle.UprightAssist > 0.0f ? Colors.Orange : Colors.Gray);
+
+                Text($"Pitch: {Mathf.RadToDeg(vehicle.GlobalRotation.X):F0} deg   " +
+                     $"Roll: {Mathf.RadToDeg(vehicle.GlobalRotation.Z):F0} deg",
+                     new Vector2(10, 180), Colors.White);
+                Text("Throttle / brake pitch the car in the air", new Vector2(10, 210), Colors.Gray);
                 break;
 
             case "Steering":

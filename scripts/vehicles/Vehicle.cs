@@ -84,6 +84,16 @@ public partial class Vehicle : RigidBody3D
     [Export] public float MaxPullForce { get; set; } = 11000.0f;
 
     /// <summary>
+    /// How far the ground may recede past <see cref="RideHeight"/> before the downward pull has
+    /// faded to nothing, in metres. See <see cref="GroundRay.PullFadeDistance"/>.
+    ///
+    /// This is what lets <see cref="MaxPullForce"/> be strong enough to follow a ramp's creases
+    /// without also sucking the car back down off every jump. Raise it and the car sticks to the
+    /// road harder over crests; lower it and it flies off them sooner.
+    /// </summary>
+    [Export] public float PullFadeDistance { get; set; } = 0.12f;
+
+    /// <summary>
     /// Fraction of <see cref="RideHeight"/> the springs may compress before the bump stop starts
     /// taking over, 0..1.
     /// </summary>
@@ -221,11 +231,31 @@ public partial class Vehicle : RigidBody3D
     /// <summary>
     /// How hard the car rights itself toward level while airborne, in Nm per radian of tilt.
     /// Nothing else stops a car that took off crooked from landing on its roof.
+    ///
+    /// <b>It does not apply immediately.</b> See <see cref="UprightGraceTime"/> — a righting
+    /// torque that engages the moment the wheels leave is a righting torque that makes flips
+    /// impossible and flattens the car every time it goes light crossing a ramp.
     /// </summary>
     [Export] public float AirborneUprightTorque { get; set; } = 24000.0f;
 
     /// <summary>Damping on the righting torque, in Nm per rad/s.</summary>
     [Export] public float AirborneUprightDamping { get; set; } = 8000.0f;
+
+    /// <summary>
+    /// Seconds of air time before the righting torque starts to come in at all.
+    ///
+    /// This is what makes a jump a jump. Below it the car keeps whatever rotation it left the
+    /// ground with — so it holds its nose-up angle off the top of a climb, and a flip the player
+    /// started stays flipping. It also covers the constant going-light of crossing a ramp's
+    /// creases, which is otherwise a stream of tiny commands to be flat that fight the slope.
+    /// </summary>
+    [Export] public float UprightGraceTime { get; set; } = 1.0f;
+
+    /// <summary>
+    /// Seconds over which the righting torque fades in once the grace has run out. Fading rather
+    /// than switching, so a long flight straightens up rather than snapping level.
+    /// </summary>
+    [Export] public float UprightFadeTime { get; set; } = 0.8f;
 
     // ---------------------------------------------------------------- Drifting
 
@@ -343,9 +373,36 @@ public partial class Vehicle : RigidBody3D
     /// Gravity multiplier while airborne and <i>descending</i>. The track is built on 40 m cubes,
     /// and a 40 m drop under real gravity is 2.9 seconds of hang time — correct, and unplayable.
     /// Leaving the ascent alone means a ramp still launches the car exactly as high.
+    ///
+    /// <b>This is the air-time knob, so it is also the flip knob.</b> Every multiple of it is
+    /// time the player does not have to rotate in. It was 3.0, inherited from the physics this
+    /// replaced, which made descents plummet and left no room to flip; 2.0 keeps a one-cube drop
+    /// off the floaty end while giving that time back.
+    ///
+    /// | Multiplier | Hang time, one cube | Impact |
+    /// | 1.0 | 2.86 s | 28 m/s |
+    /// | 2.0 | 2.02 s | 40 m/s |
+    /// | 3.0 | 1.65 s | 49 m/s |
     /// </summary>
     [ExportGroup("Airborne")]
-    [Export] public float FallGravityMultiplier { get; set; } = 3.0f;
+    [Export] public float FallGravityMultiplier { get; set; } = 2.0f;
+
+    /// <summary>
+    /// Flip torque from the throttle and brake while airborne, in Nm. Throttle pitches the nose
+    /// up, brake pitches it down.
+    ///
+    /// Those two pedals do nothing at all in the air — drive force is scaled by
+    /// <see cref="GroundFraction"/>, which is zero — so they are free, and they are the pair the
+    /// player's thumbs are already on.
+    /// </summary>
+    [Export] public float AirPitchTorque { get; set; } = 30000.0f;
+
+    /// <summary>
+    /// Damping on airborne pitch and roll when the player is <i>not</i> asking for rotation, in
+    /// Nm per rad/s. Bleeds off a tumble picked up from a bad take-off without stopping a flip
+    /// the player is driving.
+    /// </summary>
+    [Export] public float AirPitchDamping { get; set; } = 4000.0f;
 
     /// <summary>
     /// Hard ceiling on speed along gravity, in m/s. Not a feel knob — it is the guard rail that
@@ -419,6 +476,15 @@ public partial class Vehicle : RigidBody3D
 
     /// <summary>True when no ray reached anything.</summary>
     public bool IsAirborne { get; private set; }
+
+    /// <summary>Seconds since the last ray left the road. Zero while any corner is down.</summary>
+    public float AirTime { get; private set; }
+
+    /// <summary>
+    /// How much of the auto-levelling is currently being applied, 0..1. Zero for the first
+    /// <see cref="UprightGraceTime"/> of a jump and while the player is flying the car.
+    /// </summary>
+    public float UprightAssist { get; private set; }
 
     /// <summary>How many of the four rays are touching something.</summary>
     public int GroundedRayCount { get; private set; }
@@ -559,6 +625,7 @@ public partial class Vehicle : RigidBody3D
             ray.MaxPullForce = MaxPullForce;
             ray.BumpStopStart = BumpStopStart;
             ray.BumpStopStrength = BumpStopStrength;
+            ray.PullFadeDistance = PullFadeDistance;
 
             // Reaches past the ride height, so the ray still finds the road as the car tops a
             // crest and the pull term has something to work against.
@@ -604,7 +671,7 @@ public partial class Vehicle : RigidBody3D
         ProcessDrive(dt);
         ProcessGrip(dt);
         ProcessSteering(dt);
-        ProcessAirborne();
+        ProcessAirborne(dt);
     }
 
     /// <summary>
@@ -972,24 +1039,51 @@ public partial class Vehicle : RigidBody3D
 
     // ---------------------------------------------------------------- Airborne
 
-    private void ProcessAirborne()
+    private void ProcessAirborne(float delta)
     {
         if (!IsAirborne)
+        {
+            AirTime = 0.0f;
             return;
+        }
+
+        AirTime += delta;
+
+        // Throttle and brake are dead weight in the air, so they fly the car instead. Torque about
+        // the car's own X axis, which is a flip in the plane it is already travelling in.
+        float pitchInput = Mathf.Clamp(ThrottleInput, 0.0f, 1.0f)
+                           - Mathf.Clamp(BrakeInput, 0.0f, 1.0f);
+
+        if (Mathf.Abs(pitchInput) > 0.01f)
+            ApplyTorque(GlobalTransform.Basis.X * (pitchInput * AirPitchTorque));
 
         // Level the car so it lands on its wheels: torque about the axis that would take its roof
         // back to vertical, damped by however fast it is already rolling that way.
+        //
+        // Held off for UprightGraceTime and then faded in, and stood down entirely while the
+        // player is flying the car. Applied immediately at full strength — which is what it used
+        // to do — it makes flips impossible, throws away the nose-up angle the car earned off a
+        // climb, and fires in a stream of tiny corrections every time the car goes light crossing
+        // a ramp crease, each one an order to be flat that the slope then has to undo.
+        float assist = UprightFadeTime > 0.0f
+            ? Mathf.Clamp((AirTime - UprightGraceTime) / UprightFadeTime, 0.0f, 1.0f)
+            : (AirTime > UprightGraceTime ? 1.0f : 0.0f);
+
+        UprightAssist = assist * (1.0f - Mathf.Abs(pitchInput));
+
         Vector3 up = GlobalTransform.Basis.Y;
         Vector3 axis = up.Cross(Vector3.Up);
         float tilt = Mathf.Acos(Mathf.Clamp(up.Dot(Vector3.Up), -1.0f, 1.0f));
 
-        if (axis.LengthSquared() > 0.0001f)
+        // Damp roll and pitch only; yaw belongs to the steering controller. Damping is on the
+        // same switch as the righting, so a flip the player is driving is not quietly bled away.
+        Vector3 spin = AngularVelocity - Vector3.Up * AngularVelocity.Dot(Vector3.Up);
+        ApplyTorque(-spin * (AirPitchDamping * (1.0f - Mathf.Abs(pitchInput))));
+
+        if (UprightAssist > 0.0f && axis.LengthSquared() > 0.0001f)
         {
             Vector3 righting = axis.Normalized() * (tilt * AirborneUprightTorque);
-
-            // Damp roll and pitch only; yaw belongs to the steering controller.
-            Vector3 spin = AngularVelocity - Vector3.Up * AngularVelocity.Dot(Vector3.Up);
-            ApplyTorque(righting - spin * AirborneUprightDamping);
+            ApplyTorque((righting - spin * AirborneUprightDamping) * UprightAssist);
         }
 
         // Descent only. Applying it on the way up would cut jump height at the same time, and the
