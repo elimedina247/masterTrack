@@ -1,4 +1,5 @@
 using Godot;
+using MasterTrack.Networking;
 using MasterTrack.Racer;
 using MasterTrack.Tiles;
 using MasterTrack.Vehicles;
@@ -37,6 +38,8 @@ public partial class RacerArena : Node3D
     /// <summary>Keys in the spawn packet. Short, because they go over the wire on every spawn.</summary>
     private const string PeerKey = "p";
     private const string PositionKey = "x";
+    private const string VariantKey = "v";
+    private const string ColourKey = "c";
 
     /// <summary>The car to spawn. Falls back to <see cref="RacerScenePath"/> if left unset.</summary>
     [Export] public PackedScene? RacerScene { get; set; }
@@ -66,9 +69,6 @@ public partial class RacerArena : Node3D
     /// at the local player's car once one exists. Optional — the Track Master has no car.
     /// </summary>
     [Export] public Node? Hud { get; set; }
-
-    /// <summary>Fired on this peer once the local player's car is in the tree and owned.</summary>
-    [Signal] public delegate void LocalRacerSpawnedEventHandler(RacerController car);
 
     /// <summary>The node cars are parented to. What the spawner replicates into.</summary>
     public Node3D Racers { get; private set; } = null!;
@@ -117,10 +117,17 @@ public partial class RacerArena : Node3D
     /// </summary>
     public RacerController? Spawn(int peerId, int slot, int total)
     {
+        // Carried in the spawn packet rather than looked up on arrival: the car is then built
+        // right the first time on every peer, with no assumption about an appearance RPC having
+        // landed before the spawn did.
+        RacerAppearance appearance = GameManager.Instance.AppearanceOf(peerId);
+
         var data = new Godot.Collections.Dictionary
         {
             { PeerKey, peerId },
             { PositionKey, SpawnPoint(slot, total) },
+            { VariantKey, appearance.VariantIndex },
+            { ColourKey, appearance.ColourIndex },
         };
 
         // Goes through the spawner even when we are alone, so the local and networked paths are
@@ -148,7 +155,8 @@ public partial class RacerArena : Node3D
 
         RacerScene ??= GD.Load<PackedScene>(RacerScenePath);
         var car = RacerScene.Instantiate<RacerController>();
-        car.PrepareForSpawn(dict[PeerKey].AsInt32(), dict[PositionKey].AsVector3());
+        car.PrepareForSpawn(dict[PeerKey].AsInt32(), dict[PositionKey].AsVector3(),
+                            new RacerAppearance(dict[VariantKey].AsInt32(), dict[ColourKey].AsInt32()));
         return car;
     }
 
@@ -198,7 +206,6 @@ public partial class RacerArena : Node3D
                 return;
 
             BindHud(car);
-            EmitSignal(SignalName.LocalRacerSpawned, car);
         }).CallDeferred();
     }
 

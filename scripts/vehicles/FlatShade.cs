@@ -22,8 +22,29 @@ public partial class FlatShade : Node
 	/// <summary>What to restyle. Defaults to this node's parent.</summary>
 	[Export] public Node3D? Target { get; set; }
 
-	public override void _Ready()
+	/// <summary>
+	/// Material name suffix for the surfaces that are bodywork. <c>tools/car_blockout.py</c> names
+	/// them <c>&lt;Variant&gt;_Paint</c> and the names survive the FBX import intact, so the paint
+	/// can be found by name rather than by guessing at a surface index per model.
+	/// </summary>
+	private const string PaintSuffix = "_Paint";
+
+	/// <summary>The colour this car is painted, or null to keep whatever the model shipped with.</summary>
+	private Color? _paint;
+
+	public override void _Ready() => Restyle(_paint);
+
+	/// <summary>
+	/// Rebuild the materials, optionally repainting the bodywork.
+	///
+	/// Public and callable again because a car swaps in a different body <i>after</i> this node's
+	/// <c>_Ready</c> has already run — Godot readies children before parents — so a car built from
+	/// a variant would otherwise render smooth, shiny, and in the wrong colour.
+	/// </summary>
+	public void Restyle(Color? paint)
 	{
+		_paint = paint;
+
 		Node? root = Target ?? GetParent();
 		if (root == null)
 		{
@@ -31,31 +52,43 @@ public partial class FlatShade : Node
 			return;
 		}
 
-		Restyle(root);
+		Restyle(root, paint);
 	}
 
-	private static void Restyle(Node node)
+	private static void Restyle(Node node, Color? paint)
 	{
 		if (node is MeshInstance3D mesh)
-			RestyleSurfaces(mesh);
+			RestyleSurfaces(mesh, paint);
 
 		foreach (Node child in node.GetChildren())
-			Restyle(child);
+			Restyle(child, paint);
 	}
 
-	private static void RestyleSurfaces(MeshInstance3D mesh)
+	private static void RestyleSurfaces(MeshInstance3D mesh, Color? paint)
 	{
 		if (mesh.Mesh == null)
 			return;
 
 		for (int surface = 0; surface < mesh.Mesh.GetSurfaceCount(); surface++)
 		{
-			var source = mesh.GetActiveMaterial(surface) as BaseMaterial3D;
+			// The material as authored on the mesh, not the active one. This runs more than once
+			// on the same car — once when this node readies, again once the car knows its colour —
+			// and the active material after the first pass is the flat one built below, which
+			// carries no name. Reading the mesh keeps every pass working from the original, so
+			// the paint surface is still findable and restyling stays idempotent.
+			var source = (mesh.Mesh.SurfaceGetMaterial(surface)
+			              ?? mesh.GetActiveMaterial(surface)) as BaseMaterial3D;
+
+			// Only the bodywork takes the player's colour. Painting every surface would put it
+			// on the windows and the headlights too, which is the whole reason this class
+			// rebuilds materials per surface instead of using a material_override.
+			bool isPaint = paint.HasValue
+			               && source?.ResourceName.EndsWith(PaintSuffix, System.StringComparison.Ordinal) == true;
 
 			var flat = new StandardMaterial3D
 			{
 				// Everything that says what this surface *is* comes across unchanged.
-				AlbedoColor = source?.AlbedoColor ?? Colors.White,
+				AlbedoColor = isPaint ? paint!.Value : source?.AlbedoColor ?? Colors.White,
 				AlbedoTexture = source?.AlbedoTexture,
 
 				// Transparency and culling carry over too, or the windscreen turns into bodywork

@@ -5,4 +5,24 @@
     <Nullable>enable</Nullable>
     <RootNamespace>MasterTrack</RootNamespace>
   </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Facepunch.Steamworks" Version="2.3.3" />
+  </ItemGroup>
+  <ItemGroup>
+    <!--
+      The Steamworks native library. Facepunch ships it inside its own package, but under
+      "content/", which is the old packages.config convention and is NOT copied for a
+      PackageReference project — so it has to be placed by hand or the first Steam call fails
+      with a DllNotFoundException. Kept in the repo rather than reached for in the NuGet cache so
+      the path does not depend on the package's internal layout or version.
+
+      Link= flattens it to the root of the output. Without it MSBuild keeps the "native/" prefix
+      and the file lands in Debug/native/, where the runtime's default resolver — which looks
+      beside masterTrack.dll and nowhere below it — will not find it.
+
+      It travels into data_masterTrack_windows_x86_64/ on export as a build output rather than a
+      Godot resource, which is exactly what "not inside the .pck" means in practice.
+    -->
+    <None Include="native\steam_api64.dll" Link="steam_api64.dll" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

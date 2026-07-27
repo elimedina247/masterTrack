@@ -90,6 +90,13 @@ public partial class VehicleInputActions : Resource
     [Export] public string Handbrake { get; set; } = "racer_handbrake";
     [Export] public string Nitro { get; set; } = "racer_nitro";
 
+    /// <summary>
+    /// Put the car back on its wheels. Deliberately its own action rather than a <c>ui_*</c> one:
+    /// Godot's <c>ui_accept</c> includes Space, which would fight the handbrake every time you
+    /// tried to slide the car.
+    /// </summary>
+    [Export] public string Reset { get; set; } = "racer_reset";
+
     // No clutch or shift actions: there is no gearbox. Drive force comes off a speed curve,
     // and reverse is selected by holding the brake at a standstill.
 }

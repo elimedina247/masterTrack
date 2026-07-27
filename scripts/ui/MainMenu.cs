@@ -20,6 +20,10 @@ public partial class MainMenu : Control
     /// <summary>The lobby, and the physics playground: open tarmac, grass and one of every tile.</summary>
     private const string LobbyScenePath = "res://scenes/TestArea.tscn";
 
+    /// <summary>What the address field holds for ENet, and for a second window on this machine.</summary>
+    private const string DefaultAddress = "127.0.0.1";
+
+    private LineEdit _nameEdit = null!;
     private LineEdit _ipEdit = null!;
     private LineEdit _portEdit = null!;
     private Button _hostButton = null!;
@@ -27,9 +31,12 @@ public partial class MainMenu : Control
     private Button _soloButton = null!;
     private Button _buildButton = null!;
     private Label _statusLabel = null!;
+    private CheckBox _steamCheck = null!;
+    private Label _steamIdLabel = null!;
 
     public override void _Ready()
     {
+        _nameEdit = GetNode<LineEdit>("%NameEdit");
         _ipEdit = GetNode<LineEdit>("%IpEdit");
         _portEdit = GetNode<LineEdit>("%PortEdit");
         _hostButton = GetNode<Button>("%HostButton");
@@ -37,6 +44,13 @@ public partial class MainMenu : Control
         _soloButton = GetNode<Button>("%SoloButton");
         _buildButton = GetNode<Button>("%BuildButton");
         _statusLabel = GetNode<Label>("%StatusLabel");
+        _steamCheck = GetNode<CheckBox>("%SteamCheck");
+        _steamIdLabel = GetNode<Label>("%SteamIdLabel");
+
+        _steamCheck.Toggled += OnSteamToggled;
+        _steamCheck.Disabled = !SteamService.Instance.IsAvailable;
+        _steamCheck.ButtonPressed = SteamService.Instance.IsAvailable;
+        OnSteamToggled(_steamCheck.ButtonPressed);
 
         _hostButton.Pressed += OnHostPressed;
         _joinButton.Pressed += OnJoinPressed;
@@ -77,9 +91,10 @@ public partial class MainMenu : Control
     /// three keyboards. Same reasoning as <c>--role=</c> in GameManager: the networked paths are
     /// the ones that cannot be exercised from a single editor run, so they need a way in.
     /// <code>
-    /// godot -- --host --autostart=2      # host; the lobby starts once two clients are in
-    /// godot -- --join=127.0.0.1          # client
+    /// godot -- --host --autostart=2 --name=Eli   # host; starts once two clients are in
+    /// godot -- --join=127.0.0.1 --name=Sam       # client
     /// </code>
+    /// <c>--name=</c> is read before Host/Join fire, since both send it on from there.
     /// <c>--autostart=</c> is read by <see cref="LobbyPanel"/>, which owns the Start button.
     /// </summary>
     private void ApplyCommandLine()
@@ -93,13 +108,62 @@ public partial class MainMenu : Control
                 _ipEdit.Text = arg["--join=".Length..];
                 CallDeferred(nameof(OnJoinPressed));
             }
+            else if (arg.StartsWith("--name=", System.StringComparison.OrdinalIgnoreCase))
+                _nameEdit.Text = arg["--name=".Length..];
+            else if (arg.Equals("--steam", System.StringComparison.OrdinalIgnoreCase))
+                _steamCheck.ButtonPressed = true;
+            else if (arg.Equals("--no-steam-transport", System.StringComparison.OrdinalIgnoreCase))
+                _steamCheck.ButtonPressed = false;
         }
+    }
+
+    /// <summary>
+    /// Steam or ENet, and what the Join field means as a result: over Steam you paste the host's
+    /// SteamID, over ENet an IP. The host's own id is shown so they have something to send
+    /// people — discovery is a copy-and-paste, not a lobby browser (App ID 480 is shared with
+    /// every other Steamworks developer, so a lobby list would be full of strangers).
+    /// </summary>
+    private void OnSteamToggled(bool useSteam)
+    {
+        NetworkManager.Instance.Mode = useSteam
+            ? NetworkManager.Transport.Steam
+            : NetworkManager.Transport.ENet;
+
+        if (!SteamService.Instance.IsAvailable)
+        {
+            _steamIdLabel.Text = $"Steam unavailable ({SteamService.Instance.UnavailableReason})";
+            return;
+        }
+
+        _steamIdLabel.Text = useSteam
+            ? $"Your Steam ID: {SteamService.Instance.LocalSteamId.Value}  (friends type this)"
+            : "";
+
+        // One field, either kind of entry — a friend's SteamID over the relay, or an address for
+        // a second window on this machine. Saying so beats leaving "Host IP" over a box that now
+        // wants seventeen digits.
+        GetNode<Label>("%IpLabel").Text = useSteam ? "Host ID / IP" : "Host IP";
+
+        // And empty it, because the entry now decides the route. Left pre-filled, someone pasting
+        // a friend's ID over a leftover 127.0.0.1 who missed the box would quietly dial their own
+        // machine and get a timeout with nothing to explain it. Only the default is cleared —
+        // anything typed is left alone.
+        if (useSteam && _ipEdit.Text == DefaultAddress)
+            _ipEdit.Text = "";
+        else if (!useSteam && _ipEdit.Text.Length == 0)
+            _ipEdit.Text = DefaultAddress;
+
+        _ipEdit.PlaceholderText = useSteam ? "Host's Steam ID" : DefaultAddress;
     }
 
     private int Port => int.TryParse(_portEdit.Text, out int p) ? p : NetworkManager.DefaultPort;
 
     private void OnHostPressed()
     {
+        // Set before the session exists: the host publishes its own name the moment the server
+        // comes up, and a client sends it as soon as it is connected.
+        GameManager.Instance.LocalPlayerName = _nameEdit.Text;
+
         if (NetworkManager.Instance.HostGame(Port) == Error.Ok)
         {
             SetStatus("Hosting — opening the lobby...");
@@ -113,16 +177,37 @@ public partial class MainMenu : Control
 
     private void OnJoinPressed()
     {
-        string address = string.IsNullOrWhiteSpace(_ipEdit.Text) ? "127.0.0.1" : _ipEdit.Text;
-        if (NetworkManager.Instance.JoinGame(address, Port) == Error.Ok)
+        GameManager.Instance.LocalPlayerName = _nameEdit.Text;
+
+        // No silent fallback to localhost over Steam: an empty box there means they have not
+        // pasted the host's ID yet, and quietly dialling their own machine tells them nothing.
+        if (string.IsNullOrWhiteSpace(_ipEdit.Text)
+            && NetworkManager.Instance.Mode == NetworkManager.Transport.Steam)
         {
-            SetStatus($"Connecting to {address}:{Port} ...");
+            SetStatus("Paste the host's Steam ID into the Host ID / IP box first.");
+            return;
+        }
+
+        string address = string.IsNullOrWhiteSpace(_ipEdit.Text) ? DefaultAddress : _ipEdit.Text;
+        Error err = NetworkManager.Instance.JoinGame(address, Port);
+
+        if (err == Error.Ok)
+        {
+            SetStatus($"Connecting to {address} ...");
             LockLobbyButtons();
+            return;
         }
-        else
+
+        // Specific, because the two ways this fails look identical from the outside and the fix
+        // is different for each.
+        SetStatus(err switch
         {
-            SetStatus("Failed to start connection.");
-        }
+            Error.InvalidParameter when !NetworkManager.LooksLikeAddress(address.Trim())
+                => "That is not a SteamID. Paste the host's ID, or type an IP for a local window.",
+            Error.InvalidParameter
+                => "Cannot join yourself over Steam. Use 127.0.0.1 for a second window here.",
+            _ => "Failed to start connection.",
+        });
     }
 
     /// <summary>
@@ -150,7 +235,12 @@ public partial class MainMenu : Control
     /// </summary>
     private void OnServerCreated() => GetTree().ChangeSceneToFile(LobbyScenePath);
 
-    private void OnConnectedToServer() => GetTree().ChangeSceneToFile(LobbyScenePath);
+    private void OnConnectedToServer()
+    {
+        // Before the scene change, so it is on its way while the lobby is still loading.
+        GameManager.Instance.PublishLocalName();
+        GetTree().ChangeSceneToFile(LobbyScenePath);
+    }
 
     private void OnConnectionFailed()
     {

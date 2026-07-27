@@ -23,12 +23,15 @@ public partial class LobbyPanel : Control
     public const int MinPlayersToStart = 2;
 
     private Label _title = null!;
-    private Label _players = null!;
+    private RichTextLabel _players = null!;
     private Label _hint = null!;
     private Button _start = null!;
 
     /// <summary>Clients that trigger an automatic Start; 0 for the normal button. See MainMenu.</summary>
     private int _autoStartClients;
+
+    /// <summary>So autostart fires once rather than on every redraw of the roster.</summary>
+    private bool _autoStarted;
 
     public override void _Ready()
     {
@@ -50,7 +53,21 @@ public partial class LobbyPanel : Control
         AddChild(box);
 
         _title = AddLabel(box, 26);
-        _players = AddLabel(box, 20);
+
+        // Rich text so each name can carry that player's colour. FitContent because it sits in
+        // a VBox that has no idea how many people are in the room.
+        _players = new RichTextLabel
+        {
+            BbcodeEnabled = true,
+            FitContent = true,
+            ScrollActive = false,
+            MouseFilter = MouseFilterEnum.Ignore,
+        };
+        _players.AddThemeFontSizeOverride("normal_font_size", 20);
+        _players.AddThemeColorOverride("font_outline_color", new Color(0, 0, 0, 0.75f));
+        _players.AddThemeConstantOverride("outline_size", 6);
+        box.AddChild(_players);
+
         _hint = AddLabel(box, 18);
 
         _start = new Button { Text = "Start Match" };
@@ -70,6 +87,11 @@ public partial class LobbyPanel : Control
         net.PlayerDisconnected += OnRosterChanged;
         net.ServerDisconnected += Refresh;
 
+        // A client learns someone has joined before it learns what colour they are, so the list
+        // has to be redrawn when the appearance lands as well.
+        GameManager.Instance.AppearanceAssigned += OnAppearanceAssigned;
+        GameManager.Instance.PlayerNameChanged += OnPlayerNameChanged;
+
         Refresh();
     }
 
@@ -84,7 +106,13 @@ public partial class LobbyPanel : Control
         net.PlayerConnected -= OnRosterChanged;
         net.PlayerDisconnected -= OnRosterChanged;
         net.ServerDisconnected -= Refresh;
+        GameManager.Instance.AppearanceAssigned -= OnAppearanceAssigned;
+        GameManager.Instance.PlayerNameChanged -= OnPlayerNameChanged;
     }
+
+    private void OnAppearanceAssigned(int peerId, int variant, int colour) => Refresh();
+
+    private void OnPlayerNameChanged(int peerId, string name) => Refresh();
 
     private void OnRosterChanged(int peerId) => Refresh();
 
@@ -102,12 +130,17 @@ public partial class LobbyPanel : Control
         List<int> peers = Roster();
         _title.Text = $"Lobby — {peers.Count} player{(peers.Count == 1 ? "" : "s")}";
 
+        // Each name in the colour of that player's car, so the list and the pad outside the
+        // window are read the same way. BBCode rather than a label each: the roster is rebuilt
+        // on every join and leave.
         var lines = new List<string>();
         foreach (int id in peers)
         {
+            RacerAppearance appearance = GameManager.Instance.AppearanceOf(id);
             string who = id == Multiplayer.GetUniqueId() ? " (you)" : "";
             string host = id == 1 ? " — host" : "";
-            lines.Add($"Peer {id}{who}{host}");
+            lines.Add($"[color=#{appearance.Paint.ToHtml(false)}]" +
+                      $"{GameManager.Instance.NameOf(id)}[/color]{who}{host}");
         }
 
         _players.Text = string.Join("\n", lines);
@@ -125,8 +158,12 @@ public partial class LobbyPanel : Control
         else
             _hint.Text = "Drive around. Start when everyone is here.";
 
-        if (isHost && _autoStartClients > 0 && Multiplayer.GetPeers().Length >= _autoStartClients)
+        if (isHost && !_autoStarted && _autoStartClients > 0
+            && Multiplayer.GetPeers().Length >= _autoStartClients)
+        {
+            _autoStarted = true;
             CallDeferred(nameof(OnStartPressed));
+        }
     }
 
     /// <summary>Everyone in the session, ourselves included, in a stable order.</summary>
@@ -140,8 +177,10 @@ public partial class LobbyPanel : Control
 
     private void OnStartPressed()
     {
-        // Guarded because the deferred autostart call can land after someone drops out.
-        if (Roster().Count < MinPlayersToStart)
+        // A deferred call can land a frame after the match has already begun and taken this
+        // scene away with it. A detached Control has no Multiplayer API to ask about the
+        // roster, so check we are still here before asking.
+        if (!IsInsideTree() || Roster().Count < MinPlayersToStart)
             return;
 
         GameManager.Instance.StartMatch();

@@ -29,20 +29,30 @@ FrontLeftWheel = NodePath("WheelFL")
 FrontRightWheel = NodePath("WheelFR")
 RearLeftWheel = NodePath("WheelRL")
 RearRightWheel = NodePath("WheelRR")
+SteeringSpeed = 6.5
+SteeringSpeedDecay = 0.1
+CountersteerAssist = 0.5
+SteeringExponent = 1.0
 ThrottleSpeed = 10.0
 StabilityYawEngageAngle = 0.1
 StabilityYawStrength = 2.0
-StabilityYawGroundMultiplier = 4.0
+StabilityYawGroundMultiplier = 2.0
 MaxDriveForce = 11000.0
 TopSpeed = 55.6
 DriveCurve = SubResource("Curve_drive")
 ReverseTopSpeed = 12.0
 FrontVariableSplit = 0.5
 VehicleMass = 1200.0
-CenterOfGravityHeightOffset = 0.0
+CenterOfGravityHeightOffset = -0.2
 FrontDampingRatio = 0.6
 RearDampingRatio = 0.6
 BrakingGripMultiplier = 2.0
+CoefficientOfFriction = Dictionary[String, float]({
+"Dirt": 1.5,
+"Grass": 1.1,
+"Ice": 0.45,
+"Road": 2.4
+})
 FrontTireRadius = 0.24
 RearTireRadius = 0.36
 CoefficientOfDrag = 0.1

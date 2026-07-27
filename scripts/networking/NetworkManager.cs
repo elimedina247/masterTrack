@@ -10,7 +10,15 @@ namespace MasterTrack.Networking;
 public partial class NetworkManager : Node
 {
     public const int DefaultPort = 8910;
-    public const int MaxPlayers = 8;
+
+    /// <summary>
+    /// How many <i>clients</i> may connect — this is passed straight to ENet's max-peers, which
+    /// counts connections, and the host is not one of them. So this is one less than the number
+    /// of people in the session: 6 clients plus the host is 7, which is exactly the seven rainbow
+    /// colours in <see cref="MasterTrack.Racer.CarVariants.Palette"/>. Everyone in the lobby is
+    /// driving, builder included, so the palette has to cover the whole room.
+    /// </summary>
+    public const int MaxPlayers = 6;
 
     /// <summary>Convenience singleton so other scripts can do NetworkManager.Instance.</summary>
     public static NetworkManager Instance { get; private set; } = null!;
@@ -59,36 +67,119 @@ public partial class NetworkManager : Node
         Multiplayer.ServerDisconnected += () => EmitSignal(SignalName.ServerDisconnected);
     }
 
+    /// <summary>How a session is carried.</summary>
+    public enum Transport
+    {
+        /// <summary>Raw UDP. Needs an IP everyone can reach — a tailnet, or port forwarding.</summary>
+        ENet,
+
+        /// <summary>Steam's relay. No IPs, no port forwarding, but everyone needs Steam running.</summary>
+        Steam,
+    }
+
+    /// <summary>Which transport the next Host/Join uses. Chosen on the main menu.</summary>
+    public Transport Mode { get; set; } = Transport.ENet;
+
+    /// <summary>
+    /// Whether an entry in the Join field is an address rather than a SteamID. A SteamID64 is a
+    /// bare 17-digit number; anything with a dot or a colon in it is an IPv4 or IPv6 address.
+    /// </summary>
+    public static bool LooksLikeAddress(string entry) =>
+        entry.Contains('.') || entry.Contains(':');
+
     /// <summary>Start hosting. The host is peer id 1 and is the game authority.</summary>
     public Error HostGame(int port = DefaultPort)
     {
-        var peer = new ENetMultiplayerPeer();
-        Error err = peer.CreateServer(port, MaxPlayers);
-        if (err != Error.Ok)
+        MultiplayerPeer peer;
+
+        if (Mode == Transport.Steam)
         {
-            GD.PushError($"[NetworkManager] Failed to create server: {err}");
-            return err;
+            var steam = new SteamMultiplayerPeer();
+            Error steamErr = steam.Host((ushort)port);
+            if (steamErr != Error.Ok)
+            {
+                GD.PushError($"[NetworkManager] Failed to open a Steam socket: {steamErr}");
+                return steamErr;
+            }
+
+            peer = steam;
+            GD.Print($"[NetworkManager] Hosting over Steam. Friends join with {steam.HostSteamId.Value}, " +
+                     $"or by address on port {port}.");
+        }
+        else
+        {
+            var enet = new ENetMultiplayerPeer();
+            Error enetErr = enet.CreateServer(port, MaxPlayers);
+            if (enetErr != Error.Ok)
+            {
+                GD.PushError($"[NetworkManager] Failed to create server: {enetErr}");
+                return enetErr;
+            }
+
+            peer = enet;
+            GD.Print($"[NetworkManager] Hosting on port {port}.");
         }
 
         Multiplayer.MultiplayerPeer = peer;
-        GD.Print($"[NetworkManager] Hosting on port {port} (peer id {Multiplayer.GetUniqueId()}).");
         EmitSignal(SignalName.ServerCreated);
         return Error.Ok;
     }
 
-    /// <summary>Connect to a host.</summary>
+    /// <summary>
+    /// Connect to a host. <paramref name="address"/> is an IP for ENet and the host's SteamID64
+    /// for Steam — the thing they read off their own lobby and send you.
+    /// </summary>
     public Error JoinGame(string address, int port = DefaultPort)
     {
-        var peer = new ENetMultiplayerPeer();
-        Error err = peer.CreateClient(address, port);
-        if (err != Error.Ok)
+        MultiplayerPeer peer;
+
+        if (Mode == Transport.Steam)
         {
-            GD.PushError($"[NetworkManager] Failed to create client: {err}");
-            return err;
+            var steam = new SteamMultiplayerPeer();
+            Error steamErr;
+            string entry = address.Trim();
+
+            // The entry decides the route, so one field serves both: a friend's SteamID goes
+            // through the relay, an address goes straight to the host's local socket. That is
+            // what makes two windows on one machine work without a special mode.
+            if (LooksLikeAddress(entry))
+            {
+                steamErr = steam.ConnectToAddress(entry, (ushort)port);
+            }
+            else if (ulong.TryParse(entry, out ulong hostId))
+            {
+                steamErr = steam.ConnectToHost(hostId);
+            }
+            else
+            {
+                GD.PushError($"[NetworkManager] '{entry}' is neither a SteamID nor an address.");
+                return Error.InvalidParameter;
+            }
+
+            if (steamErr != Error.Ok)
+            {
+                GD.PushError($"[NetworkManager] Failed to open a Steam connection: {steamErr}");
+                return steamErr;
+            }
+
+            peer = steam;
+            GD.Print($"[NetworkManager] Connecting over Steam to {address} ...");
+        }
+        else
+        {
+            var enet = new ENetMultiplayerPeer();
+            Error enetErr = enet.CreateClient(address, port);
+            if (enetErr != Error.Ok)
+            {
+                GD.PushError($"[NetworkManager] Failed to create client: {enetErr}");
+                return enetErr;
+            }
+
+            peer = enet;
+            GD.Print($"[NetworkManager] Connecting to {address}:{port} ...");
         }
 
         Multiplayer.MultiplayerPeer = peer;
-        GD.Print($"[NetworkManager] Connecting to {address}:{port} ...");
         return Error.Ok;
     }
 

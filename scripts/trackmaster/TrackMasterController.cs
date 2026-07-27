@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Godot;
+using MasterTrack.Networking;
 using MasterTrack.Racer;
 using MasterTrack.Tiles;
 
@@ -166,21 +167,6 @@ public partial class TrackMasterController : Node3D
 	private readonly List<RacerMarker> _markers = new();
 	private float _rosterCountdown;
 
-	/// <summary>
-	/// Picked apart rather than pretty: the Track Master has to tell cars apart at a glance from
-	/// a long way up, so these are spread around the wheel and kept off the yellow the head
-	/// marker already owns.
-	/// </summary>
-	private static readonly Color[] RacerColors =
-	{
-		new(1.00f, 0.42f, 0.30f),
-		new(0.40f, 0.85f, 1.00f),
-		new(0.55f, 1.00f, 0.45f),
-		new(0.85f, 0.55f, 1.00f),
-		new(1.00f, 0.55f, 0.80f),
-		new(0.45f, 1.00f, 0.90f),
-	};
-
 	public override void _Ready()
 	{
 		if (Track == null)
@@ -318,9 +304,10 @@ public partial class TrackMasterController : Node3D
 			if (node is not RacerController racer || HasMarkerFor(racer))
 				continue;
 
-			Color color = RacerColors[Mathf.Abs(racer.OwnerPeerId) % RacerColors.Length];
-			Node3D root = BuildRacerMarker(color,
-				racer.OwnerPeerId > 0 ? $"Racer {racer.OwnerPeerId}" : "Racer");
+			// The car's own paint, not a colour derived from the peer id. The chevron is only
+			// useful if it matches the car the Track Master can see driving around underneath it.
+			Node3D root = BuildRacerMarker(racer.PaintColor,
+				racer.OwnerPeerId > 0 ? GameManager.Instance.NameOf(racer.OwnerPeerId) : "Racer");
 			AddChild(root);
 
 			_markers.Add(new RacerMarker { Racer = racer, Root = root });

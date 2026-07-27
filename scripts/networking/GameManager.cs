@@ -1,7 +1,29 @@
 using Godot;
+using MasterTrack.Racer;
 using System.Collections.Generic;
 
 namespace MasterTrack.Networking;
+
+/// <summary>
+/// What one player's car looks like: which of the three models, and which rainbow colour. Dealt
+/// once at join time and kept for the whole session, so your car is the same in the lobby and in
+/// the match — the colour is how people tell each other apart.
+/// </summary>
+public readonly record struct RacerAppearance(int VariantIndex, int ColourIndex)
+{
+    /// <summary>Colour index meaning "nobody dealt this car a colour" — solo play, and the
+    /// unowned car the board builds ahead of.</summary>
+    public const int NoColour = -1;
+
+    public static RacerAppearance Unassigned =>
+        new(CarVariants.DefaultVariantIndex, NoColour);
+
+    public Color Paint =>
+        ColourIndex == NoColour ? CarVariants.DefaultPaint : CarVariants.ColourAt(ColourIndex);
+
+    public string ColourName =>
+        ColourIndex == NoColour ? "Stock" : CarVariants.ColourNameAt(ColourIndex);
+}
 
 public enum PlayerRole
 {
@@ -46,11 +68,38 @@ public partial class GameManager : Node
     /// <summary>Fired on every peer as the scene-ready count climbs, for a "waiting" message.</summary>
     [Signal] public delegate void SceneReadyProgressEventHandler(int ready, int total);
 
+    /// <summary>A peer's car model and colour are now known on this machine.</summary>
+    [Signal] public delegate void AppearanceAssignedEventHandler(int peerId, int variant, int colour);
+
+    /// <summary>A peer's name is now known on this machine.</summary>
+    [Signal] public delegate void PlayerNameChangedEventHandler(int peerId, string name);
+
     /// <summary>Tiles dealt to the Track Master at the start of each round.</summary>
     public const int TilesPerRound = 5;
 
     /// <summary>Server-side truth. On clients this is only populated by RPC.</summary>
     public readonly Dictionary<int, PlayerRole> Roles = new();
+
+    /// <summary>
+    /// What each peer's car looks like. Same deal as <see cref="Roles"/>: the server decides and
+    /// every peer is told, so nobody's machine has its own opinion about what colour you are.
+    /// </summary>
+    public readonly Dictionary<int, RacerAppearance> Appearances = new();
+
+    /// <summary>Server only. Rainbow colours nobody is wearing yet.</summary>
+    private readonly List<int> _freeColours = new();
+
+    /// <summary>What each peer calls themselves. Replicated to everyone, like the appearances.</summary>
+    public readonly Dictionary<int, string> Names = new();
+
+    /// <summary>
+    /// The name this machine plays under, set from the main menu before hosting or joining.
+    /// Sent to the server once connected; the server hands it to everyone else.
+    /// </summary>
+    public string LocalPlayerName { get; set; } = "";
+
+    /// <summary>Longest name accepted, so nobody can push the lobby list off the screen.</summary>
+    public const int MaxNameLength = 16;
 
     public GameState State { get; private set; } = GameState.Lobby;
     public int RoundNumber { get; private set; }
@@ -85,10 +134,17 @@ public partial class GameManager : Node
         // A peer that drops while we are waiting on it must not strand everyone else in the
         // lobby forever — it also lowers the bar, which can complete the handshake outright.
         NetworkManager.Instance.PlayerDisconnected += OnPeerDisconnected;
+        NetworkManager.Instance.PlayerConnected += OnPeerConnected;
+        NetworkManager.Instance.ServerCreated += OnServerCreated;
     }
 
     private void OnPeerDisconnected(int peerId)
     {
+        // Every peer forgets them, so nobody is left listing a player who has gone.
+        Names.Remove(peerId);
+        if (Appearances.Remove(peerId, out RacerAppearance gone) && NetworkManager.Instance.IsHost)
+            _freeColours.Add(gone.ColourIndex);
+
         if (!NetworkManager.Instance.IsHost)
             return;
 
@@ -96,6 +152,147 @@ public partial class GameManager : Node
         // Only re-check: never un-fire. Once cars have spawned, a leaver is just a leaver.
         if (!_allPeersReady)
             EvaluateSceneReady();
+    }
+
+    // ---- Appearance: which car, which colour ----
+    //
+    // Dealt on join rather than at match start, because everyone is already driving around the
+    // lobby by then and a car that changed colour on the way into the match would undo the one
+    // thing the colour is for. The builder holds a colour for the whole wait too — they are only
+    // singled out when the host presses Start — which is why the palette has to cover the lobby
+    // rather than just the racers.
+
+    /// <summary>Server only. Fresh session: nobody has a colour yet, and we take the first.</summary>
+    private void OnServerCreated()
+    {
+        Appearances.Clear();
+        Names.Clear();
+
+        _freeColours.Clear();
+        for (int i = 0; i < CarVariants.Palette.Length; i++)
+            _freeColours.Add(i);
+
+        AssignAppearance(Multiplayer.GetUniqueId());
+        PublishLocalName();
+    }
+
+    /// <summary>Server only. Deal to the newcomer, then catch them up on everyone already here.</summary>
+    private void OnPeerConnected(int peerId)
+    {
+        if (!NetworkManager.Instance.IsHost)
+            return;
+
+        AssignAppearance(peerId);
+
+        foreach (var kvp in Appearances)
+        {
+            if (kvp.Key != peerId)
+                RpcId(peerId, MethodName.NotifyAppearanceAssigned, kvp.Key,
+                      kvp.Value.VariantIndex, kvp.Value.ColourIndex);
+        }
+
+        foreach (var kvp in Names)
+        {
+            if (kvp.Key != peerId)
+                RpcId(peerId, MethodName.NotifyPlayerName, kvp.Key, kvp.Value);
+        }
+    }
+
+    private void AssignAppearance(int peerId)
+    {
+        if (Appearances.ContainsKey(peerId))
+            return;
+
+        // Model with replacement, colour without: three models cannot cover seven people, but
+        // the colours can, and the colour is the half that has to be unique.
+        var appearance = new RacerAppearance(GD.RandRange(0, CarVariants.All.Count - 1), TakeColour());
+        Appearances[peerId] = appearance;
+
+        GD.Print($"[GameManager] Peer {peerId} gets {CarVariants.At(appearance.VariantIndex).Name} " +
+                 $"in {appearance.ColourName}.");
+
+        Rpc(MethodName.NotifyAppearanceAssigned, peerId, appearance.VariantIndex, appearance.ColourIndex);
+        NotifyAppearanceAssigned(peerId, appearance.VariantIndex, appearance.ColourIndex);
+    }
+
+    private int TakeColour()
+    {
+        // NetworkManager.MaxPlayers is set so this cannot happen. Saying so anyway, because a
+        // pool that runs dry silently hands two people the same identity.
+        if (_freeColours.Count == 0)
+        {
+            GD.PushWarning("[GameManager] Rainbow palette exhausted; two players will share a colour.");
+            return GD.RandRange(0, CarVariants.Palette.Length - 1);
+        }
+
+        int index = GD.RandRange(0, _freeColours.Count - 1);
+        int colour = _freeColours[index];
+        _freeColours.RemoveAt(index);
+        return colour;
+    }
+
+    [Rpc(MultiplayerApi.RpcMode.Authority, CallLocal = false, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    private void NotifyAppearanceAssigned(int peerId, int variant, int colour)
+    {
+        Appearances[peerId] = new RacerAppearance(variant, colour);
+        EmitSignal(SignalName.AppearanceAssigned, peerId, variant, colour);
+    }
+
+    /// <summary>What a peer's car looks like, or the stock paint if nobody has dealt them one.</summary>
+    public RacerAppearance AppearanceOf(int peerId) =>
+        Appearances.TryGetValue(peerId, out RacerAppearance a) ? a : RacerAppearance.Unassigned;
+
+    // ---- Names ----
+    //
+    // A peer id is a random 32-bit number, which is no use for "watch out, it's behind you".
+    // Names travel the same way appearances do — the server holds the list and tells everyone —
+    // except that the name comes *from* the client, so it has to be sanitised on arrival rather
+    // than trusted.
+
+    /// <summary>What a peer calls themselves, falling back to something readable.</summary>
+    public string NameOf(int peerId) =>
+        Names.TryGetValue(peerId, out string? name) && !string.IsNullOrWhiteSpace(name)
+            ? name
+            : $"Racer {peerId}";
+
+    /// <summary>Call once connected. The host sets its own directly; a client asks the server.</summary>
+    public void PublishLocalName()
+    {
+        if (!NetworkManager.Instance.IsNetworked)
+            return;
+
+        if (NetworkManager.Instance.IsHost)
+            ServerSetName(Multiplayer.GetUniqueId(), LocalPlayerName);
+        else
+            RpcId(1, MethodName.ServerRequestName, LocalPlayerName);
+    }
+
+    [Rpc(MultiplayerApi.RpcMode.AnyPeer, CallLocal = false, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    private void ServerRequestName(string name) => ServerSetName(Multiplayer.GetRemoteSenderId(), name);
+
+    private void ServerSetName(int peerId, string name)
+    {
+        if (!NetworkManager.Instance.IsHost)
+            return;
+
+        // Trimmed and capped here, on the authority, because the string arrived from a client.
+        string clean = name.StripEdges();
+        if (clean.Length > MaxNameLength)
+            clean = clean[..MaxNameLength];
+
+        if (string.IsNullOrWhiteSpace(clean))
+            clean = $"Racer {peerId}";
+
+        Names[peerId] = clean;
+        Rpc(MethodName.NotifyPlayerName, peerId, clean);
+        NotifyPlayerName(peerId, clean);
+    }
+
+    [Rpc(MultiplayerApi.RpcMode.Authority, CallLocal = false, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    private void NotifyPlayerName(int peerId, string name)
+    {
+        Names[peerId] = name;
+        EmitSignal(SignalName.PlayerNameChanged, peerId, name);
     }
 
     /// <summary>
@@ -156,6 +353,29 @@ public partial class GameManager : Node
 
         RoundNumber = 0;
         StartNextRound();
+    }
+
+    /// <summary>
+    /// Server only. Wind the match up and put everyone back in the lobby together.
+    ///
+    /// Everyone, rather than whoever asked: the server is the only thing that spawns cars and it
+    /// is in the match scene, so a lone peer that wandered back to the lobby on its own would
+    /// stand there without one. Appearances survive — you keep your car and your colour for the
+    /// whole session, which is the point of them.
+    /// </summary>
+    public void EndMatch()
+    {
+        if (!NetworkManager.Instance.IsHost)
+            return;
+
+        Roles.Clear();
+        _sceneReadyPeers.Clear();
+        _allPeersReady = false;
+        TrackMasterPeerId = 0;
+        RoundNumber = 0;
+
+        GD.Print("[GameManager] Match ended; returning to the lobby.");
+        SetState(GameState.Lobby);
     }
 
     /// <summary>Server only. Advance to the next round and deal a fresh hand.</summary>

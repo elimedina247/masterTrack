@@ -17,6 +17,7 @@ config/icon="res://icon.svg"
 
 [autoload]
 
+SteamService="*res://scripts/networking/SteamService.cs"
 NetworkManager="*res://scripts/networking/NetworkManager.cs"
 GameManager="*res://scripts/networking/GameManager.cs"
 

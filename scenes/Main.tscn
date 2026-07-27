@@ -39,11 +39,40 @@ theme_override_font_sizes/font_size = 32
 text = "MASTER TRACK"
 horizontal_alignment = 1
 
+[node name="NameRow" type="HBoxContainer" parent="Center/Panel/Margin/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="NameLabel" type="Label" parent="Center/Panel/Margin/VBox/NameRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Name"
+
+[node name="NameEdit" type="LineEdit" parent="Center/Panel/Margin/VBox/NameRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+max_length = 16
+placeholder_text = "Racer"
+
+[node name="SteamCheck" type="CheckBox" parent="Center/Panel/Margin/VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Use Steam (no VPN needed)"
+
+[node name="SteamIdLabel" type="Label" parent="Center/Panel/Margin/VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = ""
+horizontal_alignment = 1
+
 [node name="IpRow" type="HBoxContainer" parent="Center/Panel/Margin/VBox" unique_id=313505521]
 layout_mode = 2
 theme_override_constants/separation = 8
 
 [node name="IpLabel" type="Label" parent="Center/Panel/Margin/VBox/IpRow" unique_id=1468370662]
+unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Host IP"

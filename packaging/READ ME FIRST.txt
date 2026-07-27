@@ -1,0 +1,72 @@
+MASTER TRACK — playtest build
+=============================
+
+BEFORE YOU START
+----------------
+Steam must be running and you must be logged in. That's it — no account needed for
+the game itself, and nothing gets installed. The game will show up in Steam as
+"Playing Spacewar"; that's expected, it's the test app ID every developer uses.
+
+Unzip the WHOLE folder and keep it together. masterTrack.exe on its own will not
+run — it needs the .pck and the data_ folder sitting next to it.
+
+
+WINDOWS WILL WARN YOU
+---------------------
+The build isn't code-signed, so SmartScreen will say "Windows protected your PC".
+Click "More info", then "Run anyway". Nothing is wrong; signing costs money and
+this is a playtest.
+
+
+RUNNING IT
+----------
+Double-click masterTrack.exe.
+
+If something goes wrong, run masterTrack.console.exe instead — same game, but it
+opens a console window with the logs in it. Send me what it says.
+
+
+PLAYING TOGETHER
+----------------
+One person hosts:
+  1. Tick "Use Steam".
+  2. Press Host.
+  3. Your Steam ID is shown on the menu. Send it to everyone.
+
+Everyone else joins:
+  1. Tick "Use Steam".
+  2. Paste the host's Steam ID into the "Host ID / IP" box.
+  3. Press Join.
+
+You'll land in the lobby together — everyone gets a car in their own colour and
+can drive around while the rest arrive. When everyone's in, the host presses
+Start Match. One player is picked at random to be the Track Master: they get a
+top-down view of the board and build the track everyone else is racing on.
+
+
+CONTROLS — driving
+------------------
+  W / Up arrow ....... accelerate
+  S / Down arrow ..... brake, and reverse from a standstill
+  A D / Left Right ... steer
+  Space .............. handbrake
+  Shift .............. nitro
+  Tab ................ put your car back on its wheels
+  Escape ............. leave the match (host only) / back to menu
+  `  ................. physics debug overlay
+
+A controller works too.
+
+CONTROLS — Track Master
+-----------------------
+  Left click ......... place the selected tile
+  R .................. rotate
+  Right click ........ cancel / hold to look around
+  W A S D ............ move the camera
+
+
+WHAT I'M LOOKING FOR
+--------------------
+This is about how the cars feel and whether the whole thing is fun. There are no
+win conditions, no scoring, and the race doesn't end — that's on purpose. If it
+falls over, tell me what you were doing at the time.

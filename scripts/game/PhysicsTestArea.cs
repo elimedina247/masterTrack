@@ -79,10 +79,6 @@ public partial class PhysicsTestArea : Node3D
 
 	private RacerArena? _arena;
 
-	/// <summary>This machine's car, and where to put it back. Null until one spawns.</summary>
-	private RacerController? _localCar;
-	private Transform3D _localCarStart;
-
 	/// <summary>Server only. Which ring slot each peer's car was given.</summary>
 	private readonly Dictionary<int, int> _slots = new();
 
@@ -106,8 +102,6 @@ public partial class PhysicsTestArea : Node3D
 			GD.PushError("[TestArea] No RacerArena child, so there will be no cars.");
 			return;
 		}
-
-		_arena.LocalRacerSpawned += OnLocalRacerSpawned;
 
 		if (!NetworkManager.Instance.IsNetworked)
 		{
@@ -137,9 +131,6 @@ public partial class PhysicsTestArea : Node3D
 	{
 		if (Engine.IsEditorHint())
 			return;
-
-		if (_arena != null)
-			_arena.LocalRacerSpawned -= OnLocalRacerSpawned;
 
 		GameManager.Instance.GameStateChanged -= OnGameStateChanged;
 		GameManager.Instance.PeerSceneReady -= OnPeerSceneReady;
@@ -173,16 +164,6 @@ public partial class PhysicsTestArea : Node3D
 		}
 
 		return 0;
-	}
-
-	/// <summary>
-	/// The car this machine drives. Captured rather than exported because in a session it
-	/// arrives by replication, and which one is ours is not known until it does.
-	/// </summary>
-	private void OnLocalRacerSpawned(RacerController car)
-	{
-		_localCar = car;
-		_localCarStart = car.GlobalTransform;
 	}
 
 	/// <summary>The host has started the match; everyone follows them into it.</summary>
@@ -250,12 +231,8 @@ public partial class PhysicsTestArea : Node3D
 		if (Engine.IsEditorHint())
 			return;
 
-		// You will end up on the roof in here, so make getting back trivial. Deliberately its
-		// own action rather than a ui_* one: Godot's ui_accept includes Space, which would
-		// fight the handbrake every time you tried to slide the car.
-		if (@event.IsActionPressed("racer_reset"))
-			RespawnCar();
-
+		// racer_reset is the car's own business now — RacerController handles it, so it works
+		// here and in a match alike rather than only on this pad.
 		if (@event.IsActionPressed("ui_cancel"))
 			LeaveToMenu();
 	}
@@ -270,21 +247,6 @@ public partial class PhysicsTestArea : Node3D
 			NetworkManager.Instance.Disconnect();
 
 		GetTree().ChangeSceneToFile(MainMenuScenePath);
-	}
-
-	/// <summary>
-	/// Put our own car back where it started, upright and stopped. Goes through the physics
-	/// server rather than assigning GlobalTransform, which a rigid body is entitled to ignore.
-	/// </summary>
-	private void RespawnCar()
-	{
-		if (_localCar == null || !IsInstanceValid(_localCar))
-			return;
-
-		Rid rid = _localCar.GetRid();
-		PhysicsServer3D.BodySetState(rid, PhysicsServer3D.BodyState.Transform, _localCarStart);
-		PhysicsServer3D.BodySetState(rid, PhysicsServer3D.BodyState.LinearVelocity, Vector3.Zero);
-		PhysicsServer3D.BodySetState(rid, PhysicsServer3D.BodyState.AngularVelocity, Vector3.Zero);
 	}
 
 	private void BuildSurfaces()

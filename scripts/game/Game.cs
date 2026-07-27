@@ -23,6 +23,12 @@ namespace MasterTrack.Game;
 /// </summary>
 public partial class Game : Node3D
 {
+    private const string MainMenuScenePath = "res://scenes/Main.tscn";
+    private const string LobbyScenePath = "res://scenes/TestArea.tscn";
+
+    /// <summary>How long a passing message stays on screen.</summary>
+    private const float NoticeSeconds = 2.5f;
+
     private RacerArena _arena = null!;
     private TrackController _track = null!;
     private TrackMasterController _builder = null!;
@@ -71,7 +77,15 @@ public partial class Game : Node3D
             GameManager.Instance.AllPeersReady += OnAllPeersReady;
 
         GameManager.Instance.SceneReadyProgress += OnSceneReadyProgress;
+        GameManager.Instance.GameStateChanged += OnGameStateChanged;
         GameManager.Instance.ReportSceneReady();
+    }
+
+    /// <summary>The match is over; everyone goes back to the lobby together.</summary>
+    private void OnGameStateChanged(int state)
+    {
+        if ((GameState)state == GameState.Lobby)
+            GetTree().ChangeSceneToFile(LobbyScenePath);
     }
 
     /// <summary>
@@ -83,6 +97,7 @@ public partial class Game : Node3D
     {
         GameManager.Instance.AllPeersReady -= OnAllPeersReady;
         GameManager.Instance.SceneReadyProgress -= OnSceneReadyProgress;
+        GameManager.Instance.GameStateChanged -= OnGameStateChanged;
     }
 
     /// <summary>Every peer is in the scene, so spawned cars will reach all of them.</summary>
@@ -185,10 +200,45 @@ public partial class Game : Node3D
                  (current != null ? current.GetPath() : "<none>"));
     }
 
+    /// <summary>
+    /// Escape leaves the match — it does not close the game. Somebody will press it by reflex,
+    /// and quitting the process drops them out of a session they then have to be talked back
+    /// into.
+    /// </summary>
     public override void _UnhandledInput(InputEvent @event)
     {
-        // Quick escape hatch while we iterate (fullscreen makes this handy).
-        if (@event.IsActionPressed("ui_cancel"))
-            GetTree().Quit();
+        if (!@event.IsActionPressed("ui_cancel"))
+            return;
+
+        // Solo has no session to return to, so the menu is the only place to go.
+        if (!NetworkManager.Instance.IsNetworked)
+        {
+            GetTree().ChangeSceneToFile(MainMenuScenePath);
+            return;
+        }
+
+        // Only the host can call it, and it takes the whole session back at once. There is no
+        // win condition yet, so this is also the only way a round ends.
+        if (NetworkManager.Instance.IsHost)
+            GameManager.Instance.EndMatch();
+        else
+            ShowNotice("Only the host can end the match.");
+    }
+
+    /// <summary>Say something in the middle of the screen for a moment, then take it away.</summary>
+    private void ShowNotice(string text)
+    {
+        if (_waiting == null)
+            return;
+
+        _waiting.Text = text;
+        _waiting.Visible = true;
+
+        GetTree().CreateTimer(NoticeSeconds).Timeout += () =>
+        {
+            // The scene can be gone by the time this fires.
+            if (IsInstanceValid(_waiting))
+                _waiting.Visible = false;
+        };
     }
 }

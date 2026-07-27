@@ -38,6 +38,15 @@ public partial class RacerController : Vehicle
 	/// <summary>Which peer owns/controls this car.</summary>
 	[Export] public int OwnerPeerId { get; set; }
 
+	/// <summary>Which of the three models this car wears. See <see cref="CarVariants"/>.</summary>
+	[Export] public int VariantIndex { get; set; } = CarVariants.DefaultVariantIndex;
+
+	/// <summary>
+	/// The colour on its bodywork — this player's identity for the whole session. The Track
+	/// Master's chevron reads this off the car, so the board and the road always agree.
+	/// </summary>
+	[Export] public Color PaintColor { get; set; } = CarVariants.DefaultPaint;
+
 	/// <summary>Which input actions drive this car.</summary>
 	[Export] public VehicleInputActions Actions { get; set; } = new();
 
@@ -79,6 +88,23 @@ public partial class RacerController : Vehicle
 	/// </summary>
 	public bool IsBoosting => IsRemote ? NetNitro : IsNitroActive;
 
+	/// <summary>
+	/// How often the recovery pose is refreshed, in seconds. Coarse on purpose: it wants to be
+	/// where you *were driving*, not the instant before you got it wrong.
+	/// </summary>
+	private const float RecoveryPoseInterval = 0.25f;
+
+	/// <summary>How square to the ground the car must be for a pose to count as recoverable.</summary>
+	private const float RecoveryUprightDot = 0.7f;
+
+	/// <summary>Wheels that must be touching something for a pose to count as recoverable.</summary>
+	private const int RecoveryGroundedWheels = 3;
+
+	/// <summary>The last place this car was upright on solid ground. Where a reset puts it back.</summary>
+	private Transform3D _recoveryPose;
+
+	private float _recoveryCountdown;
+
 	/// <summary>Track index the racer is currently on, tracked by the server.</summary>
 	public int CurrentTrackIndex { get; private set; }
 
@@ -106,12 +132,16 @@ public partial class RacerController : Vehicle
 	/// settled, by the time the spawn it belongs to is processed — leaving either until
 	/// <c>_Ready</c> is an error it reports at runtime, and quietly costs the car its pose.
 	/// </summary>
-	public void PrepareForSpawn(int peerId, Vector3 position)
+	public void PrepareForSpawn(int peerId, Vector3 position, RacerAppearance appearance)
 	{
 		// Name = peer id as well, so a copy can still recover its owner from the node name.
 		Name = peerId.ToString();
 		OwnerPeerId = peerId;
 		Position = position;
+
+		VariantIndex = appearance.VariantIndex;
+		PaintColor = appearance.Paint;
+		ApplyVariant();
 
 		if (!IsNetworked)
 			return;
@@ -128,11 +158,82 @@ public partial class RacerController : Vehicle
 		SetMultiplayerAuthority(peerId);
 	}
 
+	/// <summary>
+	/// Put this car's model on the rig: the body, and the four rims.
+	///
+	/// The rims are scaled rather than taken as they come. Each variant's wheels were modelled at
+	/// a different radius (see <c>assets/cars/README.md</c>) while <c>Wheel.cs</c> positions the
+	/// hub without ever scaling it, so an unscaled rim renders sunk into the road or floating
+	/// above it. Scaling to the rig's own <see cref="Vehicle.FrontTireRadius"/> means all three
+	/// variants sit right *and* handle identically — which is the point for this playtest. Random
+	/// assignment of different handling would confound exactly what the playtest is measuring:
+	/// you could not tell feedback about the physics from feedback about which car someone drew.
+	/// </summary>
+	private void ApplyVariant()
+	{
+		CarVariants.Variant variant = CarVariants.At(VariantIndex);
+
+		// Identity, deliberately: the old CC96 rotation fudge is wrong for every model in
+		// assets/cars/, which are authored nose along Blender +Y and arrive facing -Z already.
+		if (GetNodeOrNull<Node3D>("BodyRig") is { } bodyRig)
+			SwapModel(bodyRig, "BodyModel", variant.BodyPath, Transform3D.Identity);
+
+		float front = FrontTireRadius / variant.ModelledFrontRadius;
+		float rear = RearTireRadius / variant.ModelledRearRadius;
+
+		SwapRim("WheelFL/WheelFLHub", "RimFL", variant.RimLeftPath, front);
+		SwapRim("WheelFR/WheelFRHub", "RimFR", variant.RimRightPath, front);
+		SwapRim("WheelRL/WheelRLHub", "RimRL", variant.RimLeftPath, rear);
+		SwapRim("WheelRR/WheelRRHub", "RimRR", variant.RimRightPath, rear);
+	}
+
+	/// <summary>
+	/// Swap one rim, keeping the node's own orientation. All four rim nodes carry the same axle
+	/// rotation and the left/right mirroring is baked into the assets, so that transform is the
+	/// asset convention rather than anything per-variant — it must survive the swap.
+	/// </summary>
+	private void SwapRim(string hubPath, string rimName, string scenePath, float scale)
+	{
+		if (GetNodeOrNull<Node3D>(hubPath) is not { } hub)
+			return;
+
+		Transform3D axle = hub.GetNodeOrNull<Node3D>(rimName)?.Transform ?? Transform3D.Identity;
+		SwapModel(hub, rimName, scenePath, axle.Scaled(new Vector3(scale, scale, scale)));
+	}
+
+	private static void SwapModel(Node parent, string childName, string scenePath, Transform3D transform)
+	{
+		if (parent.GetNodeOrNull(childName) is { } previous)
+		{
+			// Renamed before freeing: QueueFree defers, and the new child cannot take a name
+			// the outgoing one is still holding.
+			previous.Name = $"{childName}_old";
+			parent.RemoveChild(previous);
+			previous.QueueFree();
+		}
+
+		var scene = GD.Load<PackedScene>(scenePath);
+		if (scene == null)
+		{
+			GD.PushError($"[Racer] Could not load car model {scenePath}.");
+			return;
+		}
+
+		var model = scene.Instantiate<Node3D>();
+		model.Name = childName;
+		model.Transform = transform;
+		parent.AddChild(model);
+	}
+
 	public override void _Ready()
 	{
 		// Builds the axles and derives the suspension/brake setup. Must run before the first
 		// physics step, and before anything reads the vehicle's state.
 		base._Ready();
+
+		// Explicitly, and after the variant swap. FlatShade is a child, so Godot has already run
+		// its _Ready against whatever model the scene shipped with — by now that model is gone.
+		GetNodeOrNull<FlatShade>("FlatShade")?.Restyle(PaintColor);
 
 		// How the board finds this car. Everything else about the marker is the board's business.
 		AddToGroup(GroupName);
@@ -147,6 +248,73 @@ public partial class RacerController : Vehicle
 
 		// Hand the camera to the local player only.
 		GetNodeOrNull<CameraRig>("CameraRig")?.SetActive(IsLocalPlayer);
+
+		// Somewhere to go back to before we have ever been anywhere.
+		_recoveryPose = GlobalTransform;
+	}
+
+	public override void _UnhandledInput(InputEvent @event)
+	{
+		// Only ever your own car, and only the machine that simulates it. A remote copy is a
+		// puppet; shoving it about here would just be overruled by the next pose off the wire.
+		if (!IsLocalPlayer || IsRemote || !@event.IsActionPressed(Actions.Reset))
+			return;
+
+		Respawn();
+		GetViewport().SetInputAsHandled();
+	}
+
+	/// <summary>
+	/// Put this car back where it was last driving, upright and stopped.
+	///
+	/// No RPC and no server involvement: a car is simulated on exactly one machine, and that
+	/// machine is the authority for its pose, so moving it locally is already the authoritative
+	/// answer — the new pose goes out on the next sync like any other. <see cref="NetPosition"/>
+	/// is written straight away as well so remote copies cut to it rather than gliding across
+	/// the board (see <see cref="RemoteSnapDistance"/>).
+	///
+	/// This exists because there is no win condition to end a round on. Without it a single bad
+	/// landing takes a player out for the rest of the session.
+	/// </summary>
+	public void Respawn()
+	{
+		Rid rid = GetRid();
+		PhysicsServer3D.BodySetState(rid, PhysicsServer3D.BodyState.Transform, _recoveryPose);
+		PhysicsServer3D.BodySetState(rid, PhysicsServer3D.BodyState.LinearVelocity, Vector3.Zero);
+		PhysicsServer3D.BodySetState(rid, PhysicsServer3D.BodyState.AngularVelocity, Vector3.Zero);
+
+		NetPosition = _recoveryPose.Origin;
+		NetRotation = _recoveryPose.Basis.GetRotationQuaternion();
+	}
+
+	/// <summary>
+	/// Remember where the car was, while it is somewhere worth going back to.
+	///
+	/// Deliberately the last place it was <i>driving</i> rather than a fixed spawn point: on a
+	/// track the Track Master is still building, the start line can be a long way behind you, and
+	/// being sent back there for one bad landing is its own punishment. Requires most of the
+	/// wheels down and the car roughly the right way up, so the pose recorded is never mid-roll.
+	/// </summary>
+	private void UpdateRecoveryPose(float delta)
+	{
+		_recoveryCountdown -= delta;
+		if (_recoveryCountdown > 0.0f)
+			return;
+
+		_recoveryCountdown = RecoveryPoseInterval;
+
+		if (!IsVehicleReady || GlobalBasis.Y.Dot(Vector3.Up) < RecoveryUprightDot)
+			return;
+
+		int grounded = 0;
+		foreach (Wheel wheel in WheelArray)
+		{
+			if (wheel.IsColliding())
+				grounded++;
+		}
+
+		if (grounded >= RecoveryGroundedWheels)
+			_recoveryPose = GlobalTransform;
 	}
 
 	/// <summary>
@@ -191,6 +359,8 @@ public partial class RacerController : Vehicle
 			VehicleInputState.Sample(Actions).ApplyTo(this, Actions);
 
 		base._PhysicsProcess(delta);
+
+		UpdateRecoveryPose((float)delta);
 
 		if (IsNetworked)
 		{
