@@ -56,6 +56,23 @@ public partial class GroundRay : RayCast3D
     public float SpringDamping { get; set; } = 3000.0f;
 
     /// <summary>
+    /// Fraction of <see cref="RestLength"/> the spring may compress before the bump stop starts
+    /// taking over, 0..1.
+    /// </summary>
+    public float BumpStopStart { get; set; } = 0.6f;
+
+    /// <summary>
+    /// How much stiffer the bump stop is than the spring, at the very end of the travel.
+    ///
+    /// Without one there is nothing between the spring running out and the chassis arriving: the
+    /// collision box reaches the road well before the suspension does, and a rigid-body collision
+    /// with the road at speed simply deletes the car's momentum. That is what made ramps feel
+    /// like driving into a wall — the concave crease at the foot of a climb needs more travel
+    /// than the car physically has, so it bottomed out on every one.
+    /// </summary>
+    public float BumpStopStrength { get; set; } = 12.0f;
+
+    /// <summary>
     /// Largest downward pull this corner may apply when the ray reaches past
     /// <see cref="RestLength"/>, in newtons.
     ///
@@ -147,6 +164,17 @@ public partial class GroundRay : RayCast3D
 
         float force = (Compression * SpringStrength) - (closingSpeed * SpringDamping);
 
+        // Bump stop: past BumpStopStart the rate climbs with the square of how far into the last
+        // of the travel we are, so it is soft where it engages and very hard at the end. Squared
+        // rather than linear on purpose — a linear stop is either felt as a second bump halfway
+        // through the travel or is too weak to stop anything.
+        float stopStart = RestLength * BumpStopStart;
+        if (Compression > stopStart && RestLength > stopStart)
+        {
+            float into = (Compression - stopStart) / (RestLength - stopStart);
+            force += into * into * BumpStopStrength * SpringStrength * (Compression - stopStart);
+        }
+
         // See MaxPullForce: the downward half is capped, the upward half isn't.
         if (force < 0.0f)
             force = Mathf.Max(force, -MaxPullForce);
@@ -203,7 +231,11 @@ public partial class GroundRay : RayCast3D
             _spin = Mathf.Wrap(_spin + travelled / TireRadius, 0.0f, Mathf.Tau);
         }
 
-        wheel.Rotation = new Vector3(_spin, steer, 0.0f);
+        // Body pose first, then this wheel's own steer and roll inside it — the same order the
+        // parts would sit in if the whole visible car were one posed model, which is how the
+        // reference build does it. See Vehicle.WheelPose for why the rays can't just be children
+        // of the posed shell.
+        wheel.Basis = vehicle.WheelPose * Basis.FromEuler(new Vector3(_spin, steer, 0.0f));
     }
 
     /// <summary>

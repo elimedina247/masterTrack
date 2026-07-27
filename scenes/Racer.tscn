@@ -16,7 +16,7 @@
 [ext_resource type="Script" uid="uid://eq5bg7e2kp0x" path="res://scripts/vehicles/NitroFlame.cs" id="14_nitroflame"]
 
 [sub_resource type="BoxShape3D" id="Shape_body"]
-size = Vector3(1.2, 0.5, 2.6)
+size = Vector3(1.2, 0.42, 2.25)
 
 [node name="Racer" type="RigidBody3D" unique_id=1098173407 node_paths=PackedStringArray("FrontLeftWheel", "FrontRightWheel", "RearLeftWheel", "RearRightWheel")]
 can_sleep = false
@@ -39,7 +39,7 @@ VehicleNode = NodePath("..")
 [node name="BodyModel" parent="BodyRig" unique_id=381378014 instance=ExtResource("5_body")]
 
 [node name="Collision" type="CollisionShape3D" parent="." unique_id=1227752201]
-transform = Transform3D(1.1, 0, 0, 0, 1.1, 0, 0, 0, 1.1, 0, 0.5, 0)
+transform = Transform3D(1.1, 0, 0, 0, 1.1, 0, 0, 0, 1.1, 0, 0.59, 0)
 shape = SubResource("Shape_body")
 
 [node name="WheelFL" type="RayCast3D" parent="." unique_id=1070422898 node_paths=PackedStringArray("WheelNode")]

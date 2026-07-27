@@ -183,7 +183,8 @@ Work in this order; later steps assume earlier ones are settled.
 
 1. **`VehicleMass`, `RideHeight`, `SpringStrength`, `SpringDamping`** — how the car sits. The
    car settles `mass × 9.8 / 4 / SpringStrength` into its travel; the default is about 7 cm of
-   a 55 cm ride height. Damping around 8–10% of the spring rate.
+   a 55 cm ride height. Damping around 8–10% of the spring rate. See **Bottoming out** below
+   before changing any of these.
 2. **`CenterOfMassHeight`** — still the single biggest lever on lean and on flipping. Negative
    is the safe direction.
 3. **`TopSpeed`, `MaxAccelForce`** — `MaxAccelForce / VehicleMass` is the acceleration in m/s².
@@ -195,6 +196,45 @@ Work in this order; later steps assume earlier ones are settled.
 **Physics tick rate must stay at 120 Hz or higher** (`project.godot` sets it). The overlay
 shouts in red if it drops. The solve-then-clamp forces divide by `delta`, so the clamp is what
 keeps them stable — but the drift and boost timings are still tick-sensitive.
+
+### Bottoming out
+
+Three numbers have to stay in this order, or ramps stop working:
+
+```
+collision box clearance  >  spring travel  >  what a crease actually needs
+        0.50 m           >      0.48 m
+```
+
+The car settles 0.07 m into a 0.55 m ride height, so there is **0.48 m** of travel left below
+static. The collision box was originally 2.86 m long with its bottom 0.225 m above the body
+origin — **0.365 m** of ground clearance, which is *less* than the travel. The chassis therefore
+reached the road before the suspension ran out, and a rigid-body collision between the car and
+the track deletes momentum outright. That is what made climbs feel like driving into a wall.
+
+Two things fix it, and both are load-bearing:
+
+- **The collision box is lifted and shortened** — 1.2 × 0.42 × 2.25 at `y = 0.59`, giving 0.50 m
+  of clearance against 0.48 m of travel. It is also no longer overhanging both axles by 0.4 m,
+  which is what dug into a slope the wheels were already following. The trade is that the
+  collision proxy is now smaller than the visible car, so bodywork can clip slightly into walls.
+- **The springs have a bump stop** — `BumpStopStart` (0.6) and `BumpStopStrength` (12). Past 60%
+  of the travel the rate climbs with the square of how far in it is, so it is soft where it
+  engages and very hard at the end.
+
+Worth knowing what the bump stop is sized against. The worst case is the foot of a two-cube climb
+taken at chained-boost speed: a 7.9° crease at 50 m/s asks the car to absorb 6.9 m/s of vertical
+velocity, or 28.6 kJ.
+
+| `BumpStopStrength` | Energy absorbed in the travel | Largest impact held |
+|---|---|---|
+| 0 (no stop) | 19.4 kJ | 5.7 m/s — **under the worst case** |
+| **12** (default) | 43.7 kJ | 8.5 m/s |
+| 20 | 60.0 kJ | 10.0 m/s |
+
+Raise it if the chassis still reaches the road; lower it if hard landings ping the car back into
+the air. It contributes nothing at all in normal driving — static compression is 0.07 m and the
+stop does not engage until 0.33 m.
 
 ### Ray geometry
 
@@ -257,6 +297,26 @@ makes the nose point into the slide.
 - `>1` — model *leads* the heading, overstating the drift. A legitimate arcade cheat.
 
 `MaxHeadingYaw` (40°) stops a spin or a hard collision twisting the shell off its chassis.
+
+### The wheels have to come with it
+
+The ground rays are children of the **chassis**, not of the posed shell — they have to be, or the
+pose would swing the ray casts around and the suspension would read the road from the wrong
+places. Left alone that means the shell yaws 35° into a drift while the wheels stay square to the
+chassis, and the car looks like its shell has come loose.
+
+`BodyLean` therefore publishes `Vehicle.WheelPose`, a rotation each `GroundRay` composes into its
+wheel. Rotation only, never translation, so the wheels turn with the body but stay planted on
+their contact patches.
+
+- **`WheelYawFollow`** (1.0) — wants to be 1. This is the fix.
+- **`WheelRollFollow`** (0.0) — deliberately off. A real wheel stays flat on the road while the
+  body leans over it, and at up to 16° of roll, wheels that leaned with the body would visibly
+  lift off their contact patches. Turn it up only if you want the whole car to read as one rigid
+  lump.
+
+Pitch is never passed on: on a wheel it is a rotation about the axle axis, indistinguishable from
+rolling a little further.
 
 Raise `LeanRoll` and `DriftRoll` if the car still looks too flat, and `HeadingYawFollow` if it
 doesn't look sideways enough.

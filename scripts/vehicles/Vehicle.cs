@@ -84,6 +84,23 @@ public partial class Vehicle : RigidBody3D
     [Export] public float MaxPullForce { get; set; } = 11000.0f;
 
     /// <summary>
+    /// Fraction of <see cref="RideHeight"/> the springs may compress before the bump stop starts
+    /// taking over, 0..1.
+    /// </summary>
+    [Export(PropertyHint.Range, "0,1,0.01")]
+    public float BumpStopStart { get; set; } = 0.6f;
+
+    /// <summary>
+    /// How much stiffer the bump stop is than <see cref="SpringStrength"/> at the end of the
+    /// travel. See <see cref="GroundRay.BumpStopStrength"/>.
+    ///
+    /// Lower this if the car pings off hard landings; raise it if the chassis is still reaching
+    /// the road. It matters most at the foot of a ramp, where following the crease at speed needs
+    /// more suspension travel than the car actually has.
+    /// </summary>
+    [Export] public float BumpStopStrength { get; set; } = 12.0f;
+
+    /// <summary>
     /// Raises or lowers the centre of mass relative to the body origin, in metres. The single
     /// biggest lever on how much the car leans and how readily it flips; negative is the safe
     /// direction.
@@ -425,6 +442,19 @@ public partial class Vehicle : RigidBody3D
     /// <summary>Surface under the car, read off the rear rays. See <see cref="SurfaceGroups"/>.</summary>
     public string SurfaceType { get; private set; } = SurfaceGroups.Road;
 
+    /// <summary>
+    /// Rotation the visible wheels should take from the body pose, on top of their own steering
+    /// and roll. Written by <see cref="BodyLean"/> and read by every <see cref="GroundRay"/>.
+    ///
+    /// The ground rays are children of the chassis, not of the posed shell — they have to be, or
+    /// the pose would swing the ray casts around and the suspension would read the road from the
+    /// wrong places. Left alone that means the shell yaws a long way into a drift while the
+    /// wheels stay square to the chassis, which looks broken. This carries the rotation across
+    /// without carrying the translation, so the wheels turn with the body but stay planted on
+    /// their contact patches.
+    /// </summary>
+    public Basis WheelPose { get; set; } = Basis.Identity;
+
     // ---- Drift ----
 
     /// <summary>0 when not drifting, otherwise +1 or −1 for the direction of the slide.</summary>
@@ -540,6 +570,8 @@ public partial class Vehicle : RigidBody3D
             ray.SpringStrength = SpringStrength;
             ray.SpringDamping = SpringDamping;
             ray.MaxPullForce = MaxPullForce;
+            ray.BumpStopStart = BumpStopStart;
+            ray.BumpStopStrength = BumpStopStrength;
 
             // Reaches past the ride height, so the ray still finds the road as the car tops a
             // crest and the pull term has something to work against.
