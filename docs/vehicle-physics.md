@@ -43,8 +43,8 @@ velocity as it stood at the top of the step.
 | 1 | **Spring + damper**, ×4 | each ray, along **world up** | yes | — |
 | 1b | **Bump stop** | folded into #1 past 60% travel | yes | — |
 | 1c | **Downward pull** | each ray, capped + faded | over crests | — |
-| 2 | **Drive / brake** | centre of mass, along nose | × `GroundFraction` | zero |
-| 3 | **Grip** | centre of mass, along `Basis.X` | full | 5%, flattened |
+| 2 | **Drive / brake** | centre of mass, along nose | × `GroundFraction` | **none** |
+| 3 | **Grip** | centre of mass, along `Basis.X` | × `GroundFraction` | **none** |
 | 4 | **Steering torque** (PD → heading) | about **world up** | yes | **stood down** |
 | 5 | **Flip rate torque** | about car's `Basis.X` | — | yes |
 | 5b | **Air yaw rate torque** | about **world up** | — | yes |
@@ -66,17 +66,25 @@ Things that are **not** in the list, and that people expect to be:
 - **No anti-roll bar, camber, toe, Ackermann, ABS or traction control.**
 - **No roll control in the air.** Pitch and yaw only.
 
-### One trap worth remembering
+### In the air the car is a projectile
 
-**A percentage-per-step force is enormous.** #3 removes `grip` of the velocity along its axis
-*every physics step*. At 120 Hz, even the 5% airborne value removes 99.8% of that component
-inside one second.
+**Nothing but gravity touches its velocity.** Both #2 and #3 are scaled by `GroundFraction` and
+skipped outright when it reaches zero, so the only things acting on an airborne car are gravity,
+the `MaxFallSpeed` clamp, and whatever torques the player is applying.
 
-On the ground that is exactly right — an upright car's `Basis.X` is horizontal, so all it deletes
-is sideways speed. Roll the car in mid-air and `Basis.X` tilts, and the same force starts deleting
-**fall speed** just as efficiently. Gravity appeared to switch off whenever you spun. The axis is
-flattened while airborne now, but the shape of that mistake can recur anywhere a per-step
-percentage meets an axis that is free to rotate.
+This is a rule, not a tuning choice, and it is worth defending. Drive points along the nose and
+grip points along `Basis.X` — both are **body axes**. Any amount of either left running in the
+air would mean rotating the car changed the direction its velocity was pushed or scrubbed in,
+which quietly turns an orientation control into a thrust control. A flip would accelerate you.
+
+The failure mode is easy to reintroduce and hard to spot, because it looks tiny in the source.
+The old airborne grip was 5%, which sounds negligible — but grip removes that fraction of the
+velocity along its axis *every physics step*, and at 120 Hz even 5% is 99.8% of that component
+gone inside one second. With the car rolled, that axis had a vertical component, so it ate the
+car's fall speed and gravity appeared to switch off whenever you spun.
+
+**Any per-step percentage applied along an axis that is free to rotate is a bug waiting to
+happen.** Scale it by `GroundFraction`.
 
 ### Why "solve then clamp"
 
@@ -419,6 +427,9 @@ rolling resistance, which is cheaper and much easier to reason about.
 
 Gravity in the air is now **just gravity**. There is no extra fall multiplier and no auto-level:
 both were the last surviving pieces of the previous physics, and both were removed on purpose.
+
+The aerial controls are **orientation only**. They apply torque and nothing else — no drive, no
+grip, no thrust. See **In the air the car is a projectile** above for why that has to hold.
 
 - **`MaxFallSpeed`** (65 m/s) — the one remaining airborne clamp, in `_IntegrateForces`. Not a
   feel knob: it is the guard rail that stops a fall off the edge of the board outrunning the

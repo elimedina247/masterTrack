@@ -174,11 +174,11 @@ public partial class Vehicle : RigidBody3D
     /// </summary>
     [Export] public float DriftGripMultiplier { get; set; } = 0.28f;
 
-    /// <summary>
-    /// Grip while no ray is touching anything. Not zero — a little sideways damping in the air
-    /// stops a car that took off mid-slide from windmilling all the way down.
-    /// </summary>
-    [Export] public float AirborneGripFactor { get; set; } = 0.05f;
+    // There is deliberately no airborne grip value. Grip is scaled by GroundFraction, so it is
+    // exactly zero once the last ray leaves the road — see ProcessGrip. Any of it left running in
+    // the air would point along the car's own X axis, which would make rotating the car change
+    // the direction its velocity got scrubbed in: an orientation control acting as a thrust
+    // control. Off the ground the car is a projectile.
 
     /// <summary>
     /// Top speed multiplier per surface. Cheaper and more legible than modelling rolling
@@ -893,11 +893,16 @@ public partial class Vehicle : RigidBody3D
             maxForce = MaxCoastForce;
 
         // Scaled by how much of the car is actually on the road, not switched off the moment the
-        // last ray leaves it. Fully airborne this is still zero — there is nothing to push
-        // against, and without that a car accelerates off a ramp — but a car skimming a crease
-        // with two corners down keeps half its drive instead of losing all of it. See
-        // GroundFraction: ramps are chord facets, and the creases unstick the car constantly.
+        // last ray leaves it: a car skimming a crease with two corners down keeps half its drive
+        // instead of losing all of it. Ramps are chord facets, and the creases unstick the car
+        // constantly.
+        //
+        // Fully airborne this reaches exactly zero and the force is skipped outright. There is
+        // nothing to push against, and this force points along the nose — leaving any of it
+        // running would mean pitching the car in mid-air changed its velocity.
         maxForce *= GroundFraction;
+        if (maxForce <= 0.0f)
+            return;
 
         ApplyCentralForce(forward * Mathf.Clamp(accelForce, -maxForce, maxForce));
     }
@@ -921,34 +926,21 @@ public partial class Vehicle : RigidBody3D
         // snapping back the instant the button comes up.
         grip *= Mathf.Lerp(1.0f, DriftGripMultiplier, DriftBlend);
 
-        // Faded by how much of the car is down rather than switched to the airborne value the
-        // moment the last ray leaves — same reason as the drive force above. A car crossing a
-        // crease on a ramp should lose some grip, not all of it.
-        grip = Mathf.Lerp(AirborneGripFactor, grip, GroundFraction);
+        // Scaled by how much of the car is on the road, which also makes it exactly zero in the
+        // air. A car crossing a crease on a ramp should lose some grip, not all of it; a car that
+        // has left the road entirely should have none.
+        grip *= GroundFraction;
 
         CurrentGrip = grip;
 
+        // **Nothing acts sideways in the air.** This force points along the car's own X axis, so
+        // any of it left running while airborne would mean rotating the car changed which
+        // direction its velocity got scrubbed in — turning an orientation control into a
+        // thrust control. Off the ground the car is a projectile: gravity, and nothing else.
+        if (grip <= 0.0f)
+            return;
+
         Vector3 side = GlobalTransform.Basis.X;
-
-        // In the air the grip axis is flattened, because there is no tire up there to justify it
-        // touching vertical velocity.
-        //
-        // This matters far more than the small AirborneGripFactor suggests. The force removes a
-        // *percentage of the velocity along this axis every physics step* — at 120 Hz, even 5%
-        // per step is 99.8% of it gone inside a second. On the ground that is fine, because an
-        // upright car's X axis is horizontal and the only thing being deleted is sideways speed.
-        // Roll the car in mid-air and X tilts, at which point the same force starts deleting the
-        // car's fall speed just as efficiently — and gravity appears to switch off whenever you
-        // spin.
-        if (IsAirborne)
-        {
-            side -= Vector3.Up * side.Dot(Vector3.Up);
-            if (side.LengthSquared() < 0.0001f)
-                return;
-
-            side = side.Normalized();
-        }
-
         float instantSideAccel = -side.Dot(LinearVelocity) / delta;
         ApplyCentralForce(side * (instantSideAccel * Mass * grip));
     }
