@@ -147,9 +147,26 @@ public partial class GroundRay : RayCast3D
         Vector3 origin = GlobalPosition;
         Compression = RestLength - origin.DistanceTo(LastCollisionPoint);
 
-        // Vertical speed of *this point on the body*, not of the body's centre — that difference
+        // Along the ray, which is the chassis' own up. **Not world up**, which is what Walaber
+        // uses and what this did until it met a 40° ramp.
+        //
+        // A world-up spring has to push with mg to hold the car off any surface, whatever its
+        // angle — and mg up against mg down is zero net force in *every* direction, including
+        // along the slope. Gravity stops existing on a gradient entirely: the car neither gains
+        // speed downhill nor loses it climbing, and would sit motionless on a 40° ramp.
+        //
+        // Along the chassis' up it pushes mg·cosθ instead, leaving gravity's mg·sinθ along the
+        // slope unopposed, which is the whole of what makes a hill a hill.
+        //
+        // The ray direction rather than the surface normal, because the normal jumps several
+        // degrees at every facet joint on a ramp and a spring that chased it would kick the car
+        // sideways at each one. The chassis' own up turns smoothly and settles parallel to the
+        // road anyway.
+        Vector3 springDirection = GlobalTransform.Basis.Y;
+
+        // Closing speed of *this point on the body*, not of the body's centre — that difference
         // is what damps roll and pitch rather than just bounce.
-        float closingSpeed = Vector3.Up.Dot(vehicle.VelocityAtPoint(origin));
+        float closingSpeed = springDirection.Dot(vehicle.VelocityAtPoint(origin));
 
         float force = (Compression * SpringStrength) - (closingSpeed * SpringDamping);
 
@@ -180,11 +197,7 @@ public partial class GroundRay : RayCast3D
         }
 
         SpringForce = force;
-
-        // Along world up, deliberately — not the surface normal and not the ray direction. A
-        // normal-aligned spring shoves the car sideways off a banked or bumpy surface, which on
-        // this track reads as the road spitting you off rather than as suspension.
-        vehicle.ApplyForce(Vector3.Up * force, origin - vehicle.GlobalPosition);
+        vehicle.ApplyForce(springDirection * force, origin - vehicle.GlobalPosition);
     }
 
     /// <summary>

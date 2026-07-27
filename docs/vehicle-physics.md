@@ -20,7 +20,7 @@ The car is a hovercraft wearing a car. Four ideas, in the order they run each ph
 
 | Step | What it does | Where |
 |---|---|---|
-| **Suspension** | Each ray applies `(compression × k) − (closing speed × c)` along **world up** | `GroundRay.ApplyGroundForce` |
+| **Suspension** | Each ray applies `(compression × k) − (closing speed × c)` along **the chassis' up** | `GroundRay.ApplyGroundForce` |
 | **Drive** | Solve for the force that reaches target speed in one step, clamp it | `Vehicle.ProcessDrive` |
 | **Grip** | Solve for the force that cancels all sideways velocity, keep a % of it | `Vehicle.ProcessGrip` |
 | **Steering** | PD torque pointing the body at a heading vector | `Vehicle.ProcessSteering` |
@@ -85,6 +85,55 @@ car's fall speed and gravity appeared to switch off whenever you spun.
 
 **Any per-step percentage applied along an axis that is free to rotate is a bug waiting to
 happen.** Scale it by `GroundFraction`.
+
+### Gravity has to survive a slope
+
+The springs push along **the chassis' own up**, not world up. Walaber uses world up, and this did
+too until it met a 40° ramp.
+
+A world-up spring has to push with `mg` to hold the car off a surface *at any angle*. And `mg` up
+against `mg` down is zero net force in **every** direction — including along the slope. Gravity
+stops existing on a gradient entirely: no speed gained downhill, none lost climbing, and a car
+left on a 40° ramp sits there motionless.
+
+Along the chassis' up it pushes `mg·cosθ` instead, leaving gravity's `mg·sinθ` along the slope
+unopposed. That term is the whole of what makes a hill a hill:
+
+| Slope | Gravity along it | Accel downhill | Accel uphill | Coasting |
+|---|---|---|---|---|
+| flat | 0 N | 15.0 m/s² | 15.0 m/s² | −2.5 m/s² |
+| 23° (one-cube ramp) | 4595 N | **18.8 m/s²** | 11.2 m/s² | +1.3 m/s² |
+| 40° (two-cube ramp) | 7559 N | **21.3 m/s²** | 8.7 m/s² | +3.8 m/s² |
+
+The ray direction rather than the surface normal, because the normal jumps several degrees at
+every facet joint on a ramp and a spring chasing it would kick the car sideways at each one. The
+chassis' own up turns smoothly and settles parallel to the road anyway.
+
+Two consequences worth knowing:
+
+- **A car will not hold station on a ramp.** Coasting retardation is 3000 N against 4595 N of
+  gravity at 23°, so it rolls back. That is correct, and it is new.
+- **Ride height rises slightly on a slope**, since the spring only carries `mg·cosθ` — 5.4 cm of
+  compression at 40° against 7 cm on the flat. Not enough to notice.
+
+### The throttle must not brake you
+
+The drive force limit is **asymmetric**: how hard the car may be pushed *along* its nose is a
+different question from how hard it may be pushed *against* it.
+
+```csharp
+ApplyCentralForce(forward * Mathf.Clamp(accelForce, -backwardLimit, forwardLimit));
+```
+
+With a single limit the throttle brakes you. Past the target speed the solve goes negative, and
+one limit makes that negative as strong as the engine — so running downhill under power the car
+fights gravity with 18000 N to pin itself at exactly `TopSpeed`, which is the *opposite* of what a
+hill should do.
+
+Retardation is capped at `MaxCoastForce` unless the player is actually on the brake. So a hill can
+run the car past its own top speed — bounded, because the ramps are short: 211 km/h off a 23°
+descent and 236 km/h off a 40° one, against a 200 km/h `TopSpeed`. It also means a boost bleeds
+off smoothly instead of being slammed back down when it expires.
 
 ### Why "solve then clamp"
 

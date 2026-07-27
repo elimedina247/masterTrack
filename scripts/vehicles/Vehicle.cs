@@ -14,7 +14,8 @@ namespace MasterTrack.Vehicles;
 ///
 /// <list type="number">
 ///   <item><b>Suspension</b> — each ray applies <c>(compression × k) − (closing speed × c)</c>
-///     along world up. The only per-corner force in the game.</item>
+///     along the chassis' up. The only per-corner force in the game, and the direction matters:
+///     along <i>world</i> up it would cancel gravity on a slope exactly.</item>
 ///   <item><b>Drive</b> — solve for the force that would reach <see cref="TopSpeed"/> in a single
 ///     step, then clamp it to <see cref="MaxAccelForce"/>. Top speed is a <i>target</i>, not
 ///     something that emerges from power fighting drag — which is exactly why a boost can
@@ -884,13 +885,31 @@ public partial class Vehicle : RigidBody3D
         // The acceleration that would close the whole gap this step, and the force behind it.
         float accelForce = (desiredSpeed - currentForwardSpeed) / delta * Mass;
 
-        float maxForce;
-        if (CurrentGear == 1 && BrakeAmount > 0.05f && currentForwardSpeed > 0.0f)
-            maxForce = MaxBrakeForce;
-        else if (CurrentGear == -1 ? BrakeAmount > 0.05f : ThrottleAmount > 0.05f)
-            maxForce = MaxAccelForce + (BurstActive ? BoostAccelForce : 0.0f);
+        // Asymmetric, and that asymmetry is load-bearing: how hard the car may be pushed *along*
+        // its nose is a different question from how hard it may be pushed *against* it.
+        //
+        // A single limit means the throttle brakes you. Over the target speed the solve goes
+        // negative, and with one limit that negative is as strong as the engine — so running
+        // downhill under power the car fights gravity with 18000 N to pin itself at exactly top
+        // speed. Retardation is capped at engine-braking instead unless the player is actually on
+        // the brake, so a hill can run the car past its own top speed, and a boost bleeds off
+        // smoothly rather than being slammed back down.
+        float forwardLimit = MaxCoastForce;
+        float backwardLimit = MaxCoastForce;
+
+        if (CurrentGear == -1)
+        {
+            if (BrakeAmount > 0.05f)
+                backwardLimit = MaxAccelForce;
+        }
         else
-            maxForce = MaxCoastForce;
+        {
+            if (ThrottleAmount > 0.05f)
+                forwardLimit = MaxAccelForce + (BurstActive ? BoostAccelForce : 0.0f);
+
+            if (BrakeAmount > 0.05f && currentForwardSpeed > 0.0f)
+                backwardLimit = MaxBrakeForce;
+        }
 
         // Scaled by how much of the car is actually on the road, not switched off the moment the
         // last ray leaves it: a car skimming a crease with two corners down keeps half its drive
@@ -900,11 +919,12 @@ public partial class Vehicle : RigidBody3D
         // Fully airborne this reaches exactly zero and the force is skipped outright. There is
         // nothing to push against, and this force points along the nose — leaving any of it
         // running would mean pitching the car in mid-air changed its velocity.
-        maxForce *= GroundFraction;
-        if (maxForce <= 0.0f)
+        forwardLimit *= GroundFraction;
+        backwardLimit *= GroundFraction;
+        if (forwardLimit <= 0.0f && backwardLimit <= 0.0f)
             return;
 
-        ApplyCentralForce(forward * Mathf.Clamp(accelForce, -maxForce, maxForce));
+        ApplyCentralForce(forward * Mathf.Clamp(accelForce, -backwardLimit, forwardLimit));
     }
 
     // ---------------------------------------------------------------- Grip
