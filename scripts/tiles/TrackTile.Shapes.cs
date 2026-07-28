@@ -14,71 +14,313 @@ namespace MasterTrack.Tiles;
 public partial class TrackTile
 {
 	/// <summary>
-	/// A 180-degree turn: the racer arrives up one lane, sweeps round an apex at the far end, and
-	/// comes back down a second lane alongside the first, heading the way they came.
+	/// Radius of a hairpin's arc, as a multiple of the tile. One tile means the U is two cells
+	/// across, which lands its exit on a cell face — see <see cref="BuildBankedArc"/> for why the
+	/// radius is not free.
 	///
-	/// Two cells side by side in local space — the entry lane on the origin, the outgoing lane one
-	/// cell to whichever side <see cref="TileData.TurnSide"/> points at — so both openings are on
-	/// the +Z edge and every wall below is either the outer shell or the apex between the lanes.
+	/// It also sets what a hairpin asks of a driver, and the answer is now a question rather than a
+	/// toll. The inside of the U is 30 m and has to be crawled; the outside is 90 m and banked, and
+	/// a bank of that radius carries a car at about 200 km/h unaided. So the quick way round is the
+	/// long way round, held up on the wall — and getting it wrong up there drops you back down the
+	/// bank having lost everything.
 	///
-	/// The apex is the tile. Without a barrier between the lanes this would be an eighty metre bay
-	/// that a racer could clip the corner of and drive straight out of; with one they have to go
-	/// to the far end and turn around, which is what a hairpin costs.
+	/// The old hairpin was two straight lanes with an apex wall between them. It could only ever be
+	/// driven one way: brake to nothing, turn, go. That is not a corner, it is a stop sign.
 	/// </summary>
+	private const float HairpinRadius = Size;
+
+	/// <summary>A 180-degree banked U. See <see cref="HairpinRadius"/>.</summary>
 	private void BuildHairpin(TileDefinition definition)
+		=> BuildBankedArc(definition, HairpinRadius, Mathf.Pi);
+
+	/// <summary>
+	/// A quarter turn swept round a banked arc through a square block of cells. See
+	/// <see cref="TileData.IsWideTurn"/> for why a corner cannot live in one cell.
+	/// </summary>
+	private void BuildWideTurn(TileDefinition definition)
+		=> BuildBankedArc(definition, (Data.TurnSpan - 0.5f) * Size, Mathf.Pi * 0.5f);
+
+	// ---- Wide turns ----
+
+	// These three are a budget, not just a quality setting, and they are the one thing in this file
+	// that must not be raised casually.
+	//
+	// A banked turn is the only tile whose geometry is two-dimensional — segments round the arc
+	// times strips across the road — so its cost is the product of these numbers rather than a sum,
+	// and it lands as *collision shapes*, two nodes a facet. At 14 x 15 a hairpin alone is 504
+	// boxes, and building a proving ground's worth of them segfaults the physics server outright
+	// while it is assembling the broadphase. Not an out-of-memory, not an exception: a native crash
+	// with nothing in the log. 12 x 9 is about half of that and runs clean with room to spare.
+	//
+	// So resolution has to be bought rather than spent, which is what the sqrt spacing below is
+	// for: it buys the same smoothness at the lip for fewer strips.
+
+	/// <summary>Facets round the arc. Twelve is 7.5 degrees a joint over a quarter turn, and a
+	/// hairpin scales to twice as many so it is no coarser for being twice as long.</summary>
+	private const int TurnArcSegments = 12;
+
+	/// <summary>
+	/// Strips across the flat inner part of the road. One, because that region is a level plane and
+	/// a second strip across it would be an extra hundred collision shapes describing the same
+	/// surface.
+	/// </summary>
+	private const int TurnFlatStrips = 1;
+
+	/// <summary>
+	/// And across the banked outer part, where all the curvature is. Eight is enough only because
+	/// they are not evenly spaced — see the sqrt in <see cref="BuildBankedArc"/>.
+	/// </summary>
+	private const int TurnBankStrips = 8;
+
+	/// <summary>
+	/// Fraction of the road width, measured from the inside, that stays flat. The inside line has
+	/// to be drivable by a car that arrived slowly, and a corner banked all the way across has no
+	/// such line.
+	/// </summary>
+	private const float TurnBankStart = 0.35f;
+
+	/// <summary>
+	/// Bank angle at the outer lip, in degrees.
+	///
+	/// <b>This number is not a look, it is a speed.</b> A bank holds a car with no help from the
+	/// tires at exactly <c>v = sqrt(g x r x tan(theta))</c>. At 2 g, the outer radius of a default
+	/// turn, and 60 degrees, that comes out at about 210 km/h — so the top of the bank is neutral
+	/// right at <c>TopSpeed</c>, and riding the wall flat out is the car being held up by its own
+	/// cornering rather than by anything being faked for it.
+	///
+	/// The whole tile falls out of that one equivalence. Below that speed the car sits low on the
+	/// bank, above it the car climbs, and a driver who carries too little speed onto the high line
+	/// slides back down it — which is what the surface would really do, because the springs push
+	/// along the chassis' own up and leave gravity's component along the slope unopposed. See the
+	/// gravity-on-slopes section of <c>docs/vehicle-physics.md</c>.
+	/// </summary>
+	private const float TurnMaxBank = 60.0f;
+
+	/// <summary>
+	/// Fraction of the arc spent easing the bank in at each end.
+	///
+	/// Load-bearing. The tile either side of a corner is flat, so a bank that was at full height
+	/// from the first facet would meet its neighbour as a sixteen metre step. Easing it in over the
+	/// first quarter of the arc means the corner joins the straight flat and level, exactly the way
+	/// <see cref="RampBlend"/> makes a ramp meet the road it starts from.
+	/// </summary>
+	private const float TurnBankBlend = 0.25f;
+
+	/// <summary>
+	/// How much each facet is grown past the chord it spans. Consecutive facets meet at their
+	/// shared corners but are rectangles about their own midpoints, so an unstretched pair leaves a
+	/// thin wedge open on the outside of every joint. Overlapping is free and a gap in the road is
+	/// not.
+	/// </summary>
+	private const float FacetOverlap = 1.06f;
+
+	/// <summary>
+	/// The shape both turns are: a road of one tile's width swept round an arc of
+	/// <paramref name="radius"/> through <paramref name="sweep"/> radians, banked.
+	///
+	/// <b>The radius is not free.</b> The road is a tile wide and centred on the arc, so its edges
+	/// come out at <c>radius +/- Half</c> — and for the turn to meet its neighbours squarely those
+	/// have to land on a cell face. That is the whole of why a quarter turn's radius is
+	/// <c>(span - 0.5) x Size</c> and a hairpin's is a whole tile: at those two values the road
+	/// leaves through the middle of a cell's face at exactly full width, and the tile tessellates
+	/// with the straights either side of it. Any other radius leaves a step in the road.
+	///
+	/// The surface is a two-dimensional fan — segments round the arc, strips across the road — and
+	/// every facet works out its own frame from its four corners rather than from an angle. That is
+	/// the part worth defending: the bank rolls the surface *and* the ease tips it along the
+	/// direction of travel, so there is no single axis to rotate about, and taking the frame from
+	/// the corners means the geometry cannot disagree with the maths that placed them.
+	///
+	/// The inside of the arc is open air, not infield. Cutting the corner drops you through it,
+	/// which is what makes the inside line a decision rather than a freebie.
+	/// </summary>
+	private void BuildBankedArc(TileDefinition definition, float radius, float sweep)
 	{
 		int side = Data.TurnSide;
 
-		// Centre of the outgoing lane, one cell to the side of the entry lane.
-		float lane = side * Size;
+		// Held to the same degrees-per-joint whatever the sweep, so a hairpin is not twice as
+		// coarse as a corner for being twice as long.
+		int segments = Mathf.Max(8, Mathf.RoundToInt(TurnArcSegments * sweep / (Mathf.Pi * 0.5f)));
 
-		// How far the apex reaches back from the open edge. Half the cell leaves the far half of
-		// both lanes clear to turn around in.
-		const float apex = Size * 0.5f;
+		// The cross-section, from the inside edge outward: where each strip boundary falls across
+		// the road, and how far the bank has climbed by the time it gets there.
+		int strips = TurnFlatStrips + TurnBankStrips;
+		var reach = new float[strips + 1];
+		var lift = new float[strips + 1];
 
-		// Both lanes as one slab: two cells across, one deep, centred between them.
-		AddBox(new Vector3(Size * 2.0f, FloorThickness, Size),
-			   new Vector3(lane * 0.5f, -FloorThickness * 0.5f, 0), RoadMaterial());
+		float flat = Size * TurnBankStart;
+		float banked = Size - flat;
+		float maxBank = Mathf.DegToRad(TurnMaxBank);
 
+		for (int m = 0; m <= strips; m++)
+		{
+			if (m <= TurnFlatStrips)
+			{
+				reach[m] = radius - Half + flat * m / TurnFlatStrips;
+				continue;
+			}
+
+			int b = m - TurnFlatStrips;
+
+			// The bank angle is squared across the road, so it leaves the flat almost
+			// imperceptibly and keeps all of its steepness for the top. A linear rise puts a usable
+			// amount of bank right where the flat road ends, which reads as a kink rather than as
+			// the road turning up.
+			//
+			// The strips are then spaced by the *inverse* of that — sqrt — so each one turns
+			// through the same angle instead of covering the same width: wide and far apart down at
+			// the shallow end where a wide flat box is an honest description of the surface, and
+			// bunched up at the lip where it is not. Evenly spaced, the last two strips of eight
+			// differ by 13 degrees and leave a ridge across the fastest part of the corner; spaced
+			// like this every joint is 7.5 degrees for the same eight shapes. It is the same trade
+			// <see cref="RampSamples"/> makes along a ramp, for the same reason.
+			float v = Mathf.Sqrt((float)b / TurnBankStrips);
+			float previous = Mathf.Sqrt((b - 1.0f) / TurnBankStrips);
+
+			reach[m] = radius - Half + flat + banked * v;
+
+			float mid = (v + previous) * 0.5f;
+			lift[m] = lift[m - 1] + (reach[m] - reach[m - 1]) * Mathf.Tan(maxBank * mid * mid);
+		}
+
+		// A point on the banked surface: strip boundary m, arc segment boundary k. Zero angle is
+		// the entry edge, so the whole tile is described from its own entry cell outward.
+		Vector3 Surface(int m, int k)
+		{
+			float t = (float)k / segments;
+			float a = t * sweep;
+
+			return new Vector3(
+				side * (radius - reach[m] * Mathf.Cos(a)),
+				lift[m] * BankScale(t),
+				Half - reach[m] * Mathf.Sin(a));
+		}
+
+		StandardMaterial3D road = RoadMaterial();
 		StandardMaterial3D wall = WallMaterial(definition.Accent);
+		StandardMaterial3D line = LineMaterial();
 
-		// The outer shell: across the far end of both lanes, then down the outside of each.
-		AddBox(new Vector3(Size * 2.0f, WallHeight, WallThickness),
-			   new Vector3(lane * 0.5f, WallHeight * 0.5f, -LengthInset), wall);
-		AddBox(new Vector3(WallThickness, WallHeight, Size),
-			   new Vector3(-side * WallInset, WallHeight * 0.5f, 0), wall);
-		AddBox(new Vector3(WallThickness, WallHeight, Size),
-			   new Vector3(lane + side * WallInset, WallHeight * 0.5f, 0), wall);
+		for (int k = 0; k < segments; k++)
+		{
+			for (int m = 0; m < strips; m++)
+			{
+				AddTurnFacet(Surface(m, k), Surface(m + 1, k),
+							 Surface(m, k + 1), Surface(m + 1, k + 1), road);
+			}
 
-		// The apex, on the boundary the two lanes share, reaching back from the open edge.
-		AddBox(new Vector3(WallThickness, WallHeight, apex),
-			   new Vector3(side * Half, WallHeight * 0.5f, Half - apex * 0.5f), wall);
+			// Inside edge, then the lip at the top of the bank. The neighbouring boundary is passed
+			// with each so the barrier can find which way is off the surface where it stands — at
+			// the top of the bank that is more than fifty degrees from vertical.
+			AddTurnEdge(Surface(0, k), Surface(0, k + 1),
+						Surface(1, k), Surface(1, k + 1), WallHeight, wall);
+			AddTurnEdge(Surface(strips, k), Surface(strips, k + 1),
+						Surface(strips - 1, k), Surface(strips - 1, k + 1), WallHeight, wall);
 
-		BuildHairpinRacingLine(lane);
+			// The seam where the flat road ends and the bank starts. It does the racing line's job
+			// from board altitude, and at road level it is the one thing telling a driver where the
+			// wall begins.
+			AddTurnSeam(Surface(TurnFlatStrips, k), Surface(TurnFlatStrips, k + 1),
+						Surface(TurnFlatStrips + 1, k), Surface(TurnFlatStrips + 1, k + 1), line);
+		}
 	}
 
 	/// <summary>
-	/// The racing line as a U: up the entry lane, across the open end past the apex, and back down
-	/// the outgoing lane. Same job as <see cref="BuildRacingLine"/> — from board altitude this is
-	/// what tells the Track Master which way the track leaves a tile.
+	/// How much of the full bank is present a fraction <paramref name="t"/> of the way round the
+	/// arc: none at either end, all of it through the middle. See <see cref="TurnBankBlend"/>.
 	/// </summary>
-	private void BuildHairpinRacingLine(float lane)
+	private static float BankScale(float t)
 	{
-		const float width = Size * 0.05f;
-		const float y = 0.011f;
+		if (t < TurnBankBlend)
+			return Mathf.SmoothStep(0.0f, 1.0f, t / TurnBankBlend);
 
-		// The crossover sits north of the apex, in the clear half of the tile — drawn anywhere
-		// south of it the line would run through a wall.
-		const float crossZ = -Half * 0.5f;
-		const float legLength = Half - crossZ;
-		const float legZ = (Half + crossZ) * 0.5f;
+		if (t > 1.0f - TurnBankBlend)
+			return Mathf.SmoothStep(0.0f, 1.0f, (1.0f - t) / TurnBankBlend);
 
-		StandardMaterial3D material = LineMaterial();
+		return 1.0f;
+	}
 
-		AddBox(new Vector3(width, 0.02f, legLength), new Vector3(0, y, legZ), material, collision: false);
-		AddBox(new Vector3(Mathf.Abs(lane), 0.02f, width), new Vector3(lane * 0.5f, y, crossZ), material,
-			   collision: false);
-		AddBox(new Vector3(width, 0.02f, legLength), new Vector3(lane, y, legZ), material, collision: false);
+	/// <summary>One quad of banked road, laid on the surface its four corners describe.</summary>
+	private void AddTurnFacet(Vector3 nearInner, Vector3 nearOuter, Vector3 farInner,
+							  Vector3 farOuter, StandardMaterial3D material)
+	{
+		if (!SurfaceFrame(nearInner, nearOuter, farInner, farOuter,
+						  out Basis basis, out Vector3 centre, out float wide, out float along))
+			return;
+
+		AddOrientedBox(new Vector3(wide * FacetOverlap, SlopeThickness, along * FacetOverlap),
+					   new Transform3D(basis, centre - basis.Y * (SlopeThickness * 0.5f)), material);
+	}
+
+	/// <summary>
+	/// A barrier standing perpendicular to the banked surface along one of its edges.
+	/// <paramref name="innerNear"/> and <paramref name="innerFar"/> are the next boundary in, used
+	/// only to find which way is off the surface here.
+	/// </summary>
+	private void AddTurnEdge(Vector3 near, Vector3 far, Vector3 innerNear, Vector3 innerFar,
+							 float height, StandardMaterial3D material)
+	{
+		if (!SurfaceFrame(near, innerNear, far, innerFar,
+						  out Basis basis, out _, out _, out float along))
+			return;
+
+		AddOrientedBox(new Vector3(WallThickness, height, along * FacetOverlap),
+					   new Transform3D(basis, (near + far) * 0.5f + basis.Y * (height * 0.5f)),
+					   material);
+	}
+
+	/// <summary>A painted stripe following a boundary across the banked surface. Mesh only.</summary>
+	private void AddTurnSeam(Vector3 near, Vector3 far, Vector3 outerNear, Vector3 outerFar,
+							 StandardMaterial3D material)
+	{
+		if (!SurfaceFrame(near, outerNear, far, outerFar,
+						  out Basis basis, out _, out _, out float along))
+			return;
+
+		AddOrientedBox(new Vector3(Size * 0.05f, 0.02f, along * FacetOverlap),
+					   new Transform3D(basis, (near + far) * 0.5f + basis.Y * 0.011f),
+					   material, collision: false);
+	}
+
+	/// <summary>
+	/// The orientation and extent of a surface quad, worked out from its four corners.
+	///
+	/// Corners rather than angles because the banked turn is curved in two directions at once — it
+	/// yaws round the arc and rolls up the bank, and during the ease it tips along the direction of
+	/// travel as well. There is no single axis to rotate about, and any attempt to compose one out
+	/// of euler angles is a sign bug waiting to happen. Four points cannot be wrong about the
+	/// surface they are on.
+	///
+	/// The basis comes out orthonormal and right-handed with X across the surface, Y off it and Z
+	/// along it, which is the axis order a <see cref="BoxMesh"/> reads its size in. Returns false
+	/// for a degenerate quad, which is how a zero-width strip declines to be built.
+	/// </summary>
+	private static bool SurfaceFrame(Vector3 nearInner, Vector3 nearOuter, Vector3 farInner,
+									 Vector3 farOuter, out Basis basis, out Vector3 centre,
+									 out float wide, out float along)
+	{
+		centre = (nearInner + nearOuter + farInner + farOuter) * 0.25f;
+
+		Vector3 ahead = (farInner + farOuter - nearInner - nearOuter) * 0.5f;
+		Vector3 outward = (nearOuter + farOuter - nearInner - farInner) * 0.5f;
+
+		along = ahead.Length();
+		wide = outward.Length();
+
+		basis = Basis.Identity;
+		if (along < 0.001f || wide < 0.001f)
+			return false;
+
+		Vector3 forward = ahead / along;
+
+		// Flipped to point at the sky rather than reasoned about: which way the cross product comes
+		// out depends on whether the corner turns left or right and on whether this is the inside
+		// edge or the outside one, and all four combinations occur.
+		Vector3 up = forward.Cross(outward).Normalized();
+		if (up.Y < 0.0f)
+			up = -up;
+
+		basis = new Basis(up.Cross(forward), up, forward);
+		return true;
 	}
 
 	// ---- Ramps ----

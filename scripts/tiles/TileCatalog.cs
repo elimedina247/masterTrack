@@ -99,6 +99,19 @@ public static class TileCatalog
 	public const int StraightCells = 3;
 
 	/// <summary>
+	/// Cells on a side of the square block a quarter turn sweeps through. The turn's radius is
+	/// <c>(this - 0.5) x TileSize</c>, so 2 gives 90 m and 3 gives 150 m.
+	///
+	/// A corner cannot be made to work by making the tile longer — see
+	/// <see cref="TileData.IsWideTurn"/> — and 90 m is the first radius the car can actually hold
+	/// at <c>TopSpeed</c> with something left over to drift with.
+	/// </summary>
+	public const int TurnCells = 2;
+
+	/// <summary>A long sweeper: the same corner at 150 m, taken flat out.</summary>
+	public const int SweeperCells = 3;
+
+	/// <summary>
 	/// One step of track elevation, in metres — a "cube", so a cell on its side. Ramps are the
 	/// only tiles that change height and they come in one- and two-cube versions, which over a
 	/// three-cell run works out to climbs of about 18 and 34 degrees.
@@ -127,19 +140,45 @@ public static class TileCatalog
 		{
 			Hazard = TileHazard.Curve,
 			ExitTurn = -1,
+			CellLength = TurnCells,
 			DisplayName = "Curve Left",
-			Description = "A quarter turn to the left.",
+			Description = "A banked quarter turn to the left. Carry speed and the bank holds you "
+						  + "up it; arrive slow and high and you slide back down.",
 			Accent = new Color(0.15f, 0.55f, 1.00f),
-			Weight = 8.0f,
+			Weight = 7.0f,
 		},
 		new()
 		{
 			Hazard = TileHazard.Curve,
 			ExitTurn = 1,
+			CellLength = TurnCells,
 			DisplayName = "Curve Right",
-			Description = "A quarter turn to the right.",
+			Description = "A banked quarter turn to the right. Carry speed and the bank holds you "
+						  + "up it; arrive slow and high and you slide back down.",
 			Accent = new Color(0.15f, 0.55f, 1.00f),
-			Weight = 8.0f,
+			Weight = 7.0f,
+		},
+		new()
+		{
+			Hazard = TileHazard.Curve,
+			ExitTurn = -1,
+			CellLength = SweeperCells,
+			DisplayName = "Sweeper Left",
+			Description = "A long banked left, 150 metres of radius. Flat out on the wall if you "
+						  + "dare, and it eats a lot of board.",
+			Accent = new Color(0.10f, 0.72f, 0.95f),
+			Weight = 3.0f,
+		},
+		new()
+		{
+			Hazard = TileHazard.Curve,
+			ExitTurn = 1,
+			CellLength = SweeperCells,
+			DisplayName = "Sweeper Right",
+			Description = "A long banked right, 150 metres of radius. Flat out on the wall if you "
+						  + "dare, and it eats a lot of board.",
+			Accent = new Color(0.10f, 0.72f, 0.95f),
+			Weight = 3.0f,
 		},
 		// ExitTurn 2 rather than -2 is what puts the swing on the right; see
 		// TileData.TurnSide for why the sign is doing that work.

@@ -59,9 +59,42 @@ public sealed class PlacedTile
 
         if (data.IsHairpin)
         {
-            // One cell per leg, whatever CellLength says: turning twice in the space of two
-            // cells is what makes this a hairpin rather than a wide bay.
-            yield return entryCell + entryDirection.Turn(data.TurnSide).Step();
+            // Three cells across by two deep. The U's radius is one tile, so the road swings two
+            // cells out to bring the racer back down the other side, and bulges one cell past the
+            // entry row on its way round the apex.
+            Vector2I forward = entryDirection.Step();
+            Vector2I sideways = entryDirection.Turn(data.TurnSide).Step();
+
+            for (int i = 0; i < 2; i++)
+            {
+                for (int j = 0; j < 3; j++)
+                {
+                    if (i == 0 && j == 0)
+                        continue;
+
+                    yield return entryCell + forward * i + sideways * j;
+                }
+            }
+
+            yield break;
+        }
+
+        if (data.IsWideTurn)
+        {
+            Vector2I ahead = entryDirection.Step();
+            Vector2I out_ = entryDirection.Turn(data.TurnSide).Step();
+
+            for (int i = 0; i < data.TurnSpan; i++)
+            {
+                for (int j = 0; j < data.TurnSpan; j++)
+                {
+                    if (i == 0 && j == 0)
+                        continue;
+
+                    yield return entryCell + ahead * i + out_ * j;
+                }
+            }
+
             yield break;
         }
 
@@ -72,9 +105,24 @@ public sealed class PlacedTile
 
     /// <summary>The cell such a tile would be left through. See <see cref="CellsFor"/>.</summary>
     public static Vector2I ExitCellFor(Vector2I entryCell, TrackDirection entryDirection, TileData data)
-        => data.IsHairpin
-            ? entryCell + entryDirection.Turn(data.TurnSide).Step()
-            : entryCell + entryDirection.Step() * (data.CellLength - 1);
+    {
+        // Two cells out to the side, back on the row it came in on: a U of one tile's radius is two
+        // tiles across, and it ends facing the way it arrived.
+        if (data.IsHairpin)
+            return entryCell + entryDirection.Turn(data.TurnSide).Step() * 2;
+
+        // The far corner of the block, diagonally opposite the entry cell — which is exactly where
+        // a quarter arc of radius (span - 0.5) x TileSize comes out. The block is square, so the
+        // step forward and the step out are the same count.
+        if (data.IsWideTurn)
+        {
+            return entryCell
+                   + (entryDirection.Step() + entryDirection.Turn(data.TurnSide).Step())
+                     * (data.TurnSpan - 1);
+        }
+
+        return entryCell + entryDirection.Step() * (data.CellLength - 1);
+    }
 }
 
 /// <summary>
@@ -203,6 +251,7 @@ public sealed class TrackGrid
                 continue;
 
             reason = data.IsHairpin ? "There isn't room to swing the hairpin round."
+                   : data.IsWideTurn ? "There isn't room to sweep the corner round."
                    : data.CellLength > 1 ? "There isn't room for a tile that long."
                    : "That cell already has a tile.";
             return false;

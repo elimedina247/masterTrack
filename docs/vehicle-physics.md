@@ -40,6 +40,7 @@ velocity as it stood at the top of the step.
 | # | Force / torque | Where it acts | Grounded | Airborne |
 |---|---|---|---|---|
 | 0 | **Gravity** (Godot's own, 9.8) | centre of mass | always | always |
+| 0b | **Fall gravity** | `_IntegrateForces`, velocity | — | descending only |
 | 1 | **Spring + damper**, ×4 | each ray, along **world up** | yes | — |
 | 1b | **Bump stop** | folded into #1 past 60% travel | yes | — |
 | 1c | **Downward pull** | each ray, capped + faded | over crests | — |
@@ -72,8 +73,8 @@ Things that are **not** in the list, and that people expect to be:
 
 **Nothing but gravity touches its velocity**, unless a boost is burning. Both #2 and #3 are scaled
 by `GroundFraction` and skipped outright when it reaches zero, so the only things acting on an
-airborne car are gravity, the `MaxFallSpeed` clamp, whatever torques the player is applying, and
-#5c.
+airborne car are gravity (times `FallGravityMultiplier` on the way down), the `MaxFallSpeed` clamp,
+whatever torques the player is applying, and #5c.
 
 This is a rule, not a tuning choice, and it is worth defending. Drive points along the nose and
 grip points along `Basis.X` — both are **body axes**. Any amount of either left running in the
@@ -241,9 +242,20 @@ change is **cornering at boosted speed**, which is now genuinely grip-limited:
 | 55 m/s (`TopSpeed`) | 36 m |
 | 75 m/s (chained boost) | 68 m |
 
-A tile is 40 m, so up to `TopSpeed` the car still holds anything the track can throw at it, and
-past that it starts to wash out. Raise `MaxGripForce` if boosted cornering feels too loose;
-lower it for longer slides everywhere.
+**This table is why corners are built the way they are.** A quarter turn pivoted inside a single
+cell has a radius of half a tile whatever else is done to it, and no tile size makes half of one
+reach 68 m. So turns sweep a square block of cells instead — 90 m of radius at the default span and
+150 m for a sweeper — which the numbers above say is holdable well past `TopSpeed`. See
+`TileData.IsWideTurn`.
+
+The corners are also **banked**, and that leans on the slope behaviour above rather than on grip. A
+bank holds a car with no help from the tires at all at `v = sqrt(g·r·tanθ)`; at 2 g, a turn's outer
+radius and the 60° at the top of the bank, that is about 210 km/h — so riding the wall flat out is
+the car being carried by its own cornering, and a driver who takes the high line too slowly slides
+back down it because `mg·sinθ` along the surface is left unopposed. Nothing was added to the
+vehicle to make that work.
+
+Raise `MaxGripForce` if boosted cornering feels too loose; lower it for longer slides everywhere.
 
 ---
 
@@ -610,8 +622,9 @@ rolling resistance, which is cheaper and much easier to reason about.
 
 ## Airborne
 
-Gravity in the air is **just gravity** — there is no fall multiplier and no auto-level, both of
-which were the last surviving pieces of the previous physics and were removed on purpose.
+There is no auto-level: a car that takes off crooked lands crooked. `FallGravityMultiplier` **is**
+back, after both it and the upright assist were removed together — see below for why only one of
+them came back.
 
 But gravity itself is **2 g**. The racer sets `gravity_scale = 2.0` on the rigid body, because at
 1 g the car floats: a 40 m drop hangs for 2.86 seconds, which is correct and unplayable.
@@ -641,32 +654,44 @@ these controls: it costs a charge and runs for `AirNitroDuration` only. The hop 
 and never applies up here at all. See **In the air the car is a projectile, except when the nitro
 is lit** above for why the line is drawn there.
 
-- **`MaxFallSpeed`** (65 m/s) — the one remaining airborne clamp, in `_IntegrateForces`. Not a
-  feel knob: it is the guard rail that stops a fall off the edge of the board outrunning the
-  collision solver.
+- **`MaxFallSpeed`** (65 m/s) — the clamp, in `_IntegrateForces` just after the fall multiplier has
+  been applied. Not a feel knob: it is the guard rail that stops a fall off the edge of the board
+  outrunning the collision solver. It bites sooner now that tiles are 60 m — a two-cube climb is
+  120 m up, and a fall from there would otherwise reach 68.6 m/s.
 - **`MaxPullForce`** (11000 N) and **`PullFadeDistance`** (0.12 m) — the spring term goes negative
   when the ground drops away past the ride height, which glues the car over a crest. The fade is
   what separates a crease from a cliff: a crease drops the road away by centimetres and wants
   holding onto, an edge drops it away by everything and wants letting go of. Without it, a pull
   strong enough to follow a crease also sucks the car back down off every jump.
 
-### What removing the auto-level and fall gravity costs
+### One of the two assists came back, and the difference matters
 
-Both were doing real work. Know what has been given up:
+Both were removed together. Only `FallGravityMultiplier` returned, because only one of them was
+ever an assist:
 
-| Gone | What it did | What happens now |
+| | What it does | Verdict |
 |---|---|---|
-| `FallGravityMultiplier` | 2×–3× gravity on descent | A 40 m drop hangs for **2.86 s**, up from 2.02 s. Jumps are long and floaty — but honest |
-| `AirborneUprightTorque` | Levelled the car toward flat | A car that takes off crooked **lands crooked**. On its roof, it stays there until `racer_reset` |
+| `FallGravityMultiplier` (1.6) | Extra gravity on the **descent only** | **Back.** It does not drive the car, it does not decide anything for the player, and it cannot change where a jump goes — it only stops the arc hanging at the top |
+| `AirborneUprightTorque` | Levelled the car toward flat | **Still gone.** It flew the car for you. A car that takes off crooked **lands crooked**, and on its roof it stays there until `racer_reset` |
+
+The reason the multiplier is honest is that it is symmetric in everything the player controls: the
+car leaves a ramp at the same speed, on the same angle, and reaches the same height. Raising
+`gravity_scale` instead would tighten the whole arc and cut how high the ramp threw you; raising the
+mass would do nothing at all, because gravity is an acceleration and mass cancels.
+
+**It is gated on `GroundFraction == 0`, not on falling**, and that gate is the whole of what keeps
+the springs out of it. A car sitting still has a small negative vertical velocity nearly every step
+as the suspension breathes, so a check on the velocity alone would multiply gravity on a parked car
+— which sinks it into its own travel and means every spring rate has to be rescaled to get the ride
+height back. Off the ground there is no spring to fight, so nothing else had to move.
 
 And one thing neither of them covered, now exposed: **roll is neither driven nor damped.** Pitch
 and yaw are rate controlled, so releasing the stick settles them — nothing touches roll at all. A
 car that leaves the ground rolling keeps rolling until it lands, and there is no input bound to
 correct it. The overlay's **Airborne** page shows the roll rate.
 
-If floaty jumps become the problem, `FallGravityMultiplier` is the honest thing to bring back — it
-only ever touched the descent, so it never changed how high a ramp threw you. If landing on the
-roof becomes the problem, binding roll is a better answer than reinstating an assist.
+If landing on the roof becomes the problem, binding roll is a better answer than reinstating an
+assist.
 
 ### Flying the car
 

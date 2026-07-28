@@ -57,6 +57,30 @@ public partial class TileData : Resource
     public bool IsHairpin => Mathf.Abs(ExitTurn) == 2;
 
     /// <summary>
+    /// Whether this is a quarter turn swept over a square block of cells rather than pivoted inside
+    /// a single one.
+    ///
+    /// A one-cell turn enters at the middle of one cell face and leaves at the middle of an
+    /// adjacent one, which pins its radius to half the tile's <i>width</i> — no amount of length
+    /// changes that. Half a tile is nowhere near what the car needs: holding a corner at
+    /// <c>TopSpeed</c> takes 37 m and holding one on a chained boost takes 68, against the 30 m a
+    /// single cell offers. Every corner was therefore a wall you slid into rather than a corner you
+    /// drove, which is the single biggest reason the track was not fun.
+    ///
+    /// Swept over an n x n block instead, the radius is <c>(n - 0.5) x TileSize</c> — 90 m at the
+    /// default span, which is holdable well past top speed and, more to the point, driftable.
+    /// </summary>
+    public bool IsWideTurn => Mathf.Abs(ExitTurn) == 1 && CellLength > 1;
+
+    /// <summary>
+    /// How many cells on a side the block a wide turn sweeps through. Carried on
+    /// <see cref="CellLength"/> rather than a field of its own: a turning tile has never had a
+    /// length — the turn is what the cell is for — so the field was there and meaningless, and
+    /// reusing it keeps the span off the wire for free.
+    /// </summary>
+    public int TurnSpan => CellLength;
+
+    /// <summary>
     /// Which way the tile swings out: 1 to the right of the entry direction, -1 to the left.
     ///
     /// A U-turn reverses the racer whichever way round it goes — <c>Turn(2)</c> and

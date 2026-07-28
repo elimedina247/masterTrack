@@ -53,13 +53,15 @@ public partial class PhysicsTestArea
 	/// </summary>
 	private static readonly string[] RaceTrackTiles =
 	{
-		// Off the pad and up to speed.
+		// Off the pad and up to speed. The sweeper is third on purpose: it is the one corner meant
+		// to be taken flat out on the bank, so it wants to be met with a boost still burning rather
+		// than after something else has already scrubbed the speed off.
 		"Straight",
 		"Boost Pads",
-		"Curve Right",
+		"Sweeper Right",
 		"Slalom",
 		"Bottleneck",
-		"Curve Left",
+		"Sweeper Left",
 
 		// One cube up. Everything from here to the descent is a hole with real air under it.
 		"Ramp Up",

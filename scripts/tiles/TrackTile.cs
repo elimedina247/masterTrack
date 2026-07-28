@@ -159,9 +159,11 @@ public partial class TrackTile : StaticBody3D
 		TrackIndex = trackIndex;
 		EntryDirection = entryDirection;
 		EntryHeight = entryHeight;
-		// A hairpin is one cell per leg whatever its CellLength says, so it anchors on its entry
-		// cell and builds the outgoing lane out to the side from there.
-		int runCells = data.IsHairpin ? 1 : data.CellLength;
+		// A hairpin is one cell per leg whatever its CellLength says, and a wide turn sweeps a
+		// square block rather than a straight run, so both anchor on their entry cell and build
+		// their footprint out from there. Only a tile that really is a straight run of cells is
+		// positioned by the middle of that run.
+		int runCells = data.IsHairpin || data.IsWideTurn ? 1 : data.CellLength;
 		Length = Size * runCells;
 		_isGhost = isGhost;
 		_ghostTint = ghostTint ?? Colors.White;
@@ -277,6 +279,12 @@ public partial class TrackTile : StaticBody3D
 		if (Data.IsHairpin)
 		{
 			BuildHairpin(definition);
+			return;
+		}
+
+		if (Data.IsWideTurn)
+		{
+			BuildWideTurn(definition);
 			return;
 		}
 
@@ -413,6 +421,38 @@ public partial class TrackTile : StaticBody3D
 			RotationDegrees = rotationDegrees,
 		};
 		parent.AddChild(shape);
+	}
+
+	/// <summary>
+	/// A box placed by a full transform rather than a position and euler angles.
+	///
+	/// Everything flat, sloped or looping so far has turned about exactly one axis, so
+	/// <see cref="AddBox"/>'s <c>rotationDegrees</c> was enough. A banked corner turns about two at
+	/// once — it yaws round the arc and rolls up the bank — and composing that out of euler angles
+	/// is a source of sign bugs rather than a convenience, so the caller hands over the basis it
+	/// already worked out from the surface.
+	///
+	/// Always a direct child of the tile, never of a helper node: a <see cref="CollisionShape3D"/>
+	/// is only picked up as an immediate child of the body it belongs to, so nesting the geometry
+	/// under a rotated <c>Node3D</c> would produce a corner you can see and drive straight through.
+	/// </summary>
+	private void AddOrientedBox(Vector3 size, Transform3D transform, StandardMaterial3D material,
+								bool collision = true)
+	{
+		AddChild(new MeshInstance3D
+		{
+			Mesh = new BoxMesh { Size = size, Material = material },
+			Transform = transform,
+		});
+
+		if (!collision || _isGhost)
+			return;
+
+		AddChild(new CollisionShape3D
+		{
+			Shape = new BoxShape3D { Size = size },
+			Transform = transform,
+		});
 	}
 
 	// ---- Materials ----

@@ -513,6 +513,23 @@ public partial class Vehicle : RigidBody3D
     /// </summary>
     [Export] public float MaxFallSpeed { get; set; } = 65.0f;
 
+    /// <summary>
+    /// Extra gravity while airborne and on the way down. 1 is off.
+    ///
+    /// The honest knob for floaty jumps, and the reason it is honest is that it only ever touches
+    /// the <i>descent</i>: a car leaves a ramp at the same speed and reaches the same height, it
+    /// just does not hang there. Raising <c>gravity_scale</c> instead would tighten the whole arc
+    /// and cut how high the ramp threw you, and raising the mass would do nothing at all — gravity
+    /// is an acceleration, so mass cancels.
+    ///
+    /// <b>Gated on being fully airborne, not merely on falling.</b> A car sitting on the road has a
+    /// small negative vertical velocity almost every step as the springs breathe, so a check on the
+    /// velocity alone would quietly multiply gravity on a parked car — which sinks it into its own
+    /// travel and means the springs have to be rescaled to get the ride height back. Off the ground
+    /// there is no spring to fight, so nothing else has to move.
+    /// </summary>
+    [Export] public float FallGravityMultiplier { get; set; } = 1.6f;
+
     // ---------------------------------------------------------------- Inputs
 
     /// <summary>0..1 throttle. Written by the controller every physics step.</summary>
@@ -758,14 +775,26 @@ public partial class Vehicle : RigidBody3D
     {
         _gravity = state.TotalGravity;
 
+        Vector3 down = GravityDirection;
+        float fallSpeed = state.LinearVelocity.Dot(down);
+
+        // Extra gravity on the way down only, and only with nothing under the wheels. Applied to
+        // the velocity here rather than as a force in the physics step because this is where the
+        // integrator's own gravity has just landed, so the two add cleanly and there is no
+        // half-step where one has been applied and the other has not.
+        if (FallGravityMultiplier > 1.0f && GroundFraction <= 0.0f && fallSpeed > 0.0f)
+        {
+            state.LinearVelocity += down * (_gravity.Length() * (FallGravityMultiplier - 1.0f)
+                                            * state.Step);
+            fallSpeed = state.LinearVelocity.Dot(down);
+        }
+
         if (MaxFallSpeed <= 0.0f)
             return;
 
         // A hard clamp rather than a drag force: a force that merely opposes the fall still lets
         // velocity creep past the number asked for. Only the component along gravity is touched,
         // so a car flung sideways off a ramp keeps every bit of its horizontal speed.
-        Vector3 down = GravityDirection;
-        float fallSpeed = state.LinearVelocity.Dot(down);
         if (fallSpeed > MaxFallSpeed)
             state.LinearVelocity -= down * (fallSpeed - MaxFallSpeed);
     }
