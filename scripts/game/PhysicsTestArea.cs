@@ -14,6 +14,12 @@ namespace MasterTrack.Game;
 /// obvious, a bump strip for the dampers, and one of every tile in <see cref="TileCatalog"/> laid
 /// out in a row with a run-up to each.
 ///
+/// Two race tracks run off the ends of it. South is a fixed course — the same catalog again, but
+/// joined end to end into one drivable track instead of set out as specimens, and always the same
+/// so a physics change can be judged against it (<c>PhysicsTestArea.RaceTrack.cs</c>). North is a
+/// bare start tile and whatever the host builds onto it this lobby
+/// (<c>PhysicsTestArea.Builder.cs</c>).
+///
 /// In a session it is also where the group gathers. Cars are <see cref="RacerArena"/>'s business,
 /// the same node the match uses, so a car that reaches everybody here reaches everybody there;
 /// this class only decides *when* one is spawned — as each peer reports its lobby loaded, so a
@@ -89,12 +95,27 @@ public partial class PhysicsTestArea : Node3D
 	/// </summary>
 	private static int RingSlots => NetworkManager.MaxPlayers + 1;
 
+	/// <summary>
+	/// The buildable track has to be pointed at its start cell before it lays anything, and a node
+	/// is readied after its children — so by <c>_Ready</c> it is already too late. Entering the
+	/// tree runs parent-first, which makes this the only window.
+	/// </summary>
+	public override void _EnterTree()
+	{
+		if (Engine.IsEditorHint())
+			return;
+
+		ConfigureBuildableTrack();
+	}
+
 	public override void _Ready()
 	{
 		Rebuild();
 
 		if (Engine.IsEditorHint())
 			return;
+
+		SetUpBuilder();
 
 		_arena = GetNodeOrNull<RacerArena>("RacerArena");
 		if (_arena == null)
@@ -107,6 +128,7 @@ public partial class PhysicsTestArea : Node3D
 		{
 			// Solo Test Drive: one car, ours, in the middle of the pad.
 			_arena.Spawn(Multiplayer.GetUniqueId(), 0, 1);
+			AdoptLocalCar();
 			return;
 		}
 
@@ -145,6 +167,12 @@ public partial class PhysicsTestArea : Node3D
 
 		_slots[peerId] = NextFreeSlot();
 		_arena.Spawn(peerId, _slots[peerId], RingSlots);
+		AdoptLocalCar();
+
+		// Placements are broadcast as they happen, so a peer that arrived after the track was
+		// built has seen none of them. Without this they get a bare start tile to drive through
+		// while everybody else is up on track that, for them, isn't there.
+		_track?.SyncTo(peerId);
 	}
 
 	/// <summary>Server only. Free the slot and the car of a peer that has left.</summary>
@@ -197,6 +225,8 @@ public partial class PhysicsTestArea : Node3D
 		BuildSurfaces();
 		BuildTileGrid();
 		BuildBumpStrip();
+		BuildRaceTrack();
+		BuildStartLine();
 	}
 
 	/// <summary>Rows the tile layout needs to hold the whole catalog.</summary>
@@ -224,6 +254,11 @@ public partial class PhysicsTestArea : Node3D
 
 		_padHalfX = Mathf.Max(PadHalfSize, spreadX * TileCatalog.TileSize);
 		_padHalfZ = Mathf.Max(PadHalfSize, spreadZ * TileCatalog.TileSize);
+
+		// A track runs off each end of the pad, and the tarmac has to reach both start lines:
+		// everything off the pad is open air, so a metre short and the only way onto a track is a
+		// fall. One half-extent covers both because the pad is symmetric about the origin.
+		_padHalfZ = Mathf.Max(_padHalfZ, Mathf.Max(PadEdgeForRaceTrack, PadEdgeForBuildableTrack));
 	}
 
 	public override void _UnhandledInput(InputEvent @event)
@@ -234,7 +269,12 @@ public partial class PhysicsTestArea : Node3D
 		// racer_reset is the car's own business now — RacerController handles it, so it works
 		// here and in a match alike rather than only on this pad.
 		if (@event.IsActionPressed("ui_cancel"))
+		{
 			LeaveToMenu();
+			return;
+		}
+
+		HandleBuilderInput(@event);
 	}
 
 	/// <summary>
@@ -318,8 +358,16 @@ public partial class PhysicsTestArea : Node3D
 
 	// ---- Primitives ----
 
-	/// <summary>A box of driveable surface. The group is what the tire model reads for grip.</summary>
-	private void AddSlab(string name, string surfaceGroup, Color color, Vector3 size, Vector3 position)
+	/// <summary>
+	/// A box of driveable surface. The group is what the tire model reads for grip.
+	///
+	/// <paramref name="collision"/> is for the things that are only paint. A stripe lying 2 cm
+	/// proud of the road is a 2 cm kerb as far as the suspension is concerned, which is a bump the
+	/// car has no business feeling — the same reason <see cref="TrackTile"/> builds its racing
+	/// lines as mesh only.
+	/// </summary>
+	private void AddSlab(string name, string surfaceGroup, Color color, Vector3 size, Vector3 position,
+						 bool collision = true)
 	{
 		var body = new StaticBody3D { Name = name, Position = position };
 		body.AddToGroup(surfaceGroup);
@@ -334,7 +382,8 @@ public partial class PhysicsTestArea : Node3D
 			},
 		});
 
-		body.AddChild(new CollisionShape3D { Shape = new BoxShape3D { Size = size } });
+		if (collision)
+			body.AddChild(new CollisionShape3D { Shape = new BoxShape3D { Size = size } });
 	}
 
 	private void AddLabel(string text, Vector3 position, Color color)

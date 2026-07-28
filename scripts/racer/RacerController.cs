@@ -114,6 +114,34 @@ public partial class RacerController : Vehicle
 	public bool IsLocalPlayer => OwnerPeerId == Multiplayer.GetUniqueId();
 
 	/// <summary>
+	/// Whether this car reads the keyboard. Almost always yes — the exception is the lobby, where
+	/// the player can put the car down and go and build instead.
+	///
+	/// It has to be a switch rather than something the car works out for itself, because the board
+	/// camera flies on the same WASD the car drives on: without this, lining up a tile would have
+	/// the car doing donuts across the pad behind you.
+	/// </summary>
+	public bool AcceptsInput
+	{
+		get => _acceptsInput;
+		set
+		{
+			if (_acceptsInput == value)
+				return;
+
+			_acceptsInput = value;
+
+			// Let go of the controls on the way out. Input is pushed onto the vehicle each step
+			// rather than polled by it, so simply stopping would leave whatever was last pressed
+			// held down forever — and a car left at full throttle is not a car left alone.
+			if (!value)
+				VehicleInputState.Idle.ApplyTo(this);
+		}
+	}
+
+	private bool _acceptsInput = true;
+
+	/// <summary>
 	/// Real networked play. Solo runs on Godot's implicit offline peer, where there is nobody to
 	/// replicate to and every car is simulated locally exactly as it always was.
 	/// </summary>
@@ -265,7 +293,9 @@ public partial class RacerController : Vehicle
 	{
 		// Only ever your own car, and only the machine that simulates it. A remote copy is a
 		// puppet; shoving it about here would just be overruled by the next pose off the wire.
-		if (!IsLocalPlayer || IsRemote || !@event.IsActionPressed(Actions.Reset))
+		// And only while somebody is actually driving it — a reset fired from the board would
+		// teleport a car the player cannot currently see.
+		if (!IsLocalPlayer || IsRemote || !AcceptsInput || !@event.IsActionPressed(Actions.Reset))
 			return;
 
 		Respawn();
@@ -355,9 +385,9 @@ public partial class RacerController : Vehicle
 			return;
 		}
 
-		// Only the owning peer reads input for its own car.
-		if (IsLocalPlayer)
-			VehicleInputState.Sample(Actions).ApplyTo(this, Actions);
+		// Only the owning peer reads input for its own car, and only while it is being driven.
+		if (IsLocalPlayer && AcceptsInput)
+			VehicleInputState.Sample(Actions).ApplyTo(this);
 
 		base._PhysicsProcess(delta);
 

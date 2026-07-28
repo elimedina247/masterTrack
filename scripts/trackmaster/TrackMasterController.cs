@@ -23,6 +23,17 @@ namespace MasterTrack.TrackMaster;
 /// with weighted random tiles over time. The catalog is what exists in the game; the hand is
 /// what the Track Master can actually reach for right now.
 ///
+/// <see cref="FreeBuild"/> takes that away and offers the whole catalog instead, spending nothing.
+/// That is the difference between the board as a *role* and the board as a *tool*: the lobby uses
+/// it to lay a track out on purpose, where being dealt what you get is only in the way. Everything
+/// else — the ghost, the head, the legality check, the camera — is the same either way, which is
+/// the point of keeping the two apart in <see cref="CatalogIndexAt"/> and nowhere else.
+///
+/// It also does not necessarily own the screen. In a match it does, and
+/// <see cref="ActiveOnReady"/> is left true; in the lobby the camera belongs to the car until
+/// somebody asks for the board, so everything the board holds is handed over and taken back by
+/// <see cref="SetActive"/>.
+///
 /// Because placement no longer aims at anything, the camera is free to be a camera. It has two
 /// modes (see <see cref="BoardCameraMode"/>): by default it rides over the end of the track so
 /// the Track Master's work is always in frame without them touching it, and on the toggle it
@@ -61,6 +72,23 @@ public partial class TrackMasterController : Node3D
 
 	/// <summary>Furthest zoom: high enough to see a long track's whole shape.</summary>
 	[Export] public float MaxCameraHeight { get; set; } = TrackTile.Size * 14.0f;
+
+	/// <summary>
+	/// Ignore the hand and offer the whole catalog, with nothing spent when a tile is placed.
+	///
+	/// This is the difference between the role and the tool. In a match the hand is the game —
+	/// the Track Master is handed what they get and has to make it hurt. In the lobby there is no
+	/// race to pressure, and waiting three seconds to find out whether you are allowed a hairpin
+	/// is not a design constraint, it is just waiting.
+	/// </summary>
+	[Export] public bool FreeBuild { get; set; }
+
+	/// <summary>
+	/// Whether the board takes over the moment this loads. True in a match, where the Track Master
+	/// has nothing else to be looking at; false in the lobby, where the camera belongs to the car
+	/// until somebody asks for the board.
+	/// </summary>
+	[Export] public bool ActiveOnReady { get; set; } = true;
 
 	/// <summary>How many tiles the Track Master can have waiting at once.</summary>
 	[Export] public int HandSlots { get; set; } = 6;
@@ -130,6 +158,29 @@ public partial class TrackMasterController : Node3D
 
 	private TileHand? _hand;
 
+	/// <summary>
+	/// How many cards the tray has: the hand's slots, or one per catalog tile in free build.
+	/// </summary>
+	public int TrayLength => FreeBuild ? TileCatalog.All.Count : Hand.SlotCount;
+
+	/// <summary>
+	/// The catalog index a tray position is offering, or <see cref="TileHand.Empty"/> for none.
+	///
+	/// The one place the two modes differ, and the reason nothing else has to know which is in
+	/// play: in free build the tray *is* the catalog, so a position and an index are the same
+	/// number, and in a match the hand decides.
+	/// </summary>
+	public int CatalogIndexAt(int slot)
+	{
+		if (!FreeBuild)
+			return Hand.At(slot);
+
+		return slot >= 0 && slot < TileCatalog.All.Count ? slot : TileHand.Empty;
+	}
+
+	/// <summary>Whether the board currently owns the camera and the mouse.</summary>
+	public bool IsActive { get; private set; }
+
 	private Camera3D _camera = null!;
 	private Node3D _headMarker = null!;
 	private TrackTile? _ghost;
@@ -185,7 +236,7 @@ public partial class TrackMasterController : Node3D
 			// Straight down: the board view reads the track's shape, not its scenery.
 			RotationDegrees = new Vector3(-90, 0, 0),
 			Position = Track.HeadWorldPosition + new Vector3(0, _boardHeight, 0),
-			Current = true,
+			Current = false,
 			Far = 4000.0f,
 		};
 		AddChild(_camera);
@@ -196,8 +247,36 @@ public partial class TrackMasterController : Node3D
 		Track.TrackHeadChanged += OnTrackHeadChanged;
 		OnTrackHeadChanged();
 
-		// The board view is a mouse UI, not a driving view.
-		Input.MouseMode = Input.MouseModeEnum.Visible;
+		SetActive(ActiveOnReady);
+	}
+
+	/// <summary>
+	/// Hand the board the camera and the mouse, or give them back.
+	///
+	/// Everything the board owns goes at once — the camera, the per-frame work, the input, and the
+	/// furniture it draws on the world. Leaving the head marker up over a track nobody is building
+	/// would be a yellow arrow hanging in the air in the middle of someone's drive.
+	/// </summary>
+	public void SetActive(bool active)
+	{
+		IsActive = active;
+
+		_camera.Current = active;
+		SetProcess(active);
+		SetProcessUnhandledInput(active);
+		_headMarker.Visible = active;
+
+		if (active)
+		{
+			// The board view is a mouse UI, not a driving view.
+			Input.MouseMode = Input.MouseModeEnum.Visible;
+			return;
+		}
+
+		// Going away: drop anything that was mid-gesture, so coming back starts clean rather than
+		// with a stale ghost on a head that has since moved.
+		StopLooking();
+		ClearPreview();
 	}
 
 	/// <summary>
@@ -212,7 +291,9 @@ public partial class TrackMasterController : Node3D
 		if (Track == null)
 			return;
 
-		TileDefinition? definition = TileCatalog.At(Hand.At(slot));
+		int catalogIndex = CatalogIndexAt(slot);
+
+		TileDefinition? definition = TileCatalog.At(catalogIndex);
 		if (definition == null)
 			return;
 
@@ -224,21 +305,32 @@ public partial class TrackMasterController : Node3D
 			return;
 		}
 
-		int catalogIndex = Hand.Take(slot);
+		// Free build spends nothing, so the card under the cursor is still offering the same tile
+		// afterwards. In a match the hand closes up behind the spent tile, and whatever slid into
+		// this slot is what the cursor is now over — set before the placement, which walks the
+		// head forward and rebuilds the ghost off it.
+		if (!FreeBuild)
+			Hand.Take(slot);
 
-		// The hand has closed up behind the spent tile, so whatever slid into this slot is
-		// what the cursor is now over. Set it before the placement, which walks the head
-		// forward and rebuilds the ghost off it.
-		_previewIndex = Hand.At(slot);
+		_previewIndex = CatalogIndexAt(slot);
 
 		Track.RequestPlaceTile(catalogIndex);
 		EmitSignal(SignalName.HandChanged);
 	}
 
+	/// <summary>
+	/// Take the last tile back off the end of the track. The track decides whether that is allowed
+	/// at all — it is a lobby thing, not a match thing — and whether this peer may ask.
+	/// </summary>
+	public void UndoLastTile()
+	{
+		Track?.RequestRemoveTile();
+	}
+
 	/// <summary>Called by the palette on hover: show a slot's tile on the head before committing.</summary>
 	public void PreviewSlot(int slot)
 	{
-		int catalogIndex = Hand.At(slot);
+		int catalogIndex = CatalogIndexAt(slot);
 		if (_previewIndex == catalogIndex)
 			return;
 
@@ -254,7 +346,9 @@ public partial class TrackMasterController : Node3D
 
 	public override void _Process(double delta)
 	{
-		if (Hand.Tick((float)delta))
+		// No deal clock in free build — there is no hand to fill, and ticking one would be a
+		// countdown nobody is waiting on.
+		if (!FreeBuild && Hand.Tick((float)delta))
 			EmitSignal(SignalName.HandChanged);
 
 		if (CameraMode == BoardCameraMode.Follow)
@@ -480,6 +574,12 @@ public partial class TrackMasterController : Node3D
 	{
 		if (Track == null)
 			return;
+
+		if (@event.IsActionPressed("builder_undo"))
+		{
+			UndoLastTile();
+			return;
+		}
 
 		// Held rather than latched: the cursor has to stay free to reach the tray, which is
 		// the only way tiles get placed.

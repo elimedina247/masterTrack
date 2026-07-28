@@ -37,6 +37,10 @@ public readonly struct VehicleInputState
     /// </summary>
     public bool Nitro { get; init; }
 
+    /// <summary>Whether the hop button is held. Held rather than pressed, same as
+    /// <see cref="Nitro"/> and for the same reason.</summary>
+    public bool Hop { get; init; }
+
     public static VehicleInputState Idle => default;
 
     /// <summary>
@@ -51,28 +55,29 @@ public readonly struct VehicleInputState
             Steering = Strength(actions.SteerLeft) - Strength(actions.SteerRight),
             Drift = Pressed(actions.Drift),
             Nitro = Pressed(actions.Nitro),
+            Hop = Pressed(actions.Hop),
         };
 
     /// <summary>
     /// Push this state onto a vehicle for one physics step.
     ///
-    /// In reverse the pedals swap over, so "forward on the stick" always means "away from
-    /// where the nose is pointing". The raw (un-squared) action strengths are used for the
-    /// swap, exactly as upstream does it.
+    /// The pedals mean the same thing in both directions: throttle is forward, brake is stop and
+    /// then reverse. Upstream swapped them over in reverse gear, on the reasoning that "forward on
+    /// the stick" should always mean "away from the nose" — but this drivetrain is not upstream's.
+    /// <c>Vehicle.ProcessDrive</c> reads the reverse target off the <i>brake</i> and latches
+    /// back into forward gear off the <i>throttle</i>, so a swap fed each pedal to the half of that
+    /// pair it was not meant for: holding the brake to reverse put its strength on the throttle,
+    /// which flipped the gear straight back, while the brake amount the reverse speed is actually
+    /// taken from decayed to nothing. The gear sawtoothed and reverse crawled.
     /// </summary>
-    public void ApplyTo(Vehicle vehicle, VehicleInputActions actions)
+    public void ApplyTo(Vehicle vehicle)
     {
         vehicle.ThrottleInput = Throttle;
         vehicle.BrakeInput = Brake;
         vehicle.SteeringInput = Steering;
         vehicle.DriftInput = Drift;
         vehicle.NitroInput = Nitro;
-
-        if (vehicle.CurrentGear != -1)
-            return;
-
-        vehicle.BrakeInput = Strength(actions.Throttle);
-        vehicle.ThrottleInput = Strength(actions.Brake);
+        vehicle.HopInput = Hop;
     }
 
     private static float Strength(string action)
@@ -101,6 +106,12 @@ public partial class VehicleInputActions : Resource
     [Export] public string Drift { get; set; } = "racer_handbrake";
 
     [Export] public string Nitro { get; set; } = "racer_nitro";
+
+    /// <summary>
+    /// Spring the car straight up. Not on the up arrow, which is already the throttle's second
+    /// binding — see <c>racer_accelerate</c>.
+    /// </summary>
+    [Export] public string Hop { get; set; } = "racer_hop";
 
     /// <summary>
     /// Put the car back on its wheels. Deliberately its own action rather than a <c>ui_*</c> one:

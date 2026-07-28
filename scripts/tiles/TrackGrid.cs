@@ -215,6 +215,37 @@ public sealed class TrackGrid
     }
 
     /// <summary>
+    /// Take the last tile back off the end of the track and put the head where that tile started.
+    /// Returns the tile that was removed, or null if the track was empty.
+    ///
+    /// Only ever the last one. Placement is append-only — the head is the single point the track
+    /// grows from — so undo is the same rule read backwards, and lifting a tile out of the middle
+    /// would leave a gap no later tile could be reached across.
+    ///
+    /// The head is restored from the removed tile's <i>entry</i> state rather than recomputed from
+    /// the new last tile. Those are the same thing, and the removed tile is the one that already
+    /// knows: it recorded the cell, heading and height it was placed at, which is by definition
+    /// where the next tile now goes.
+    /// </summary>
+    public PlacedTile? RemoveLast()
+    {
+        if (_ordered.Count == 0)
+            return null;
+
+        PlacedTile last = _ordered[^1];
+        _ordered.RemoveAt(_ordered.Count - 1);
+
+        foreach (Vector2I cell in last.Cells)
+            _byCell.Remove(cell);
+
+        HeadCell = last.Cell;
+        HeadDirection = last.EntryDirection;
+        HeadHeight = last.EntryHeight;
+
+        return last;
+    }
+
+    /// <summary>
     /// Lay down a starting straight so racers have something to launch from, and leave the
     /// head at the far end of it. <paramref name="length"/> counts tiles, not cells — each one
     /// is a catalog straight, so it covers <see cref="TileCatalog.StraightCells"/> cells.

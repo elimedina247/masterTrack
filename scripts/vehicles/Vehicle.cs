@@ -128,8 +128,16 @@ public partial class Vehicle : RigidBody3D
     [ExportGroup("Drive")]
     [Export] public float TopSpeed { get; set; } = 55.6f;
 
-    /// <summary>Top speed in reverse, in m/s.</summary>
-    [Export] public float ReverseTopSpeed { get; set; } = 14.0f;
+    /// <summary>
+    /// Top speed in reverse, in m/s. Half of <see cref="TopSpeed"/> — 100 km/h against 200.
+    ///
+    /// Was 50 km/h, which is what a real car does and is far too slow to be worth having here: the
+    /// thing reverse is actually for is getting out of a hairpin you overcooked or off a wall you
+    /// are pinned against, while the rest of the field is not waiting for you. Still obviously the
+    /// wrong way to travel — half speed and no boost reaches it — but fast enough to be a recovery
+    /// rather than a penalty on top of the one you already took.
+    /// </summary>
+    [Export] public float ReverseTopSpeed { get; set; } = 28.0f;
 
     /// <summary>
     /// Largest drive force while the throttle is held, in newtons. Divide by
@@ -278,6 +286,20 @@ public partial class Vehicle : RigidBody3D
     [Export] public float DriftBreakSpeed { get; set; } = 5.0f;
 
     /// <summary>
+    /// How far the steering has to be deflected, 0..1, for the drift button to do anything.
+    ///
+    /// This is what makes a drift a <i>turn</i> rather than a button. The car used to fall back on
+    /// its own yaw rate when the stick was centred, so throttle-and-drift with no steering at all
+    /// picked a side off whatever rotation happened to be there and slid — which meant the fastest
+    /// line through most corners involved never actually steering into them.
+    ///
+    /// Read at the moment of the press only. Once a drift is running the steering is free to come
+    /// back to centre, which is exactly what holding a long slide looks like.
+    /// </summary>
+    [Export(PropertyHint.Range, "0,1,0.01")]
+    public float DriftSteerThreshold { get; set; } = 0.15f;
+
+    /// <summary>
     /// How quickly the drift angle feeds in and out, per second. Instant looks like the car
     /// teleported sideways; this is the snap of it.
     /// </summary>
@@ -326,6 +348,14 @@ public partial class Vehicle : RigidBody3D
     /// <summary>
     /// How fast the boost bleeds off once every burst has expired, in m/s per second. Slow enough
     /// that running down from a big chain is a moment rather than a switch.
+    ///
+    /// <b>Paused for as long as a drift is held.</b> Speed is only additive if the next boost lands
+    /// while there is still something to add to, and at 14 m/s a tier-1 boost's 8 m/s was gone
+    /// 0.57 s after its burst ended — less than the 0.55 s of drifting needed to earn the next one
+    /// plus any time at all to get into it. So a chain that the counter happily accepted paid
+    /// nothing: <see cref="ChainCount"/> went up and <see cref="BoostSpeed"/> started again from
+    /// zero. Freezing the bleed while the player is mid-drift is what makes the link they are
+    /// working on worth anything, and it costs no tuning anywhere else.
     /// </summary>
     [Export] public float BoostDecayRate { get; set; } = 14.0f;
 
@@ -355,6 +385,28 @@ public partial class Vehicle : RigidBody3D
 
     /// <summary>Dead time after a charge before another can be spent, in seconds.</summary>
     [Export] public float NitroCooldown { get; set; } = 0.4f;
+
+    // ---------------------------------------------------------------- Hop
+
+    /// <summary>
+    /// Change in upward speed one hop is worth, in m/s. Applied as an impulse scaled by
+    /// <see cref="VehicleMass"/>, so it is a velocity change and every car hops the same height
+    /// whatever it weighs — the same bargain the track's launch pads make.
+    ///
+    /// Height is <c>impulse² / 2g</c>, and this project runs at 2 g, so the default 8 m/s is a hop
+    /// of about 1.6 m. Enough to clear a log, unstick the car off a crease, or get the nose over a
+    /// kerb; nowhere near enough to skip a hazard, which is the line it must not cross. 0 disables
+    /// it outright.
+    /// </summary>
+    [ExportGroup("Hop")]
+    [Export] public float HopImpulse { get; set; } = 8.0f;
+
+    /// <summary>
+    /// Dead time between hops, in seconds. Landing and immediately hopping again is the thing this
+    /// stops: without it a player can bunny-hop a whole washboard, and the tiles that work by
+    /// unsettling the car stop working.
+    /// </summary>
+    [Export] public float HopCooldown { get; set; } = 0.35f;
 
     // ---------------------------------------------------------------- Airborne
 
@@ -394,6 +446,42 @@ public partial class Vehicle : RigidBody3D
     [Export] public float AirRotationGain { get; set; } = 6000.0f;
 
     /// <summary>
+    /// Thrust along the nose while a boost is burning and the car is off the ground, in newtons.
+    /// 0 restores the pure projectile.
+    ///
+    /// The one deliberate hole in "in the air the car is a projectile". Drive force is scaled by
+    /// <see cref="GroundFraction"/> and so is exactly zero up there — which meant a nitro fired in
+    /// mid-air spent a charge, lit the flames, raised the speed target and then did nothing at all,
+    /// because there was no force left to deliver any of it. Paying for nothing is worse than not
+    /// being allowed to pay.
+    ///
+    /// Matched to <see cref="BoostAccelForce"/>, so a charge spent in the air is worth about what
+    /// one spent on the ground is. The rest of the projectile stands: no grip, no drive, and only
+    /// the rotation rates from the pedals. Pitching the car <i>does</i> now steer this thrust, and
+    /// that is the point — nose down to dive onto a landing you were going to miss, nose up to hold
+    /// a jump out. It is aim, and it costs a charge.
+    /// </summary>
+    [Export] public float AirNitroForce { get; set; } = 14000.0f;
+
+    /// <summary>
+    /// How long the airborne thrust lasts after a nitro is fired, in seconds. Deliberately far
+    /// shorter than <see cref="NitroDuration"/>: on the ground a boost is a run you hold, and in
+    /// the air it is a punch that changes where you are going to land. A second and a half of free
+    /// thrust up there is a flying car.
+    ///
+    /// Its own timer rather than a slice of the burst, and that has a second effect worth being
+    /// explicit about: only <see cref="TryActivateNitro"/> sets it, so a <i>drift</i> boost still
+    /// burning as the car leaves a ramp gives no thrust at all. That is the rule the exception was
+    /// argued on — this force is allowed to break the projectile because it is opt-in and paid
+    /// for, and a drift boost carried into a jump is neither.
+    ///
+    /// The clock starts when the charge is spent, wherever the car is. Fire one on the road and
+    /// the air window has burned away long before the next ramp, which is correct: that thrust was
+    /// already spent pushing you along the ground.
+    /// </summary>
+    [Export] public float AirNitroDuration { get; set; } = 0.35f;
+
+    /// <summary>
     /// Hard ceiling on speed along gravity, in m/s. Not a feel knob — it is the guard rail that
     /// stops a fall off the edge of the board outrunning the collision solver. 0 disables it.
     /// </summary>
@@ -415,6 +503,9 @@ public partial class Vehicle : RigidBody3D
 
     /// <summary>Whether the nitro button is held. The rising edge spends a charge.</summary>
     public bool NitroInput;
+
+    /// <summary>Whether the hop button is held. The rising edge springs one hop.</summary>
+    public bool HopInput;
 
     /// <summary>
     /// Mirrors <see cref="DriftInput"/>, so anything still phrased in terms of a handbrake keeps
@@ -563,7 +654,16 @@ public partial class Vehicle : RigidBody3D
     private float _chainWindow;
     private float _nitroLockout;
     private bool _nitroWasHeld;
+
+    /// <summary>Seconds of airborne thrust still owed by the last nitro. See
+    /// <see cref="AirNitroDuration"/>.</summary>
+    private float _airNitroRemaining;
+
     private bool _driftWasHeld;
+    private bool _hopWasHeld;
+
+    /// <summary>Seconds until another hop may be sprung. See <see cref="HopCooldown"/>.</summary>
+    private float _hopCooldown;
     private float _burstLength = 1.0f;
     private Vector3 _gravity = Vector3.Down * 9.8f;
 
@@ -650,6 +750,7 @@ public partial class Vehicle : RigidBody3D
         ProcessInputRamp(dt);
         ProcessDrift(dt);
         ProcessBoost(dt);
+        ProcessHop(dt);
         ProcessDrive(dt);
         ProcessGrip(dt);
         ProcessSteering(dt);
@@ -721,16 +822,13 @@ public partial class Vehicle : RigidBody3D
             if (!wantsDrift || Speed < DriftBreakSpeed)
                 EndDrift();
         }
-        else if (wantsDrift && !_driftWasHeld && Speed >= DriftMinSpeed && !IsAirborne)
+        else if (wantsDrift && !_driftWasHeld && Speed >= DriftMinSpeed && !IsAirborne
+                 && Mathf.Abs(SteeringInput) >= DriftSteerThreshold)
         {
-            // Direction comes from the stick at the moment of the press. Held straight, the car
-            // takes the way it is already rotating, so a flick-then-press still goes where the
-            // player meant.
-            int dir = Mathf.Abs(SteeringInput) > 0.15f
-                ? (SteeringInput > 0.0f ? 1 : -1)
-                : (AngularVelocity.Y >= 0.0f ? 1 : -1);
-
-            DriftDirection = dir;
+            // Direction comes from the stick at the moment of the press, and there has to be one:
+            // a drift is a corner taken sideways, so it is entered by turning into the corner and
+            // committing, not by holding two buttons in a straight line. See DriftSteerThreshold.
+            DriftDirection = SteeringInput > 0.0f ? 1 : -1;
             DriftTime = 0.0f;
             DriftTier = 0;
 
@@ -824,6 +922,9 @@ public partial class Vehicle : RigidBody3D
         if (_nitroLockout > 0.0f)
             _nitroLockout = Mathf.Max(_nitroLockout - delta, 0.0f);
 
+        if (_airNitroRemaining > 0.0f)
+            _airNitroRemaining = Mathf.Max(_airNitroRemaining - delta, 0.0f);
+
         // Edge, not level: holding the button spends one charge, not all five.
         if (NitroInput && !_nitroWasHeld)
             TryActivateNitro();
@@ -838,10 +939,14 @@ public partial class Vehicle : RigidBody3D
                 EmitSignal(SignalName.BoostEnded);
             }
         }
-        else if (BoostSpeed > 0.0f)
+        else if (BoostSpeed > 0.0f && !IsDrifting)
         {
             // Bleed rather than drop: coming off a big chain should be the car running down, not
             // the speedometer being switched off.
+            //
+            // Held off entirely while a drift is being held. A drift is the player working on the
+            // next link, and draining the last one while they earn it made chaining a fight
+            // against the clock rather than against the corner — see BoostDecayRate.
             BoostSpeed = Mathf.Max(BoostSpeed - BoostDecayRate * delta, 0.0f);
         }
 
@@ -860,9 +965,51 @@ public partial class Vehicle : RigidBody3D
 
         NitroChargesRemaining--;
         _nitroLockout = NitroDuration + NitroCooldown;
+        _airNitroRemaining = AirNitroDuration;
         GrantBoost(NitroSpeed, NitroDuration, 0);
         EmitSignal(SignalName.NitroFired, NitroChargesRemaining);
         return true;
+    }
+
+    // ---------------------------------------------------------------- Hop
+
+    /// <summary>Fires when a hop is sprung, for whatever wants to make a noise about it.</summary>
+    [Signal] public delegate void HoppedEventHandler();
+
+    /// <summary>
+    /// Spring the car straight up, if it has anything to push off. Returns whether one was sprung.
+    ///
+    /// Along <b>world</b> up rather than the chassis', so a hop is the same hop on a banked corner
+    /// as on the flat. Chassis-up would fire the car off the side of a slope at whatever angle it
+    /// happened to be sitting at, which is a launch pad, not a hop.
+    ///
+    /// Needs at least one wheel down. In the air it does nothing — repeatable upward impulses with
+    /// nothing to push against is a helicopter, and an airborne car has exactly one sanctioned way
+    /// to change its velocity (see <see cref="AirNitroForce"/>).
+    ///
+    /// Public alongside <see cref="TryActivateNitro"/> and for the same reason: a pickup or a
+    /// scripted sequence can spring one without faking a button press.
+    /// </summary>
+    public bool TryHop()
+    {
+        if (HopImpulse <= 0.0f || IsAirborne || _hopCooldown > 0.0f)
+            return false;
+
+        _hopCooldown = HopCooldown;
+        ApplyCentralImpulse(Vector3.Up * (HopImpulse * Mass));
+        EmitSignal(SignalName.Hopped);
+        return true;
+    }
+
+    private void ProcessHop(float delta)
+    {
+        if (_hopCooldown > 0.0f)
+            _hopCooldown = Mathf.Max(_hopCooldown - delta, 0.0f);
+
+        // Edge, not level: holding the button is one hop, not one per frame the wheels are down.
+        if (HopInput && !_hopWasHeld)
+            TryHop();
+        _hopWasHeld = HopInput;
     }
 
     /// <summary>Refill the charges and cancel any boost. Call when a run starts.</summary>
@@ -871,6 +1018,7 @@ public partial class Vehicle : RigidBody3D
         NitroChargesRemaining = NitroCharges;
         BoostSpeed = 0.0f;
         BoostTimeRemaining = 0.0f;
+        _airNitroRemaining = 0.0f;
         ChainCount = 0;
         _chainWindow = 0.0f;
         _nitroLockout = 0.0f;
@@ -1099,6 +1247,29 @@ public partial class Vehicle : RigidBody3D
         // about world up, so it is still a flat turn with the car upside down.
         ApplyAirRate(GlobalTransform.Basis.X, pitchInput * Mathf.DegToRad(AirPitchRate));
         ApplyAirRate(Vector3.Up, yawInput * Mathf.DegToRad(AirYawRate));
+
+        ApplyAirNitro();
+    }
+
+    /// <summary>
+    /// Push an airborne car along its nose while a boost is burning. See
+    /// <see cref="AirNitroForce"/> for why this is allowed to exist at all.
+    ///
+    /// Raw thrust rather than the grounded solve, because there is nothing to solve against up
+    /// here — but held to the same ceiling that solve drives at, so the air never becomes the
+    /// better place to spend a charge. It is the same boost delivered a different way, not a
+    /// bigger one.
+    /// </summary>
+    private void ApplyAirNitro()
+    {
+        if (AirNitroForce <= 0.0f || _airNitroRemaining <= 0.0f)
+            return;
+
+        Vector3 forward = -GlobalTransform.Basis.Z;
+        if (forward.Dot(LinearVelocity) >= TopSpeed + BoostSpeed)
+            return;
+
+        ApplyCentralForce(forward * AirNitroForce);
     }
 
     /// <summary>

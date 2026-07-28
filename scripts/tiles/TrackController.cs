@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Godot;
 using MasterTrack.Networking;
 
@@ -39,7 +40,40 @@ public partial class TrackController : Node3D
     /// </summary>
     [Export] public float TileFallSpeed { get; set; } = 24.0f;
 
+    /// <summary>
+    /// Who is allowed to add to this track.
+    /// </summary>
+    public enum BuildAuthority
+    {
+        /// <summary>The peer holding the Track Master role. What a match runs on.</summary>
+        TrackMaster,
+
+        /// <summary>
+        /// Whoever is hosting. What the lobby runs on: there is no Track Master yet — the role is
+        /// unassigned and <see cref="GameManager.TrackMasterPeerId"/> is 0 — and the track being
+        /// built there is a sandbox, not a race.
+        /// </summary>
+        Host,
+    }
+
+    /// <summary>Which peer the server will take placements from. See <see cref="BuildAuthority"/>.</summary>
+    [Export] public BuildAuthority Authority { get; set; } = BuildAuthority.TrackMaster;
+
+    /// <summary>
+    /// Whether tiles can be taken back off the end. Off in a match — an undo would rewrite track
+    /// the racers may already be standing on — and on in the lobby, where building is the point.
+    /// </summary>
+    [Export] public bool AllowUndo { get; set; }
+
     public TrackGrid Grid { get; } = new();
+
+    /// <summary>
+    /// Catalog indices of every tile placed onto the starting straight, in order. This is the whole
+    /// track as data — the same list that would be enough for any peer to rebuild it — and it is
+    /// what a late joiner is sent. The starting straight is not in here; that is laid by
+    /// <see cref="BuildStartingTrack"/> on every peer alike.
+    /// </summary>
+    private readonly List<int> _placed = new();
 
     /// <summary>Fired on every peer once a tile has landed.</summary>
     [Signal] public delegate void TilePlacedEventHandler(int trackIndex, int hazard);
@@ -63,6 +97,9 @@ public partial class TrackController : Node3D
         // from the first frame rather than descending onto their roofs.
         foreach (PlacedTile tile in Grid.Tiles)
             SpawnTileNode(tile, drop: false);
+
+        GD.Print($"[Track] Start line at {StartCell} facing {StartDirection.DisplayName()}; "
+                 + $"{StartingStraightLength} starting tile(s), head now {Grid.HeadCell}.");
 
         EmitSignal(SignalName.TrackHeadChanged);
     }
@@ -118,9 +155,9 @@ public partial class TrackController : Node3D
     /// </summary>
     private void AuthorizeAndBroadcast(int catalogIndex, int senderId)
     {
-        if (senderId != GameManager.Instance.TrackMasterPeerId)
+        if (!MayBuild(senderId))
         {
-            GD.PushWarning($"[Track] Peer {senderId} tried to place a tile but is not the Track Master.");
+            GD.PushWarning($"[Track] Peer {senderId} tried to place a tile but is not the builder.");
             return;
         }
 
@@ -139,6 +176,25 @@ public partial class TrackController : Node3D
 
         Rpc(MethodName.ConfirmTilePlaced, catalogIndex);
         ApplyPlacement(catalogIndex);
+    }
+
+    /// <summary>
+    /// Server only. Whether a peer is the one this track takes tiles from.
+    ///
+    /// Solo play answers yes to everything: there is one peer, it is the server, and asking it to
+    /// prove it is the Track Master when no roles have been handed out would make the lobby's
+    /// builder inert for the only person who can use it.
+    /// </summary>
+    private bool MayBuild(int senderId)
+    {
+        if (!Networked)
+            return true;
+
+        // Godot's high-level multiplayer always gives the server peer id 1 — the same 1 the
+        // client-side RpcId above sends to.
+        return Authority == BuildAuthority.Host
+            ? senderId == 1
+            : senderId == GameManager.Instance.TrackMasterPeerId;
     }
 
     /// <summary>Server -> all: the placement is confirmed; reflect it on every peer.</summary>
@@ -160,11 +216,153 @@ public partial class TrackController : Node3D
         if (tile == null)
             return;
 
+        _placed.Add(catalogIndex);
         SpawnTileNode(tile);
 
         EmitSignal(SignalName.TilePlaced, tile.Index, (int)tile.Data.Hazard);
         EmitSignal(SignalName.TrackHeadChanged);
     }
+
+    // ---- Undo ----
+
+    /// <summary>
+    /// Client-side intent: ask the server to take the last tile back off the end. The mirror of
+    /// <see cref="RequestPlaceTile"/>, and it takes the same route for the same reasons.
+    /// </summary>
+    public void RequestRemoveTile()
+    {
+        if (!AllowUndo)
+            return;
+
+        if (!Networked)
+        {
+            ApplyRemoval();
+            return;
+        }
+
+        if (Multiplayer.IsServer())
+        {
+            AuthorizeAndBroadcastRemoval(Multiplayer.GetUniqueId());
+            return;
+        }
+
+        RpcId(1, MethodName.ServerRemoveTile);
+    }
+
+    /// <summary>Server only. A remote peer is asking to take a tile back.</summary>
+    [Rpc(MultiplayerApi.RpcMode.AnyPeer, CallLocal = false,
+         TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    private void ServerRemoveTile()
+    {
+        if (!NetworkManager.Instance.IsHost)
+            return;
+
+        AuthorizeAndBroadcastRemoval(Multiplayer.GetRemoteSenderId());
+    }
+
+    /// <summary>
+    /// Server only. Check the requester may build and that there is something of theirs to take
+    /// back, then broadcast it.
+    /// </summary>
+    private void AuthorizeAndBroadcastRemoval(int senderId)
+    {
+        if (!AllowUndo || !MayBuild(senderId))
+        {
+            GD.PushWarning($"[Track] Peer {senderId} tried to undo a tile but is not the builder.");
+            return;
+        }
+
+        // Nothing placed yet. The starting straight is not undoable — it is the anchor the whole
+        // track hangs off, and a track with no start has nowhere to put the next tile.
+        if (_placed.Count == 0)
+            return;
+
+        Rpc(MethodName.ConfirmTileRemoved);
+        ApplyRemoval();
+    }
+
+    /// <summary>Server -> all: the removal is confirmed; reflect it on every peer.</summary>
+    [Rpc(MultiplayerApi.RpcMode.Authority, CallLocal = false,
+         TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    private void ConfirmTileRemoved() => ApplyRemoval();
+
+    /// <summary>
+    /// Take the last tile off this peer's grid and free its node. Runs identically everywhere, the
+    /// same way <see cref="ApplyPlacement"/> does.
+    /// </summary>
+    private void ApplyRemoval()
+    {
+        if (_placed.Count == 0)
+            return;
+
+        PlacedTile? tile = Grid.RemoveLast();
+        if (tile == null)
+            return;
+
+        _placed.RemoveAt(_placed.Count - 1);
+
+        // Detached now rather than only queued, so the name is free again immediately: the next
+        // tile placed takes the same track index, and a node still sitting on that name would get
+        // the new one renamed and leave it un-undoable.
+        Node? node = GetNodeOrNull(TileNodeName(tile.Index));
+        if (node != null)
+        {
+            RemoveChild(node);
+            node.QueueFree();
+        }
+
+        EmitSignal(SignalName.TrackHeadChanged);
+    }
+
+    // ---- Catch-up ----
+
+    /// <summary>
+    /// Server only. Hand a peer the whole track as it currently stands.
+    ///
+    /// Placements are broadcast as they happen, which is all a match needs — everybody loads the
+    /// scene together and then watches it grow. The lobby is the opposite: people arrive whenever,
+    /// and without this a late joiner sees a bare start tile while everyone else drives on track
+    /// that, for them, is not there to be driven on or fallen off.
+    /// </summary>
+    public void SyncTo(int peerId)
+    {
+        if (!Networked || !NetworkManager.Instance.IsHost || peerId == 1)
+            return;
+
+        RpcId(peerId, MethodName.SyncTrack, _placed.ToArray());
+    }
+
+    /// <summary>
+    /// Server -> one peer: throw away whatever track this peer has and replay the real one.
+    ///
+    /// Rebuilt from scratch rather than topped up, because "what have you got and what are you
+    /// missing" is a conversation, and a list of catalog indices is small enough that replaying it
+    /// whole is cheaper than having it.
+    /// </summary>
+    [Rpc(MultiplayerApi.RpcMode.Authority, CallLocal = false,
+         TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    private void SyncTrack(int[] catalogIndices)
+    {
+        // Detached before being freed, not just queued: QueueFree runs at the end of the frame, so
+        // the old Tile0 would still be holding that name when the replay tries to add the new one,
+        // and Godot would quietly rename it out from under the undo lookup.
+        foreach (Node child in GetChildren())
+        {
+            if (child is not TrackTile)
+                continue;
+
+            RemoveChild(child);
+            child.QueueFree();
+        }
+
+        _placed.Clear();
+        BuildStartingTrack();
+
+        foreach (int catalogIndex in catalogIndices)
+            ApplyPlacement(catalogIndex);
+    }
+
+    private static string TileNodeName(int trackIndex) => $"Tile{trackIndex}";
 
     /// <summary>
     /// Build the node for a placed tile. <paramref name="drop"/> is what separates a tile the
@@ -173,7 +371,7 @@ public partial class TrackController : Node3D
     /// </summary>
     private void SpawnTileNode(PlacedTile tile, bool drop = true)
     {
-        var node = new TrackTile { Name = $"Tile{tile.Index}" };
+        var node = new TrackTile { Name = TileNodeName(tile.Index) };
         // Added to the tree first so the geometry it builds enters the tree with it.
         AddChild(node);
         node.Initialize(tile.Data, tile.Index, tile.Cell, tile.EntryDirection, tile.EntryHeight,

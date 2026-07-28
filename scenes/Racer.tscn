@@ -15,13 +15,14 @@
 [ext_resource type="Script" uid="uid://cqcu0hi3lcv4l" path="res://scripts/vehicles/FlatShade.cs" id="13_flatshade"]
 [ext_resource type="Script" uid="uid://eq5bg7e2kp0x" path="res://scripts/vehicles/NitroFlame.cs" id="14_nitroflame"]
 [ext_resource type="Script" uid="uid://d1camux0pgphx" path="res://scripts/vehicles/WheelVisual.cs" id="15_wheelvis"]
+[ext_resource type="Script" uid="uid://c1l0rgq3nvu5a" path="res://scripts/vehicles/WheelSmoke.cs" id="16_smoke"]
 
 [sub_resource type="BoxShape3D" id="Shape_body"]
 size = Vector3(1.2, 0.42, 2.25)
 
 [node name="Racer" type="RigidBody3D" unique_id=1098173407 node_paths=PackedStringArray("FrontLeftWheel", "FrontRightWheel", "RearLeftWheel", "RearRightWheel")]
-can_sleep = false
 gravity_scale = 2.0
+can_sleep = false
 script = ExtResource("1_racer")
 FrontLeftWheel = NodePath("WheelFL")
 FrontRightWheel = NodePath("WheelFR")
@@ -29,6 +30,11 @@ RearLeftWheel = NodePath("WheelRL")
 RearRightWheel = NodePath("WheelRR")
 SpringStrength = 84000.0
 SpringDamping = 7200.0
+BoostDecayRate = 20.0
+ChainGraceTime = 1.25
+NitroDuration = 0.5
+AirNitroForce = 1000000.0
+AirNitroDuration = 0.07
 
 [node name="FlatShade" type="Node" parent="." unique_id=610255931]
 script = ExtResource("13_flatshade")
@@ -111,6 +117,10 @@ TireWidth = 0.245
 
 [node name="SkidMarks" type="MeshInstance3D" parent="." unique_id=1471203588 node_paths=PackedStringArray("VehicleNode")]
 script = ExtResource("10_skid")
+VehicleNode = NodePath("..")
+
+[node name="WheelSmoke" type="GPUParticles3D" parent="." unique_id=987701518 node_paths=PackedStringArray("VehicleNode")]
+script = ExtResource("16_smoke")
 VehicleNode = NodePath("..")
 
 [node name="CameraRig" type="Node3D" parent="." unique_id=1816146576]

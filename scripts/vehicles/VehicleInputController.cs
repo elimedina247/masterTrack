@@ -30,6 +30,6 @@ public partial class VehicleInputController : Node
 		if (VehicleNode == null)
 			return;
 
-		VehicleInputState.Sample(Actions).ApplyTo(VehicleNode, Actions);
+		VehicleInputState.Sample(Actions).ApplyTo(VehicleNode);
 	}
 }

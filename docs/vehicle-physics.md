@@ -48,6 +48,8 @@ velocity as it stood at the top of the step.
 | 4 | **Steering torque** (PD → heading) | about **world up** | yes | **stood down** |
 | 5 | **Flip rate torque** | about car's `Basis.X` | — | yes |
 | 5b | **Air yaw rate torque** | about **world up** | — | yes |
+| 5c | **Air nitro thrust** | centre of mass, along nose | — | `AirNitroDuration` after a nitro |
+| 5d | **Hop impulse** | centre of mass, along **world up** | on press | — |
 | 6 | **Terminal velocity clamp** | `_IntegrateForces`, velocity | always | always |
 
 Every force in that list is new. **Nothing from the previous physics survives** — the airborne
@@ -66,16 +68,60 @@ Things that are **not** in the list, and that people expect to be:
 - **No anti-roll bar, camber, toe, Ackermann, ABS or traction control.**
 - **No roll control in the air.** Pitch and yaw only.
 
-### In the air the car is a projectile
+### In the air the car is a projectile, except when the nitro is lit
 
-**Nothing but gravity touches its velocity.** Both #2 and #3 are scaled by `GroundFraction` and
-skipped outright when it reaches zero, so the only things acting on an airborne car are gravity,
-the `MaxFallSpeed` clamp, and whatever torques the player is applying.
+**Nothing but gravity touches its velocity**, unless a boost is burning. Both #2 and #3 are scaled
+by `GroundFraction` and skipped outright when it reaches zero, so the only things acting on an
+airborne car are gravity, the `MaxFallSpeed` clamp, whatever torques the player is applying, and
+#5c.
 
 This is a rule, not a tuning choice, and it is worth defending. Drive points along the nose and
 grip points along `Basis.X` — both are **body axes**. Any amount of either left running in the
 air would mean rotating the car changed the direction its velocity was pushed or scrubbed in,
 which quietly turns an orientation control into a thrust control. A flip would accelerate you.
+
+**`AirNitroForce` is the one deliberate exception**, and it breaks exactly that rule on purpose.
+Before it, a nitro fired in mid-air spent a charge, lit the flames, raised the speed target — and
+then delivered none of it, because there was no force left to deliver it with. Paying for nothing
+is worse than not being allowed to pay.
+
+So for `AirNitroDuration` after a nitro is fired, an airborne car gets thrust along its nose at
+`AirNitroForce` (14000 N, matched to `BoostAccelForce`), held to the same `TopSpeed + BoostSpeed`
+ceiling the grounded solve drives at so the air is never the better place to spend a charge.
+Pitching the car now steers that thrust, which is the feature: nose down to dive onto a landing
+you were going to miss, nose up to hold a jump out. The distinction that keeps the rule honest is
+that this is **opt-in and finite** where a flip accelerating you would have been free and
+permanent. Set `AirNitroForce` to 0 to get the pure projectile back.
+
+Two details do the load-bearing work there:
+
+- **`AirNitroDuration` (0.35 s) is its own timer, not a slice of the burst.** On the ground a boost
+  is a 1.5 s run you hold; in the air it is a punch that changes where you land. A second and a
+  half of free thrust up there is a flying car.
+- **Only `TryActivateNitro` sets that timer.** A *drift* boost still burning as the car leaves a
+  ramp gives no thrust at all — a drift boost is finite but not opt-in, so it does not clear the
+  bar the exception was argued on. Boost pads never came into it: they are a direct
+  `ApplyCentralImpulse` from the tile and never touch `BoostTimeRemaining`.
+
+The clock starts when the charge is spent, wherever the car is. Fire one on the road and the air
+window is long gone before the next ramp — correct, because that thrust was already spent pushing
+you along the ground.
+
+### The hop is the other thing that is not gravity
+
+`HopImpulse` (8 m/s) springs the car straight up along **world** up, as an impulse scaled by mass
+so every car hops the same height. At this project's 2 g that is about 1.6 m — enough to clear a
+log, unstick off a crease or get the nose over a kerb, and nowhere near enough to skip a hazard,
+which is the line it must not cross.
+
+It is **grounded only**, and that is what keeps it from touching the projectile rule at all: with
+at least one wheel down there is something to push against, and in the air the button does
+nothing. Repeatable upward impulses with nothing to push against is a helicopter. `HopCooldown`
+(0.35 s) stops a landing being immediately re-hopped, which would let a player bunny-hop a whole
+washboard and quietly defeat every tile that works by unsettling the car.
+
+World up rather than chassis up on purpose: chassis-up would fire the car off the side of a banked
+corner at whatever angle it was sitting at, which is a launch pad, not a hop.
 
 The failure mode is easy to reintroduce and hard to spot, because it looks tiny in the source.
 The old airborne grip was 5%, which sounds negligible — but grip removes that fraction of the
@@ -242,6 +288,7 @@ Nothing in the steering scales with speed or grip, so the car answers the stick 
 | Brake / reverse | `S` / `↓` | Left trigger |
 | Steer | `A` `D` / `←` `→` | Left stick |
 | **Drift** | `Space` | A |
+| **Hop** | `E` | X |
 | **Flip** (airborne) | `W` nose **down** / `S` nose **up** | Triggers |
 | **Turn** (airborne) | `A` `D` / `←` `→` | Left stick |
 | Nitro | `Shift` | B |
@@ -255,19 +302,41 @@ bindings carry over — the button is in the same place, it just does something 
 clutch and shift bindings are gone: there is no gearbox, and reverse engages by holding the
 brake below `ReverseEngageSpeed`.
 
+**The pedals do not swap in reverse.** Brake is reverse, throttle is forward, in both gears.
+Upstream swapped them over so "forward on the stick" always meant "away from the nose", and that
+was carried across and then quietly broke reverse for a long time: `ProcessDrive` takes the
+reverse target off `BrakeAmount` and latches back into forward off `ThrottleAmount`, so the swap
+fed each pedal to the wrong half of that pair. Holding the brake to reverse put its strength on
+the throttle, which flipped the gear straight back, while the brake amount the speed is actually
+taken from decayed away. The gear sawtoothed every frame or two and reverse crawled at a fraction
+of `ReverseTopSpeed`. Nitro in the air is worth reading against this one: both were cases where
+the input arrived and the force never did.
+
 ---
 
 ## Drifting
 
 A drift is a **state you ask for**, not something the physics decides has happened. Press the
-drift button above `DriftMinSpeed` and:
+drift button above `DriftMinSpeed` **while steering** and:
 
 - the heading is offset by `DriftAngle` (35°) in the drift direction,
 - `GripFactor` is multiplied by `DriftGripMultiplier` (0.28), so the car actually slews,
 - both ramp in over `DriftBlendSpeed` rather than snapping.
 
-Direction comes from the stick at the moment of the press; held straight, the car takes
-whichever way it is already rotating.
+Direction comes from the stick at the moment of the press, and there has to be one:
+`DriftSteerThreshold` (0.15) is how far the steering must be deflected for the button to do
+anything at all.
+
+**That threshold is a gate, not a tiebreak.** The car used to fall back on its own yaw rate when
+the stick was centred, which meant throttle-and-drift with no steering picked a side off whatever
+rotation happened to be there and slid anyway — so the quickest way through most corners never
+involved steering into them. A drift is a corner taken sideways; it is entered by turning in and
+committing.
+
+Read at the press only. Once a drift is running the stick is free to come back to centre, which is
+what holding a long slide looks like. The press has to *coincide* with the steering, though —
+pressing the button on the straight and turning afterwards starts nothing, because the rising edge
+has already been spent.
 
 ### Steering inside a drift
 
@@ -311,6 +380,27 @@ So a driver who keeps chaining ends up a very long way over `TopSpeed`. `MaxBoos
 is the only thing that stops it — on the racer's 55.6 that is a hard ceiling near 360 km/h.
 When every burst expires the bonus **bleeds** off at `BoostDecayRate` rather than dropping, so
 coming down off a big chain is a moment of the car running out rather than a switch.
+
+### The bleed stops while a drift is held
+
+Additive only pays if the next boost lands while there is still something to add to, and that is
+where chaining used to quietly fall apart. A tier-1 boost is 8 m/s over a 1.0 s burst, and at
+14 m/s it is gone **0.57 s** after the burst ends — less than the 0.55 s of drifting needed to
+earn the next link, before counting any time at all spent getting into it.
+
+`ChainGraceTime` did not agree with that. It accepts a new drift up to 0.5 s after the burst ends,
+but for tier 1 the last moment a stack could actually land was 1.02 s in, against a counter that
+kept saying yes until 1.50 s. Enter in that gap and `ChainCount` went up while `BoostSpeed`
+restarted from zero — the overlay said you had chained and the car disagreed.
+
+So the bleed is **paused for as long as a drift is being held**. A drift is the player working on
+the next link; draining the last one while they earn it made chaining a fight against a clock
+rather than against the corner. Nothing else needed retuning — with the freeze, any entry the
+grace window accepts now produces a real stack, which is what the counter was claiming all along.
+
+Note this pauses `BoostSpeed` only. The burst's own countdown (`BoostTimeRemaining`, and with it
+`BoostAccelForce` and the exhaust flames) keeps running during a drift — you hold the *speed* you
+earned, not a permanently lit boost.
 
 Nitro feeds the same bonus (`GrantBoost`), so charges stack with drift boosts and with each
 other exactly the same way. `IsNitroActive` is now an alias for `IsBoosting`, which means the
@@ -539,7 +629,10 @@ runs `SpringStrength = 84000` and `SpringDamping = 7200` — both exactly double
 which puts the ride height back where it was.
 
 The aerial controls are **orientation only**. They apply torque and nothing else — no drive, no
-grip, no thrust. See **In the air the car is a projectile** above for why that has to hold.
+grip. The single thing in the air that is not a torque is `AirNitroForce`, and it is not one of
+these controls: it costs a charge and runs for `AirNitroDuration` only. The hop is grounded-only
+and never applies up here at all. See **In the air the car is a projectile, except when the nitro
+is lit** above for why the line is drawn there.
 
 - **`MaxFallSpeed`** (65 m/s) — the one remaining airborne clamp, in `_IntegrateForces`. Not a
   feel knob: it is the guard rail that stops a fall off the edge of the board outrunning the

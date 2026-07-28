@@ -1,4 +1,4 @@
-﻿[gd_scene format=3 uid="uid://dtg0bykxtt0m1"]
+[gd_scene format=3 uid="uid://dtg0bykxtt0m1"]
 
 [ext_resource type="Script" uid="uid://br8a882jsw3eh" path="res://scripts/game/PhysicsTestArea.cs" id="1_area"]
 [ext_resource type="PackedScene" uid="uid://5vb3gdxlbtm6" path="res://scenes/Racer.tscn" id="2_racer"]
@@ -9,8 +9,11 @@
 [ext_resource type="Resource" uid="uid://btoehb7tlvw70" path="res://resources/nitro_effects.tres" id="7_fx"]
 [ext_resource type="Sky" uid="uid://bvicqno3trron" path="res://resources/sky.tres" id="8_sky"]
 [ext_resource type="Script" uid="uid://006nwq7ooj8g" path="res://scripts/game/SkyScenery.cs" id="9_sky_scenery"]
-[ext_resource type="Script" path="res://scripts/game/RacerArena.cs" id="10_arena"]
-[ext_resource type="Script" path="res://scripts/ui/LobbyPanel.cs" id="11_lobby"]
+[ext_resource type="Script" uid="uid://cyypgqmv0jhol" path="res://scripts/game/RacerArena.cs" id="10_arena"]
+[ext_resource type="Script" uid="uid://cvfemtwhfl6pw" path="res://scripts/ui/LobbyPanel.cs" id="11_lobby"]
+[ext_resource type="Script" uid="uid://b1crjms4syy7i" path="res://scripts/tiles/TrackController.cs" id="12_track"]
+[ext_resource type="Script" uid="uid://dbk7pylfv22wn" path="res://scripts/trackmaster/TrackMasterController.cs" id="13_builder"]
+[ext_resource type="Script" uid="uid://cj0ww0l43v351" path="res://scripts/ui/TilePalette.cs" id="14_palette"]
 
 [sub_resource type="Environment" id="Env"]
 background_mode = 2
@@ -37,12 +40,20 @@ InnerRadius = 1200.0
 transform = Transform3D(0.866025, -0.353553, 0.353553, 0, 0.707107, 0.707107, -0.5, -0.612372, 0.612372, 0, 40, 0)
 shadow_enabled = true
 
-[node name="RacerArena" type="Node3D" parent="." node_paths=PackedStringArray("Hud")]
+[node name="Track" type="Node3D" parent="." unique_id=638109884]
+script = ExtResource("12_track")
+
+[node name="TrackMaster" type="Node3D" parent="." unique_id=715543938 node_paths=PackedStringArray("Track")]
+script = ExtResource("13_builder")
+Track = NodePath("../Track")
+FreeBuild = true
+ActiveOnReady = false
+
+[node name="RacerArena" type="Node3D" parent="." unique_id=1794321023 node_paths=PackedStringArray("Hud")]
 script = ExtResource("10_arena")
 RacerScene = ExtResource("2_racer")
 Layout = 1
 Origin = Vector3(0, 0.15, 60)
-ScatterRadius = 14.0
 Hud = NodePath("../HUD")
 
 [node name="HUD" type="CanvasLayer" parent="." unique_id=138534335]
@@ -87,7 +98,7 @@ grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("4_vdebug")
 
-[node name="LobbyPanel" type="Control" parent="HUD"]
+[node name="LobbyPanel" type="Control" parent="HUD" unique_id=1212267974]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -97,4 +108,14 @@ grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("11_lobby")
 
-
+[node name="TilePalette" type="Control" parent="HUD" unique_id=1214353398 node_paths=PackedStringArray("Builder")]
+visible = false
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("14_palette")
+Builder = NodePath("../../TrackMaster")

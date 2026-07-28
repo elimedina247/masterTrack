@@ -10,6 +10,12 @@ namespace MasterTrack.UI;
 /// the bottom of the screen. It shows what they have, not what exists — the catalog is no
 /// longer on screen, because they can't reach for it.
 ///
+/// Unless the builder is in <see cref="TrackMasterController.FreeBuild"/>, in which case what
+/// they have *is* the catalog and all of it goes on screen. That is two dozen cards rather than
+/// six, so the tray wraps onto several rows and grows to fit them; everything below asks the
+/// builder what a card is offering rather than asking the hand, and neither mode needs its own
+/// path through this file.
+///
 /// The tray is the whole placement interface: hovering a slot ghosts its tile onto the end of
 /// the track, and clicking it puts it there. There's no held tile and no second click, because
 /// the end of the track is the only place a tile can go (see <see cref="TrackMasterController"/>).
@@ -28,8 +34,15 @@ public partial class TilePalette : Control
     /// <summary>The builder to drive. Required.</summary>
     [Export] public TrackMasterController? Builder { get; set; }
 
-    /// <summary>Height of the tray in pixels.</summary>
+    /// <summary>Height of the tray in pixels. A floor, not a fixed size — a tray that wraps onto
+    /// several rows grows past it.</summary>
     [Export] public int TrayHeight { get; set; } = 132;
+
+    /// <summary>
+    /// Most cards to put in one row before wrapping. Only ever reached in free build: a hand is
+    /// six slots and stays the single row it has always been.
+    /// </summary>
+    [Export] public int MaxColumns { get; set; } = 8;
 
     /// <summary>The nodes making up one slot, so a refresh restyles rather than rebuilds.</summary>
     private sealed class SlotView
@@ -50,6 +63,13 @@ public partial class TilePalette : Control
     private int _hoveredSlot = -1;
 
     private const string IdleStatus = "Hover a tile to see it on the end of the track — click to place it.";
+
+    private const string FreeBuildIdleStatus =
+        "Hover a tile to see it on the end of the track — click to place it, Z to take it back.";
+
+    /// <summary>What the status line says when the cursor is off the tray.</summary>
+    private string RestingStatus
+        => Builder is { FreeBuild: true } ? FreeBuildIdleStatus : IdleStatus;
 
     private static readonly Color CardIdle = new(0.12f, 0.13f, 0.16f, 0.92f);
     private static readonly Color CardHover = new(0.20f, 0.22f, 0.27f, 0.95f);
@@ -101,15 +121,20 @@ public partial class TilePalette : Control
 
         _status = new Label
         {
-            Text = IdleStatus,
+            Text = RestingStatus,
             VerticalAlignment = VerticalAlignment.Center,
         };
         margin.AddChild(_status);
     }
 
     /// <summary>
-    /// The camera mode toggle, opposite the status line. Its label is driven by the builder's
-    /// signal rather than flipped here, so the button can't drift out of step with the camera.
+    /// The camera mode toggle, directly under the status line. Its label is driven by the
+    /// builder's signal rather than flipped here, so the button can't drift out of step with the
+    /// camera.
+    ///
+    /// Left rather than the opposite corner: the two things say what the board is doing and belong
+    /// together, and the top right is where the lobby's roster panel lives — in the lobby the two
+    /// were landing on each other.
     /// </summary>
     private void BuildCameraToggle()
     {
@@ -118,13 +143,10 @@ public partial class TilePalette : Control
             // Never takes focus: with it focused, the space bar and Enter would re-press it,
             // and the Track Master's hands are on WASD.
             FocusMode = FocusModeEnum.None,
-            AnchorLeft = 1.0f,
-            AnchorRight = 1.0f,
-            OffsetLeft = -260,
-            OffsetTop = 24,
-            OffsetRight = -24,
-            OffsetBottom = 60,
-            GrowHorizontal = GrowDirection.Begin,
+            OffsetLeft = 24,
+            OffsetTop = 68,
+            OffsetRight = 284,
+            OffsetBottom = 104,
         };
         // Same dark panels as the rest of the HUD; the default theme's button doesn't belong
         // on top of the board.
@@ -136,8 +158,21 @@ public partial class TilePalette : Control
         AddChild(_cameraButton);
     }
 
+    /// <summary>Height of one card, and so of one row of the tray, in pixels.</summary>
+    private const int CardHeight = 96;
+
+    private const int CardWidth = 132;
+
     private void BuildTray()
     {
+        int slots = Builder?.TrayLength ?? 0;
+        int columns = Mathf.Max(1, Mathf.Min(slots, MaxColumns));
+        int rows = Mathf.Max(1, Mathf.CeilToInt(slots / (float)columns));
+
+        // Grown to fit however many rows the tray wrapped onto, rather than clipping them: the
+        // hand's single row still comes out at TrayHeight, and the catalog's three do not.
+        int height = Mathf.Max(TrayHeight, rows * CardHeight + (rows - 1) * 8 + 20);
+
         var tray = new PanelContainer
         {
             MouseFilter = MouseFilterEnum.Stop,
@@ -146,7 +181,7 @@ public partial class TilePalette : Control
             AnchorTop = 1.0f,
             AnchorRight = 1.0f,
             AnchorBottom = 1.0f,
-            OffsetTop = -TrayHeight,
+            OffsetTop = -height,
             GrowHorizontal = GrowDirection.Both,
             GrowVertical = GrowDirection.Begin,
         };
@@ -160,16 +195,22 @@ public partial class TilePalette : Control
         margin.AddThemeConstantOverride("margin_bottom", 10);
         tray.AddChild(margin);
 
-        var row = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.Center };
-        row.AddThemeConstantOverride("separation", 10);
-        margin.AddChild(row);
+        // A grid rather than a row, so one code path serves both trays: a hand is six cards and
+        // fits on one line, and the free-build catalog is two dozen and does not. Centred by
+        // wrapping in an HBox — a GridContainer fills from the left whatever the alignment.
+        var centre = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.Center };
+        margin.AddChild(centre);
+
+        var grid = new GridContainer { Columns = columns };
+        grid.AddThemeConstantOverride("h_separation", 10);
+        grid.AddThemeConstantOverride("v_separation", 8);
+        centre.AddChild(grid);
 
         // One card per slot, built once and then only ever restyled. The hand changes several
         // times a minute; rebuilding the tray each time would throw away the card the mouse is
         // resting on and drop its hover.
-        int slots = Builder?.Hand.SlotCount ?? 0;
         for (int i = 0; i < slots; i++)
-            row.AddChild(BuildSlot(i));
+            grid.AddChild(BuildSlot(i));
 
         RefreshSlots();
     }
@@ -178,7 +219,7 @@ public partial class TilePalette : Control
     {
         var card = new PanelContainer
         {
-            CustomMinimumSize = new Vector2(132, 0),
+            CustomMinimumSize = new Vector2(CardWidth, CardHeight),
             MouseFilter = MouseFilterEnum.Stop,
         };
         card.AddThemeStyleboxOverride("panel", Panel(CardIdle));
@@ -257,13 +298,13 @@ public partial class TilePalette : Control
         if (Builder == null)
             return;
 
-        TileHand hand = Builder.Hand;
-        int cooldownSlot = hand.CooldownSlot;
+        // Free build has no deal clock, so no slot is ever the one being counted down into.
+        int cooldownSlot = Builder.FreeBuild ? -1 : Builder.Hand.CooldownSlot;
 
         for (int i = 0; i < _slots.Count; i++)
         {
             SlotView view = _slots[i];
-            TileDefinition? definition = TileCatalog.At(hand.At(i));
+            TileDefinition? definition = TileCatalog.At(Builder.CatalogIndexAt(i));
 
             bool isCooldown = i == cooldownSlot;
             view.Cooldown.Visible = isCooldown;
@@ -293,7 +334,7 @@ public partial class TilePalette : Control
 
     public override void _Process(double delta)
     {
-        if (Builder == null)
+        if (Builder == null || Builder.FreeBuild)
             return;
 
         int slot = Builder.Hand.CooldownSlot;
@@ -328,7 +369,7 @@ public partial class TilePalette : Control
             _hoveredSlot = -1;
 
         Builder?.ClearPreview();
-        SetStatus(IdleStatus, StatusIdle);
+        SetStatus(RestingStatus, StatusIdle);
     }
 
     /// <summary>
@@ -352,7 +393,10 @@ public partial class TilePalette : Control
     /// </summary>
     private void SayWhatIsUnderTheCursor()
     {
-        if (Builder == null || _hoveredSlot < 0 || Builder.Hand.At(_hoveredSlot) != TileHand.Empty)
+        // Free build has no empty cards — every one of them is a catalog tile — so there is never
+        // anything to explain away.
+        if (Builder == null || Builder.FreeBuild || _hoveredSlot < 0
+            || Builder.CatalogIndexAt(_hoveredSlot) != TileHand.Empty)
             return;
 
         SetStatus(_hoveredSlot == Builder.Hand.CooldownSlot
