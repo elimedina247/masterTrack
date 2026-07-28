@@ -86,6 +86,12 @@ public partial class PhysicsTestArea
 		_track.StartingStraightLength = 1;
 		_track.Authority = TrackController.BuildAuthority.Host;
 		_track.AllowUndo = true;
+
+		// No race here, so none of the things a race does to a track. The lobby's track is
+		// somebody laying a course out on purpose: crumbling the back of it away would be
+		// destroying their work while they were still standing on it, there is no length limit
+		// because nobody is spending a hand, and a finish line would be a finish to nothing.
+		_track.RaceRules = false;
 	}
 
 	/// <summary>Find the board and the tray, and start the player in the car.</summary>
@@ -133,14 +139,23 @@ public partial class PhysicsTestArea
 	}
 
 	/// <summary>
-	/// Put a freshly spawned car into whichever mode is already running.
+	/// Set a freshly spawned car up for the proving ground, and put it into whichever mode is
+	/// already running.
 	///
 	/// Cars arrive late — in a session, whenever their peer reports in — so the mode was decided
 	/// before there was a car to decide it for. Without this a host who went to the board while
 	/// waiting for their car gets one that spawns still listening to the keyboard, and flying the
 	/// board on WASD drives it around the pad off-screen.
 	/// </summary>
-	private void AdoptLocalCar() => SetBuildMode(_building);
+	private void AdoptLocalCar()
+	{
+		// The pad is for trying things, so the reset key hands the nitro back with the car. A match
+		// leaves this off — see RacerController.RefillNitroOnReset.
+		if (LocalCar() is { } car)
+			car.RefillNitroOnReset = true;
+
+		SetBuildMode(_building);
+	}
 
 	/// <summary>This machine's own car, or null before it has spawned.</summary>
 	private RacerController? LocalCar()

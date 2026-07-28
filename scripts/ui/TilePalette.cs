@@ -58,6 +58,12 @@ public partial class TilePalette : Control
     private Label _status = null!;
     private Button _cameraButton = null!;
 
+    /// <summary>How much of the race is left to build, and the panel it sits in — hidden together
+    /// when the track has no limit and there is nothing to count down.</summary>
+    private Label _remaining = null!;
+
+    private PanelContainer _remainingPanel = null!;
+
     /// <summary>Slot the mouse is resting on, or -1. Tracked so the status line and the ghost
     /// can be re-aimed when the hand shifts under a cursor that hasn't moved.</summary>
     private int _hoveredSlot = -1;
@@ -86,19 +92,88 @@ public partial class TilePalette : Control
 
         BuildStatusBar();
         BuildCameraToggle();
+        BuildRemainingCounter();
         BuildTray();
 
-        if (Builder != null)
-        {
-            Builder.PreviewChanged += OnPreviewChanged;
-            Builder.CameraModeChanged += OnCameraModeChanged;
-            Builder.HandChanged += OnHandChanged;
-            OnCameraModeChanged((int)Builder.CameraMode);
-        }
-        else
+        if (Builder == null)
         {
             GD.PushWarning("[TilePalette] No Builder assigned; the tray is inert.");
+            return;
         }
+
+        Builder.PreviewChanged += OnPreviewChanged;
+        Builder.CameraModeChanged += OnCameraModeChanged;
+        Builder.HandChanged += OnHandChanged;
+        OnCameraModeChanged((int)Builder.CameraMode);
+
+        // The counter moves when the track grows, which is exactly when the head changes.
+        if (Builder.Track != null)
+            Builder.Track.TrackHeadChanged += RefreshRemaining;
+
+        RefreshRemaining();
+    }
+
+    /// <summary>
+    /// Handlers on a node that outlives this one have to be taken back by hand — the track is in
+    /// the scene, but a C# <c>+=</c> is a managed delegate Godot cannot tie to a control's life.
+    /// </summary>
+    public override void _ExitTree()
+    {
+        // A racer's copy of this scene frees the builder and the tray in the same frame, and which
+        // of the two goes first is not ours to know — so the builder has to be checked for as
+        // carefully as the track it is being asked about.
+        if (Builder == null || !IsInstanceValid(Builder))
+            return;
+
+        if (Builder.Track is { } track && IsInstanceValid(track))
+            track.TrackHeadChanged -= RefreshRemaining;
+    }
+
+    /// <summary>
+    /// How many tiles the Track Master has left to spend on this race, under the camera toggle.
+    ///
+    /// This is the pace of the whole role in one number. Tiles arrive on a clock and the racers
+    /// arrive on their own schedule, but the race is a fixed length — so knowing there are four
+    /// left is what turns "make this hurt" into "make these four hurt".
+    /// </summary>
+    private void BuildRemainingCounter()
+    {
+        _remainingPanel = new PanelContainer
+        {
+            MouseFilter = MouseFilterEnum.Ignore,
+            OffsetLeft = 24,
+            OffsetTop = 112,
+            OffsetRight = 284,
+            OffsetBottom = 148,
+            Visible = false,
+        };
+        _remainingPanel.AddThemeStyleboxOverride("panel", Panel(new Color(0.10f, 0.11f, 0.14f, 0.80f)));
+        AddChild(_remainingPanel);
+
+        var margin = new MarginContainer();
+        foreach (string side in new[] { "margin_left", "margin_right" })
+            margin.AddThemeConstantOverride(side, 12);
+        _remainingPanel.AddChild(margin);
+
+        _remaining = new Label { VerticalAlignment = VerticalAlignment.Center };
+        _remaining.AddThemeFontSizeOverride("font_size", 18);
+        margin.AddChild(_remaining);
+    }
+
+    private void RefreshRemaining()
+    {
+        int left = Builder?.Track?.TilesRemaining ?? -1;
+
+        // A track with no limit is the lobby's free build. There is nothing to count down.
+        _remainingPanel.Visible = left >= 0;
+        if (left < 0)
+            return;
+
+        _remaining.Text = left == 0 ? "No tiles left — that's the race"
+                        : left == 1 ? "1 tile left in the race"
+                        : $"{left} tiles left in the race";
+        _remaining.AddThemeColorOverride("font_color",
+                                         left <= 3 ? StatusInvalid : StatusIdle);
     }
 
     private void BuildStatusBar()

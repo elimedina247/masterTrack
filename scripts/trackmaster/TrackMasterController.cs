@@ -208,6 +208,13 @@ public partial class TrackMasterController : Node3D
 	private static readonly Color ValidTint = new(0.35f, 1.0f, 0.45f);
 	private static readonly Color InvalidTint = new(1.0f, 0.35f, 0.35f);
 
+	/// <summary>
+	/// What the board says once the race's tiles have all been laid. Deliberately not phrased as a
+	/// rejection: the Track Master has not done anything wrong, the race is simply over as far as
+	/// building goes, and everything from here is down to whether the racers get there.
+	/// </summary>
+	private const string OutOfTilesMessage = "That's the whole race. The bar at the end is the finish now.";
+
 	/// <summary>One board marker and the car it belongs to.</summary>
 	private sealed class RacerMarker
 	{
@@ -296,6 +303,14 @@ public partial class TrackMasterController : Node3D
 		TileDefinition? definition = TileCatalog.At(catalogIndex);
 		if (definition == null)
 			return;
+
+		// The race is as long as the host said it was. Refused here as well as on the server, and
+		// without spending the tile: the Track Master has run out of track, not out of tiles.
+		if (Track.AtTileLimit)
+		{
+			EmitSignal(SignalName.PreviewChanged, false, OutOfTilesMessage);
+			return;
+		}
 
 		// Checked here as well as on the server so an illegal tile says why on the spot,
 		// rather than being silently dropped by the authority a round trip later.
@@ -671,9 +686,16 @@ public partial class TrackMasterController : Node3D
 		if (definition == null)
 			return;
 
-		bool valid = Track.Grid.CanPlace(Track.Grid.HeadCell, definition.ToTileData(), out string reason);
-		EmitSignal(SignalName.PreviewChanged, valid,
-				   valid ? $"{definition.DisplayName} — click to place it." : reason);
+		bool valid = false;
+		string message = OutOfTilesMessage;
+
+		if (!Track.AtTileLimit)
+		{
+			valid = Track.Grid.CanPlace(Track.Grid.HeadCell, definition.ToTileData(), out string reason);
+			message = valid ? $"{definition.DisplayName} — click to place it." : reason;
+		}
+
+		EmitSignal(SignalName.PreviewChanged, valid, message);
 
 		_ghost = new TrackTile { Name = "TileGhost" };
 		AddChild(_ghost);

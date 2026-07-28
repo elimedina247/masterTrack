@@ -29,6 +29,22 @@ public static class TrackDirectionExtensions
     };
 
     /// <summary>
+    /// Unit vector this direction runs along in world space. The same step as
+    /// <see cref="Step"/>, in the axes the world is measured in rather than the grid's.
+    /// </summary>
+    public static Vector3 Forward(this TrackDirection direction)
+    {
+        Vector2I step = direction.Step();
+        return new Vector3(step.X, 0.0f, step.Y);
+    }
+
+    /// <summary>
+    /// Unit vector across the track, to the right of <see cref="Forward"/>. What "how far off the
+    /// racing line is this" is measured along.
+    /// </summary>
+    public static Vector3 Right(this TrackDirection direction) => direction.Turn(1).Forward();
+
+    /// <summary>
     /// Turn by quarter-turns clockwise. Matches <see cref="TileData.ExitTurn"/>:
     /// 0 straight on, 1 right, -1 left, 2 a U-turn.
     /// </summary>

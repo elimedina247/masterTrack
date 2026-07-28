@@ -51,16 +51,26 @@ public partial class Game : Node3D
         if (_waiting != null)
             _waiting.Visible = false;
 
+        // How long the race is, as the host set it in the lobby. Set here rather than in the
+        // .tscn because it is a decision somebody made a scene ago — and it can be set this late
+        // because nothing reads it until the Track Master plays their first tile.
+        _track.TileLimit = GameManager.Instance.RaceLength;
+
         bool networked = NetworkManager.Instance.IsNetworked;
         _localRole = networked ? GameManager.Instance.LocalRole : GameManager.Instance.SoloRole;
 
         GD.Print($"[Game] _Ready. networked={networked}, uid={Multiplayer.GetUniqueId()}, " +
-                 $"role={_localRole}.");
+                 $"role={_localRole}, race={_track.TileLimit} tiles.");
 
         ApplyRole();
 
         // Warnings are computed against the authoritative track, so only the server does it.
         _track.TilePlaced += OnTilePlaced;
+
+        // The track spots the crossing; what it means for the match is decided here. Only the
+        // server ever fires this.
+        _track.RaceFinished += OnRaceFinished;
+        GameManager.Instance.MatchWon += OnMatchWon;
 
         if (!networked)
         {
@@ -98,6 +108,30 @@ public partial class Game : Node3D
         GameManager.Instance.AllPeersReady -= OnAllPeersReady;
         GameManager.Instance.SceneReadyProgress -= OnSceneReadyProgress;
         GameManager.Instance.GameStateChanged -= OnGameStateChanged;
+        GameManager.Instance.MatchWon -= OnMatchWon;
+    }
+
+    /// <summary>
+    /// Server only. Somebody got to the chequered bar at the end of the track. That is the race,
+    /// so hand it to the manager, which is the only thing that decides matches are over.
+    /// </summary>
+    private void OnRaceFinished(int peerId) => GameManager.Instance.DeclareWinner(peerId);
+
+    /// <summary>
+    /// Everyone, server included: say who won and leave it up. The manager takes the session back
+    /// to the lobby a few seconds later — see <see cref="OnGameStateChanged"/> for the way out.
+    /// </summary>
+    private void OnMatchWon(int peerId)
+    {
+        if (_waiting == null)
+            return;
+
+        string who = NetworkManager.Instance.IsNetworked
+            ? GameManager.Instance.NameOf(peerId)
+            : "You";
+
+        _waiting.Text = $"{who} reached the finish!";
+        _waiting.Visible = true;
     }
 
     /// <summary>Every peer is in the scene, so spawned cars will reach all of them.</summary>
@@ -170,7 +204,7 @@ public partial class Game : Node3D
     /// <see cref="RacerController.WarningLookahead"/> tiles in front of, and nobody else.
     /// After the warning fades it's on them to remember it.
     /// </summary>
-    private void OnTilePlaced(int trackIndex, int hazard)
+    private void OnTilePlaced(int trackIndex, int hazard, int catalogIndex)
     {
         if (NetworkManager.Instance.IsNetworked && !Multiplayer.IsServer())
             return;

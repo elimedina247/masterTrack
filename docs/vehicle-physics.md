@@ -297,6 +297,13 @@ Nothing in the steering scales with speed or grip, so the car answers the stick 
 | Cycle debug pages | `,` `.` | D-pad ← → |
 | Free-look camera | hold right mouse | — |
 
+**Reset also refills the nitro, but only on the proving ground.** `RacerController.Respawn` calls
+`ResetNitro` when `RefillNitroOnReset` is set, and `PhysicsTestArea` is the only thing that sets
+it. In a match the charges are meant to last a whole run, so a reset that handed them back would
+make deliberately wrecking the car the cheapest way to get five more — the reset is there so a bad
+landing doesn't end someone's race, not as a pit stop. On the pad there is no run to spend them
+over, so the alternative is leaving and re-entering the lobby to try a jump on a fresh set.
+
 The drift button is still bound to the `racer_handbrake` action, so existing keyboard and pad
 bindings carry over — the button is in the same place, it just does something else now. The
 clutch and shift bindings are gone: there is no gearbox, and reverse engages by holding the

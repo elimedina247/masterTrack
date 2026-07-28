@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using Godot;
 using MasterTrack.Networking;
+using MasterTrack.Racer;
 
 namespace MasterTrack.Tiles;
 
@@ -15,6 +16,14 @@ namespace MasterTrack.Tiles;
 /// Nothing about the tile geometry goes over the wire — a catalog index and the order of
 /// placements is enough for every peer to arrive at an identical track. That also means a
 /// client can never place a tile by lying about its shape.
+///
+/// Under <see cref="RaceRules"/> the track is also a moving window rather than a growing one. The
+/// back of it crumbles away behind the racers — see <see cref="TrackTrailLength"/> — and a
+/// chequered bar sits across the far end of the furthest tile, which is the thing the racers are
+/// trying to reach and the Track Master is trying to keep pushing away from them. Both of those
+/// are driven by placements and nothing else, so they need no messages of their own: every peer
+/// already receives the placements in order, so every peer condemns the same tile and moves the
+/// same bar at the same moment without being told to.
 /// </summary>
 public partial class TrackController : Node3D
 {
@@ -28,17 +37,64 @@ public partial class TrackController : Node3D
     [Export] public int StartingStraightLength { get; set; } = 4;
 
     /// <summary>
-    /// How far above the track a placed tile appears before it comes down, in metres. Three
-    /// cells up: high enough that a racer sees it coming from a way off, which is the point.
+    /// How far above the track a placed tile appears before it comes down, in metres. Two and a
+    /// half cells up: high enough that a racer sees it coming from a way off, which is the point.
     /// </summary>
-    [Export] public float TileFallHeight { get; set; } = TrackTile.Size * 3.0f;
+    [Export] public float TileFallHeight { get; set; } = TrackTile.Size * 2.5f;
 
     /// <summary>
     /// How fast a placed tile descends, in metres per second. Its own knob rather than a
-    /// duration, so the fall reads at a consistent speed whatever the drop height is — at the
-    /// defaults it works out to a five second descent, which is about one dealt tile's worth.
+    /// duration, so the fall reads at a consistent speed whatever the drop height is.
+    ///
+    /// It has to be read against how fast the cars are, not against how long it looks nice for. A
+    /// racer on a drift chain is doing the better part of 100 m/s, which is a tile every half
+    /// second: a leisurely descent means the tile the Track Master just played finishes arriving
+    /// several tiles after the leader has already driven through where it was going to be. At the
+    /// default this is about three quarters of a second, so a placement lands roughly as the car
+    /// that was one tile back reaches it — close enough to be a threat and still visibly a drop.
     /// </summary>
-    [Export] public float TileFallSpeed { get; set; } = 24.0f;
+    [Export] public float TileFallSpeed { get; set; } = 130.0f;
+
+    /// <summary>
+    /// Whether this track is running a race: the back of it crumbles away, a finish line sits at
+    /// the far end of it, and reaching that finish line wins.
+    ///
+    /// Off in the lobby, where the track is a sandbox somebody is laying out on purpose. Crumbling
+    /// a sandbox is destroying somebody's work, and winning at it means nothing.
+    /// </summary>
+    [Export] public bool RaceRules { get; set; } = true;
+
+    /// <summary>
+    /// How many tiles of track stay standing behind the newest one. Everything further back than
+    /// this is condemned, blinks for <see cref="TileExpirySeconds"/>, and falls away.
+    ///
+    /// This is the back half of the pressure, and it is deliberately counted in tiles rather than
+    /// in seconds: it means the road behind the racers disappears exactly as fast as the Track
+    /// Master lays road in front of them, so a builder who is racing to stay ahead is also
+    /// pulling the floor out from under whoever is last. Six is about two hundred metres of
+    /// standing track, which is enough to recover a bad corner in and not enough to sit still on.
+    /// </summary>
+    [Export] public int TrackTrailLength { get; set; } = 6;
+
+    /// <summary>
+    /// How long a condemned tile blinks before it goes, in seconds. The blink speeds up as the
+    /// time runs out — see <see cref="TrackTile.Condemn"/> — so this is the whole warning, not a
+    /// delay before one.
+    /// </summary>
+    [Export] public float TileExpirySeconds { get; set; } = 4.0f;
+
+    /// <summary>
+    /// How many tiles the Track Master may lay before the track is finished, or 0 for no limit.
+    ///
+    /// Set from the race length the host picked in the lobby. Without it a match runs until
+    /// somebody gets bored, because the Track Master's whole job is making sure the racers never
+    /// reach the end — the limit is what eventually takes the tiles out of their hands and turns
+    /// the bar at the end of the track into a real finish line.
+    ///
+    /// Counts placements, not cells and not the starting straight: it is the number of tiles the
+    /// Track Master is given to spend.
+    /// </summary>
+    [Export] public int TileLimit { get; set; }
 
     /// <summary>
     /// Who is allowed to add to this track.
@@ -75,23 +131,81 @@ public partial class TrackController : Node3D
     /// </summary>
     private readonly List<int> _placed = new();
 
-    /// <summary>Fired on every peer once a tile has landed.</summary>
-    [Signal] public delegate void TilePlacedEventHandler(int trackIndex, int hazard);
+    /// <summary>
+    /// Fired on every peer once a tile has been played. <paramref name="catalogIndex"/> is the
+    /// exact entry it came from, which the hazard alone cannot say — the catalog holds pairs that
+    /// share a hazard and differ only in which way they turn or how far they climb, and a callout
+    /// that said "Curve" without saying which way would be no callout at all.
+    /// </summary>
+    [Signal] public delegate void TilePlacedEventHandler(int trackIndex, int hazard, int catalogIndex);
 
     /// <summary>Fired when the head of the track moves, so the builder can re-aim.</summary>
     [Signal] public delegate void TrackHeadChangedEventHandler();
 
+    /// <summary>
+    /// Fired on the server the moment a racer crosses the bar at the end of the track. Only ever
+    /// once — the track stops looking after the first car across.
+    /// </summary>
+    [Signal] public delegate void RaceFinishedEventHandler(int peerId);
+
     /// <summary>True only in real networked play; solo skips the RPC round trip entirely.</summary>
     private static bool Networked => NetworkManager.Instance.IsNetworked;
+
+    /// <summary>The chequered bar at the far end of the track. Null until <c>_Ready</c>.</summary>
+    private FinishLine? _finish;
+
+    /// <summary>
+    /// Highest track index condemned so far, or -1 for none. Tiles are condemned strictly in
+    /// order, so one number is the whole record of what has already been told to go.
+    /// </summary>
+    private int _condemnedThrough = -1;
+
+    /// <summary>Whether somebody has already crossed the line. The race is only won once.</summary>
+    private bool _finished;
+
+    /// <summary>Whether the Track Master has spent every tile the race was given.</summary>
+    public bool AtTileLimit => TileLimit > 0 && _placed.Count >= TileLimit;
+
+    /// <summary>Tiles the Track Master has left to lay, or -1 if the race has no limit.</summary>
+    public int TilesRemaining => TileLimit > 0 ? Mathf.Max(0, TileLimit - _placed.Count) : -1;
+
+    /// <summary>
+    /// Where the chequered bar sits: the near face of the head cell, which is the far edge of the
+    /// furthest tile. It climbs with the track, so a finish at the top of a ramp is up there too.
+    /// </summary>
+    public Vector3 FinishWorldPosition
+        => TileCatalog.CellToWorld(Grid.HeadCell, Grid.HeadHeight)
+           - Grid.HeadDirection.Forward() * (TileCatalog.TileSize * 0.5f);
+
+    /// <summary>
+    /// How far past the bar still counts as having crossed it, in metres. Generous, because the
+    /// check runs on the physics step and a car on a drift chain covers a couple of metres between
+    /// two of them — and because whatever is past the bar is thin air, so there is nothing else
+    /// out there to mistake for a finisher.
+    /// </summary>
+    private const float FinishDepth = TileCatalog.TileSize * 2.0f;
 
     public override void _Ready()
     {
         BuildStartingTrack();
+
+        // Built after the starting straight so it has a head to sit on. Only the race has a finish
+        // to reach; the lobby's track just stops.
+        if (RaceRules)
+        {
+            _finish = new FinishLine { Name = "FinishLine" };
+            AddChild(_finish);
+            UpdateFinishLine();
+        }
+
+        // Nothing to watch for on a track nobody can win. See CheckForFinishers.
+        SetPhysicsProcess(RaceRules);
     }
 
     private void BuildStartingTrack()
     {
         Grid.BuildStartingStraight(StartCell, StartDirection, StartingStraightLength);
+        _condemnedThrough = -1;
 
         // No drop: the racers are already sitting on this straight, so it has to be under them
         // from the first frame rather than descending onto their roofs.
@@ -115,6 +229,11 @@ public partial class TrackController : Node3D
             GD.PushWarning($"[Track] Ignoring placement request for unknown tile index {catalogIndex}.");
             return;
         }
+
+        // The race is only so long. Checked here as well as on the server, because solo play never
+        // reaches the server's copy of the check — it applies placements directly.
+        if (AtTileLimit)
+            return;
 
         if (!Networked)
         {
@@ -165,6 +284,12 @@ public partial class TrackController : Node3D
         if (definition == null)
         {
             GD.PushWarning($"[Track] Peer {senderId} requested unknown tile index {catalogIndex}.");
+            return;
+        }
+
+        if (AtTileLimit)
+        {
+            GD.PushWarning($"[Track] Peer {senderId} played past the end of a {TileLimit}-tile race.");
             return;
         }
 
@@ -219,8 +344,143 @@ public partial class TrackController : Node3D
         _placed.Add(catalogIndex);
         SpawnTileNode(tile);
 
-        EmitSignal(SignalName.TilePlaced, tile.Index, (int)tile.Data.Hazard);
+        // The track grew, so the bar at the end of it moved and the back of it got that much
+        // older. Both come off the placement rather than off a clock, which is what keeps every
+        // peer's copy of them in step without a word being said about either.
+        UpdateFinishLine();
+        CondemnStaleTiles();
+
+        EmitSignal(SignalName.TilePlaced, tile.Index, (int)tile.Data.Hazard, catalogIndex);
         EmitSignal(SignalName.TrackHeadChanged);
+    }
+
+    // ---- The far end: the finish line, and the race running out of tiles ----
+
+    /// <summary>Put the bar back on the head, and say whether it is the real finish yet.</summary>
+    private void UpdateFinishLine()
+    {
+        if (_finish == null)
+            return;
+
+        _finish.PlaceAt(FinishWorldPosition, Grid.HeadDirection);
+        _finish.SetFinal(AtTileLimit);
+    }
+
+    /// <summary>
+    /// How often the finish line is swept for arrivals, in seconds. It does not want to be every
+    /// frame: asking the tree for a group allocates, and the check does not need the resolution.
+    /// The fastest thing in the game covers ten metres between two sweeps at this rate, against a
+    /// <see cref="FinishDepth"/> of eighty — so a car cannot pass through the window unseen, and
+    /// a tenth of a second of slop over who was first is well inside a photo finish.
+    /// </summary>
+    private const float FinishSweepInterval = 0.1f;
+
+    private float _finishSweepCountdown;
+
+    /// <summary>
+    /// Watch for the first car across the bar.
+    ///
+    /// Worked out from where the cars are rather than from a collision body, so that nothing about
+    /// winning depends on a car's suspension being the right way up when it gets there — a racer
+    /// who arrives sideways off a launch pad has still arrived.
+    ///
+    /// Server only, and only once. Every peer draws the same bar in the same place, but two
+    /// machines watching for the same crossing is two machines with an opinion about who won.
+    /// </summary>
+    public override void _PhysicsProcess(double delta)
+    {
+        if (_finished || !RaceRules)
+            return;
+
+        if (Networked && !Multiplayer.IsServer())
+            return;
+
+        _finishSweepCountdown -= (float)delta;
+        if (_finishSweepCountdown > 0.0f)
+            return;
+
+        _finishSweepCountdown = FinishSweepInterval;
+
+        Vector3 line = FinishWorldPosition;
+        Vector3 forward = Grid.HeadDirection.Forward();
+        Vector3 across = Grid.HeadDirection.Right();
+
+        foreach (Node node in GetTree().GetNodesInGroup(RacerController.GroupName))
+        {
+            // A car with no owner is the one the board builds ahead of in solo play. It cannot
+            // win a race it is not in.
+            if (node is not RacerController racer || racer.OwnerPeerId <= 0)
+                continue;
+
+            Vector3 offset = racer.GlobalPosition - line;
+
+            // Past the bar, still between its posts, and somewhere near its height. The last two
+            // are what stop a car that fell off the side of a track which later doubled back on
+            // itself from being handed the race from half a mile away.
+            if (offset.Dot(forward) is < 0.0f or > FinishDepth)
+                continue;
+            if (Mathf.Abs(offset.Dot(across)) > TileCatalog.TileSize * 0.75f)
+                continue;
+            if (Mathf.Abs(offset.Y) > TileCatalog.HeightStep * 1.5f)
+                continue;
+
+            _finished = true;
+            GD.Print($"[Track] Peer {racer.OwnerPeerId} crossed the line at tile {Grid.Count}.");
+            EmitSignal(SignalName.RaceFinished, racer.OwnerPeerId);
+            return;
+        }
+    }
+
+    // ---- The near end: the track crumbling away behind the racers ----
+
+    /// <summary>
+    /// Tell every tile that is now too far behind the head that its time is up. They blink for
+    /// <see cref="TileExpirySeconds"/> and then call <see cref="OnTileExpired"/> to take
+    /// themselves off the track.
+    ///
+    /// Driven by placement, so the tail advances one tile for every tile the Track Master lays and
+    /// every peer condemns the same tile at the same moment. The countdown that follows is a local
+    /// clock and will drift between machines by a frame or two, which is a tile-length behind the
+    /// last car and nowhere near anything anybody is driving on.
+    /// </summary>
+    private void CondemnStaleTiles()
+    {
+        if (!RaceRules || TrackTrailLength <= 0)
+            return;
+
+        int oldestKept = Grid.Count - 1 - TrackTrailLength;
+
+        for (int index = _condemnedThrough + 1; index <= oldestKept; index++)
+        {
+            if (GetNodeOrNull(TileNodeName(index)) is not TrackTile tile)
+                continue;
+
+            tile.TileExpired += OnTileExpired;
+            tile.Condemn(TileExpirySeconds);
+        }
+
+        _condemnedThrough = Mathf.Max(_condemnedThrough, oldestKept);
+    }
+
+    /// <summary>
+    /// A condemned tile's countdown has run out: take it out of the grid so it stops being road,
+    /// and take its node out of the scene.
+    ///
+    /// <see cref="TrackGrid.RetireThrough"/> rather than "retire the oldest", so the grid and the
+    /// nodes cannot get out of step if two tiles happen to expire in the same frame.
+    ///
+    /// Queued rather than detached first, which is the opposite of what <see cref="ApplyRemoval"/>
+    /// does. That one detaches because undo hands the tile's index straight back to the next
+    /// placement and the name has to be free again this instant; nothing ever reuses the index of
+    /// a tile that crumbled, because the track only ever counts upward. Which leaves QueueFree as
+    /// the safer of the two here: this is called from inside the tile's own per-frame step, and
+    /// taking a node out of the tree from within its own callback is a thing to avoid rather than
+    /// a thing to reason about.
+    /// </summary>
+    private void OnTileExpired(int trackIndex)
+    {
+        Grid.RetireThrough(trackIndex);
+        GetNodeOrNull(TileNodeName(trackIndex))?.QueueFree();
     }
 
     // ---- Undo ----
@@ -311,6 +571,12 @@ public partial class TrackController : Node3D
             node.QueueFree();
         }
 
+        // Undo and crumbling never actually meet — one is a lobby thing and the other a match
+        // thing — but the record of what has been condemned must not be left pointing past the
+        // end of a track that just got shorter.
+        _condemnedThrough = Mathf.Min(_condemnedThrough, Grid.Count - 1);
+
+        UpdateFinishLine();
         EmitSignal(SignalName.TrackHeadChanged);
     }
 
@@ -360,6 +626,10 @@ public partial class TrackController : Node3D
 
         foreach (int catalogIndex in catalogIndices)
             ApplyPlacement(catalogIndex);
+
+        // ApplyPlacement moves the bar each time round, but a peer that arrived before anything
+        // had been built replays nothing at all and still needs it back on the start tile.
+        UpdateFinishLine();
     }
 
     private static string TileNodeName(int trackIndex) => $"Tile{trackIndex}";

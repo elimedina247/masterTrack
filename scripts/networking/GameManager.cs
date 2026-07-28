@@ -74,8 +74,45 @@ public partial class GameManager : Node
     /// <summary>A peer's name is now known on this machine.</summary>
     [Signal] public delegate void PlayerNameChangedEventHandler(int peerId, string name);
 
+    /// <summary>The race length has been set or re-published. Known on every peer.</summary>
+    [Signal] public delegate void RaceLengthChangedEventHandler(int tiles);
+
+    /// <summary>Somebody crossed the line. Fired on every peer, with the winner's peer id.</summary>
+    [Signal] public delegate void MatchWonEventHandler(int peerId);
+
     /// <summary>Tiles dealt to the Track Master at the start of each round.</summary>
     public const int TilesPerRound = 5;
+
+    // ---- Race length ----
+    //
+    // How many tiles the Track Master is given to spend, and so how long the race is. The host
+    // picks it in the lobby before the match, because without it a race has no end: the Track
+    // Master's whole job is stopping the racers reaching the end of the track, and they are very
+    // good at it. When the tiles run out the bar at the end of the track stops moving and becomes
+    // a finish line somebody can actually get to.
+
+    /// <summary>Lengths the lobby offers, in tiles.</summary>
+    public static readonly int[] RaceLengthChoices = { 10, 20, 30, 50 };
+
+    public const int DefaultRaceLength = 20;
+
+    private const int MinRaceLength = 5;
+    private const int MaxRaceLength = 99;
+
+    /// <summary>
+    /// How many tiles this match runs for. The host owns it and everyone is told; a client that
+    /// set its own would disagree with the server about when the Track Master had run dry.
+    /// </summary>
+    public int RaceLength { get; private set; } = DefaultRaceLength;
+
+    /// <summary>Who won the current match, or 0 if it is still being raced.</summary>
+    public int WinnerPeerId { get; private set; }
+
+    /// <summary>
+    /// How long the winner's name stays up before everyone is taken back to the lobby. Long enough
+    /// to see who it was and swear about it.
+    /// </summary>
+    private const float VictoryLingerSeconds = 7.0f;
 
     /// <summary>Server-side truth. On clients this is only populated by RPC.</summary>
     public readonly Dictionary<int, PlayerRole> Roles = new();
@@ -196,6 +233,92 @@ public partial class GameManager : Node
             if (kvp.Key != peerId)
                 RpcId(peerId, MethodName.NotifyPlayerName, kvp.Key, kvp.Value);
         }
+
+        // The lobby shows the race length to everybody, not only to the host who set it, so a
+        // newcomer has to be told what was decided before they arrived.
+        RpcId(peerId, MethodName.NotifyRaceLength, RaceLength);
+    }
+
+    // ---- Race length ----
+
+    /// <summary>
+    /// Host only. Set how many tiles the next match runs for, and tell everyone. Called from the
+    /// lobby; ignored anywhere else, because the length has to be settled before roles are dealt.
+    /// </summary>
+    public void SetRaceLength(int tiles)
+    {
+        if (NetworkManager.Instance.IsNetworked && !NetworkManager.Instance.IsHost)
+        {
+            GD.PushWarning("[GameManager] Only the host sets the race length; ignored.");
+            return;
+        }
+
+        int clamped = Mathf.Clamp(tiles, MinRaceLength, MaxRaceLength);
+        if (clamped == RaceLength)
+            return;
+
+        RaceLength = clamped;
+        GD.Print($"[GameManager] Race length set to {RaceLength} tiles.");
+
+        if (NetworkManager.Instance.IsNetworked)
+            Rpc(MethodName.NotifyRaceLength, RaceLength);
+
+        EmitSignal(SignalName.RaceLengthChanged, RaceLength);
+    }
+
+    [Rpc(MultiplayerApi.RpcMode.Authority, CallLocal = false, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    private void NotifyRaceLength(int tiles)
+    {
+        RaceLength = tiles;
+        EmitSignal(SignalName.RaceLengthChanged, tiles);
+    }
+
+    // ---- Winning ----
+
+    /// <summary>
+    /// Server only. A racer reached the chequered bar at the end of the track. Tell everyone who,
+    /// then take the whole session back to the lobby once they have had a moment to see it.
+    ///
+    /// The track works out that somebody crossed the line — it is the thing that knows where the
+    /// line is — but only this decides that the match is therefore over, because the match is not
+    /// the track's to end.
+    /// </summary>
+    public void DeclareWinner(int peerId)
+    {
+        if (NetworkManager.Instance.IsNetworked && !NetworkManager.Instance.IsHost)
+            return;
+
+        if (WinnerPeerId != 0)
+            return;
+
+        GD.Print($"[GameManager] Peer {peerId} wins.");
+
+        // Solo stops at the announcement. There is no session to change the state of — SetState
+        // broadcasts, and broadcasting without a peer is an error — and no lobby to be sent back
+        // to either; the match scene's own Escape handler is the way out of a solo run.
+        if (!NetworkManager.Instance.IsNetworked)
+        {
+            NotifyWinner(peerId);
+            return;
+        }
+
+        Rpc(MethodName.NotifyWinner, peerId);
+        NotifyWinner(peerId);
+
+        SetState(GameState.MatchOver);
+
+        GetTree().CreateTimer(VictoryLingerSeconds).Timeout += () =>
+        {
+            if (State == GameState.MatchOver)
+                EndMatch();
+        };
+    }
+
+    [Rpc(MultiplayerApi.RpcMode.Authority, CallLocal = false, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    private void NotifyWinner(int peerId)
+    {
+        WinnerPeerId = peerId;
+        EmitSignal(SignalName.MatchWon, peerId);
     }
 
     private void AssignAppearance(int peerId)
@@ -335,6 +458,12 @@ public partial class GameManager : Node
         Roles.Clear();
         _sceneReadyPeers.Clear();
         _allPeersReady = false;
+        WinnerPeerId = 0;
+
+        // Re-published rather than assumed. It was last sent when it was chosen or when a peer
+        // joined, and the length is what every peer's track measures itself against — a peer that
+        // somehow missed it would be building toward a different finish line to everyone else.
+        Rpc(MethodName.NotifyRaceLength, RaceLength);
 
         var peers = new List<int> { Multiplayer.GetUniqueId() };
         peers.AddRange(Multiplayer.GetPeers());
@@ -373,6 +502,7 @@ public partial class GameManager : Node
         _allPeersReady = false;
         TrackMasterPeerId = 0;
         RoundNumber = 0;
+        WinnerPeerId = 0;
 
         GD.Print("[GameManager] Match ended; returning to the lobby.");
         SetState(GameState.Lobby);

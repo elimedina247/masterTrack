@@ -74,6 +74,12 @@ public partial class TrackTile : StaticBody3D
 	/// </summary>
 	[Signal] public delegate void TileLandedEventHandler(int trackIndex);
 
+	/// <summary>
+	/// Fired when a condemned tile's time runs out. The tile is still in the tree when this goes
+	/// off — whoever condemned it owns taking it away. See <see cref="Condemn"/>.
+	/// </summary>
+	[Signal] public delegate void TileExpiredEventHandler(int trackIndex);
+
 	public TileHazard Hazard => Data.Hazard;
 
 	/// <summary>Ghosts are preview-only: see-through, and nothing collides with them.</summary>
@@ -87,6 +93,27 @@ public partial class TrackTile : StaticBody3D
 
 	private float _fallSpeed;
 
+	/// <summary>Seconds this tile has left before it crumbles. 0 unless condemned.</summary>
+	private float _expiryRemaining;
+
+	/// <summary>How long the condemnation was for, so the blink knows how far through it is.</summary>
+	private float _expiryTotal;
+
+	/// <summary>Seconds since the last blink flip.</summary>
+	private float _blinkPhase;
+
+	/// <summary>Whether the tile has been condemned. Once true it never goes back.</summary>
+	public bool IsCondemned => _expiryTotal > 0.0f;
+
+	/// <summary>Seconds between blink flips at the start of the countdown — a slow, calm pulse.</summary>
+	private const float BlinkSlowest = 0.34f;
+
+	/// <summary>
+	/// And at the end of it. Fast enough to read as panic rather than as a pulse, but not so fast
+	/// it becomes a solid half-lit grey that says nothing.
+	/// </summary>
+	private const float BlinkFastest = 0.045f;
+
 	public override void _Ready()
 	{
 		// Only a tile that's still coming down has anything to do per frame, and a long track
@@ -94,6 +121,24 @@ public partial class TrackTile : StaticBody3D
 		// needs them: the fall by Initialize, the physics step by the hazards that move or push.
 		SetProcess(false);
 		SetPhysicsProcess(false);
+	}
+
+	/// <summary>
+	/// Start this tile's countdown to falling away. It blinks for <paramref name="seconds"/>, faster
+	/// and faster as the time runs out, and then fires <see cref="TileExpired"/>.
+	///
+	/// It stays solid the whole way through. The blink is a warning, and a warning that had already
+	/// taken the road away would be a warning about something that had happened.
+	/// </summary>
+	public void Condemn(float seconds)
+	{
+		if (IsCondemned || _isGhost || seconds <= 0.0f)
+			return;
+
+		_expiryTotal = seconds;
+		_expiryRemaining = seconds;
+		_blinkPhase = 0.0f;
+		SetProcess(true);
 	}
 
 	/// <summary>
@@ -150,13 +195,31 @@ public partial class TrackTile : StaticBody3D
 	}
 
 	/// <summary>
+	/// The two things a tile can be doing that aren't standing still: arriving, and running out of
+	/// time. They are independent — a tile at the back of a very short track can be condemned while
+	/// it is still coming down — so both are stepped and the per-frame work is only given up once
+	/// neither has anything left to do.
+	/// </summary>
+	public override void _Process(double delta)
+	{
+		if (_fallRemaining > 0.0f)
+			StepFall((float)delta);
+
+		if (_expiryRemaining > 0.0f)
+			StepExpiry((float)delta);
+
+		if (_fallRemaining <= 0.0f && _expiryRemaining <= 0.0f)
+			SetProcess(false);
+	}
+
+	/// <summary>
 	/// Sink toward the resting place at a constant speed. Constant rather than eased on purpose:
 	/// the knob is a speed, so the tile should visibly travel at it, and a racer judging whether
 	/// they'll beat a tile down needs it to move the way it looks like it's moving.
 	/// </summary>
-	public override void _Process(double delta)
+	private void StepFall(float delta)
 	{
-		float step = _fallSpeed * (float)delta;
+		float step = _fallSpeed * delta;
 
 		if (step < _fallRemaining)
 		{
@@ -168,9 +231,39 @@ public partial class TrackTile : StaticBody3D
 		// Last step: snap to exactly the resting height rather than however close the frame got.
 		Position -= new Vector3(0.0f, _fallRemaining, 0.0f);
 		_fallRemaining = 0.0f;
-		SetProcess(false);
 
 		EmitSignal(SignalName.TileLanded, TrackIndex);
+	}
+
+	/// <summary>
+	/// Run the countdown, blinking the whole tile on and off at a rate that climbs as it runs out.
+	///
+	/// Squared rather than linear, so most of the countdown is a slow "this one is going" and the
+	/// urgency all arrives in the last second or so — which is the part a racer has to react to.
+	/// The tile is hidden and shown rather than faded because visibility costs nothing: fading
+	/// would mean reaching into every material on a tile that is about to be thrown away.
+	/// </summary>
+	private void StepExpiry(float delta)
+	{
+		_expiryRemaining -= delta;
+
+		if (_expiryRemaining <= 0.0f)
+		{
+			_expiryRemaining = 0.0f;
+			Visible = false;
+			EmitSignal(SignalName.TileExpired, TrackIndex);
+			return;
+		}
+
+		float gone = 1.0f - _expiryRemaining / _expiryTotal;
+		float period = Mathf.Lerp(BlinkSlowest, BlinkFastest, gone * gone);
+
+		_blinkPhase += delta;
+		if (_blinkPhase < period)
+			return;
+
+		_blinkPhase = 0.0f;
+		Visible = !Visible;
 	}
 
 	private void BuildGeometry()

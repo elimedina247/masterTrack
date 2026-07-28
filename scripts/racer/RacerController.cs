@@ -50,6 +50,18 @@ public partial class RacerController : Vehicle
 	/// <summary>Which input actions drive this car.</summary>
 	[Export] public VehicleInputActions Actions { get; set; } = new();
 
+	/// <summary>
+	/// Whether <see cref="Respawn"/> also hands the nitro charges back.
+	///
+	/// Off everywhere but the proving ground. Charges are meant to last a whole run, so a reset
+	/// that refilled them would make deliberately wrecking the car the cheapest way to get five
+	/// more — the reset exists so a bad landing doesn't end someone's race, not as a pit stop.
+	///
+	/// On the pad none of that applies. There is no run to spend them over, and having to leave
+	/// and re-enter the lobby to try a jump on a fresh set of charges is nothing but a walk.
+	/// </summary>
+	[Export] public bool RefillNitroOnReset { get; set; }
+
 	/// <summary>Replicated position, written by the owner and followed by everyone else.</summary>
 	[Export] public Vector3 NetPosition { get; set; }
 
@@ -110,8 +122,17 @@ public partial class RacerController : Vehicle
 
 	[Signal] public delegate void HazardWarnedEventHandler(int trackIndex, int hazard, string hazardName);
 
-	/// <summary>True on the machine whose player owns/controls this car.</summary>
-	public bool IsLocalPlayer => OwnerPeerId == Multiplayer.GetUniqueId();
+	/// <summary>
+	/// True on the machine whose player owns/controls this car.
+	///
+	/// The tree check is not paranoia. <see cref="Node.Multiplayer"/> comes from the scene tree, so
+	/// it is null on a node that has been taken out of one — and a car that has been despawned or
+	/// is going down with its scene stays a live object for a while yet. Anything still holding a
+	/// reference to it and asking a question per frame (the HUD does exactly that, guarded only by
+	/// <c>IsInstanceValid</c>, which is true of a detached node) would otherwise throw for every
+	/// frame of the teardown.
+	/// </summary>
+	public bool IsLocalPlayer => IsInsideTree() && OwnerPeerId == Multiplayer.GetUniqueId();
 
 	/// <summary>
 	/// Whether this car reads the keyboard. Almost always yes — the exception is the lobby, where
@@ -323,6 +344,11 @@ public partial class RacerController : Vehicle
 
 		NetPosition = _recoveryPose.Origin;
 		NetRotation = _recoveryPose.Basis.GetRotationQuaternion();
+
+		// Charges back, on the pad only. ResetNitro also cancels whatever boost was burning, which
+		// is what a car being set back down stopped should have anyway.
+		if (RefillNitroOnReset)
+			ResetNitro();
 	}
 
 	/// <summary>

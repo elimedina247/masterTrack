@@ -8,6 +8,7 @@
 [ext_resource type="Script" uid="uid://b1crjms4syy7i" path="res://scripts/tiles/TrackController.cs" id="5_track"]
 [ext_resource type="Script" uid="uid://dbk7pylfv22wn" path="res://scripts/trackmaster/TrackMasterController.cs" id="6_builder"]
 [ext_resource type="Script" uid="uid://cj0ww0l43v351" path="res://scripts/ui/TilePalette.cs" id="7_palette"]
+[ext_resource type="Script" path="res://scripts/ui/TrackFeed.cs" id="15_feed"]
 [ext_resource type="Script" path="res://scripts/ui/SpeedBlur.cs" id="8_blur"]
 [ext_resource type="Script" path="res://scripts/ui/SpeedLines.cs" id="9_lines"]
 [ext_resource type="Resource" path="res://resources/nitro_effects.tres" id="10_fx"]
@@ -109,6 +110,17 @@ theme_override_font_sizes/font_size = 32
 text = "Waiting for players..."
 horizontal_alignment = 1
 vertical_alignment = 1
+
+[node name="TrackFeed" type="Control" parent="HUD" node_paths=PackedStringArray("Track")]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("15_feed")
+Track = NodePath("../../Track")
 
 [node name="TilePalette" type="Control" parent="HUD" unique_id=350786319 node_paths=PackedStringArray("Builder")]
 layout_mode = 3

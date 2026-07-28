@@ -62,11 +62,30 @@ public static class TileCatalog
 	/// whole board: everything that describes the track's footprint — tile geometry, the
 	/// builder's camera, the start line — is derived from it.
 	///
-	/// Sized so that the three tiles a racer is warned about are far enough ahead to actually
-	/// be driven for: at 40 m a car doing 150 km/h gets nearly three seconds of warning per
-	/// tile, where a 10 m cell gave it well under one.
+	/// Sized against what the car can actually do, which is the only thing a tile has to be
+	/// measured against. Every hazard's dimensions are car-scale metres (see <c>TrackTile</c>), so
+	/// a tile that is short relative to the car's speed makes each one either invisible or
+	/// unavoidable — there is no room in it to place the car.
+	///
+	/// At 40 m it was sized for a 150 km/h car and the racer now does 200 flat and up to 360 on a
+	/// chained boost, which broke it in both directions at once. At 60 m:
+	///
+	/// - a three-cell straight is 180 m, so the hand supplies about 57 m/s of track against a
+	///   55.6 m/s top speed — the Track Master can hold their line against a clean driver and
+	///   loses ground only to someone chaining boosts, which is a thing the racer earned;
+	/// - a slalom asks 6.2 g of the tires rather than 9.2, against an 8.5 g <c>MaxGripForce</c>
+	///   cap — the difference between a weave and a wall;
+	/// - a launch pad's 135 m of flight lands back on a 180 m tile instead of past the end of it.
+	///
+	/// Ramp angles do not move, because <see cref="HeightStep"/> is this same number: slope is a
+	/// ratio, so it is scale-invariant. What does move is how far there is to fall off one.
+	///
+	/// It does <b>not</b> fix corners, and reaching for it to is the natural mistake. A one-cell
+	/// quarter turn's radius is always half the tile's <i>width</i>, whatever its length, so
+	/// holding one at top speed would need a 74 m tile and holding one at boosted speed a 240 m
+	/// tile. That is why turns have their own footprint — see <c>PlacedTile.CellsFor</c>.
 	/// </summary>
-	public const float TileSize = 40.0f;
+	public const float TileSize = 60.0f;
 
 	/// <summary>
 	/// How many cells a tile that runs straight through covers. Every non-turning tile is this

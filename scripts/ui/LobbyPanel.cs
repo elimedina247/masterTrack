@@ -5,10 +5,14 @@ using System.Collections.Generic;
 namespace MasterTrack.UI;
 
 /// <summary>
-/// The lobby's overlay: who is here, and — for the host — the button that starts the match.
+/// The lobby's overlay: who is here, how long the race will be, and — for the host — the button
+/// that starts the match.
 ///
 /// Start lives here rather than on the main menu because the host is out driving on the pad
 /// with everyone else by the time they decide to begin, and the menu is two scenes behind them.
+/// The race length is here for the same reason, and because it is the last thing anybody wants to
+/// argue about: it has to be visible to everyone while they are still standing around, not
+/// discovered when the tiles run out.
 ///
 /// Builds its own controls so it can be dropped into any scene with nothing to wire up, the way
 /// <see cref="VehicleHud"/> does. Hides itself entirely when there is no session, so the same
@@ -26,6 +30,12 @@ public partial class LobbyPanel : Control
     private RichTextLabel _players = null!;
     private Label _hint = null!;
     private Button _start = null!;
+
+    /// <summary>The host's race length picker. Only the host gets to touch it.</summary>
+    private OptionButton _raceLength = null!;
+
+    /// <summary>What everyone else sees in its place: the length, but not a control.</summary>
+    private Label _raceLengthLabel = null!;
 
     /// <summary>Clients that trigger an automatic Start; 0 for the normal button. See MainMenu.</summary>
     private int _autoStartClients;
@@ -68,6 +78,8 @@ public partial class LobbyPanel : Control
         _players.AddThemeConstantOverride("outline_size", 6);
         box.AddChild(_players);
 
+        BuildRaceLength(box);
+
         _hint = AddLabel(box, 18);
 
         _start = new Button { Text = "Start Match" };
@@ -91,9 +103,50 @@ public partial class LobbyPanel : Control
         // has to be redrawn when the appearance lands as well.
         GameManager.Instance.AppearanceAssigned += OnAppearanceAssigned;
         GameManager.Instance.PlayerNameChanged += OnPlayerNameChanged;
+        GameManager.Instance.RaceLengthChanged += OnRaceLengthChanged;
 
         Refresh();
     }
+
+    /// <summary>
+    /// How many tiles the race runs for. A short list of lengths rather than a free number: the
+    /// question is "a quick one or a long one", and the host is standing on a start line, not
+    /// filling in a form.
+    ///
+    /// The picker and the plain label are the same row in two states — the host sets it, everyone
+    /// else watches it — so a client can still see what they are about to be signed up for.
+    /// </summary>
+    private void BuildRaceLength(Node parent)
+    {
+        var row = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.End };
+        row.AddThemeConstantOverride("separation", 8);
+        parent.AddChild(row);
+
+        Label caption = AddLabel(row, 18);
+        caption.Text = "Race length";
+
+        _raceLengthLabel = AddLabel(row, 18);
+
+        _raceLength = new OptionButton
+        {
+            // The host's hands are on the keyboard driving around the pad; a focused OptionButton
+            // would open itself on the space bar.
+            FocusMode = FocusModeEnum.None,
+        };
+        _raceLength.AddThemeFontSizeOverride("font_size", 18);
+
+        foreach (int tiles in GameManager.RaceLengthChoices)
+            _raceLength.AddItem($"{tiles} tiles", tiles);
+
+        _raceLength.ItemSelected += OnRaceLengthPicked;
+        row.AddChild(_raceLength);
+    }
+
+    /// <summary>The id carries the length, so the list can be reordered without this caring.</summary>
+    private void OnRaceLengthPicked(long index)
+        => GameManager.Instance.SetRaceLength(_raceLength.GetItemId((int)index));
+
+    private void OnRaceLengthChanged(int tiles) => Refresh();
 
     /// <summary>
     /// Autoloads outlive this scene, and a C# <c>+=</c> handler is a managed delegate Godot
@@ -108,6 +161,7 @@ public partial class LobbyPanel : Control
         net.ServerDisconnected -= Refresh;
         GameManager.Instance.AppearanceAssigned -= OnAppearanceAssigned;
         GameManager.Instance.PlayerNameChanged -= OnPlayerNameChanged;
+        GameManager.Instance.RaceLengthChanged -= OnRaceLengthChanged;
     }
 
     private void OnAppearanceAssigned(int peerId, int variant, int colour) => Refresh();
@@ -147,6 +201,23 @@ public partial class LobbyPanel : Control
 
         bool isHost = NetworkManager.Instance.IsHost;
         bool enoughPlayers = peers.Count >= MinPlayersToStart;
+
+        int length = GameManager.Instance.RaceLength;
+        _raceLength.Visible = isHost;
+        _raceLengthLabel.Visible = !isHost;
+        _raceLengthLabel.Text = $"{length} tiles";
+
+        // Kept in step with whatever the manager actually holds rather than with what was last
+        // clicked: the length can be clamped on its way in, and a picker showing a length nobody
+        // is racing is worse than no picker.
+        for (int i = 0; i < _raceLength.ItemCount; i++)
+        {
+            if (_raceLength.GetItemId(i) != length)
+                continue;
+
+            _raceLength.Selected = i;
+            break;
+        }
 
         _start.Visible = isHost;
         _start.Disabled = !enoughPlayers;

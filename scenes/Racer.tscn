@@ -16,6 +16,7 @@
 [ext_resource type="Script" uid="uid://eq5bg7e2kp0x" path="res://scripts/vehicles/NitroFlame.cs" id="14_nitroflame"]
 [ext_resource type="Script" uid="uid://d1camux0pgphx" path="res://scripts/vehicles/WheelVisual.cs" id="15_wheelvis"]
 [ext_resource type="Script" uid="uid://c1l0rgq3nvu5a" path="res://scripts/vehicles/WheelSmoke.cs" id="16_smoke"]
+[ext_resource type="Script" uid="uid://cfghsx0ad4vav" path="res://scripts/racer/RacerChevron.cs" id="17_chevron"]
 
 [sub_resource type="BoxShape3D" id="Shape_body"]
 size = Vector3(1.2, 0.42, 2.25)
@@ -33,6 +34,7 @@ SpringDamping = 7200.0
 BoostDecayRate = 20.0
 ChainGraceTime = 1.25
 NitroDuration = 0.5
+HopImpulse = 14.0
 AirNitroForce = 1000000.0
 AirNitroDuration = 0.07
 
@@ -122,6 +124,10 @@ VehicleNode = NodePath("..")
 [node name="WheelSmoke" type="GPUParticles3D" parent="." unique_id=987701518 node_paths=PackedStringArray("VehicleNode")]
 script = ExtResource("16_smoke")
 VehicleNode = NodePath("..")
+
+[node name="RacerChevron" type="MeshInstance3D" parent="." unique_id=1002855906 node_paths=PackedStringArray("RacerNode")]
+script = ExtResource("17_chevron")
+RacerNode = NodePath("..")
 
 [node name="CameraRig" type="Node3D" parent="." unique_id=1816146576]
 script = ExtResource("2_camrig")

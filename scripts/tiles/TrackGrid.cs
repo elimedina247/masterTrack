@@ -95,11 +95,22 @@ public sealed class PlacedTile
 /// which ramps move up and down. Cells stay two-dimensional even so, because two tiles are never
 /// allowed to share a cell whatever height they are at — the track may climb over its own
 /// neighbourhood but never over itself, which keeps "which tile is this car on" a flat lookup.
+///
+/// The back of the track crumbles away as the front grows — see <see cref="RetireThrough"/>. A
+/// retired tile stops being road, but it is never taken out of <see cref="_ordered"/>: a tile's
+/// index is its position in that list, and shuffling it up would renumber every tile still
+/// standing and every node in the scene named after one.
 /// </summary>
 public sealed class TrackGrid
 {
     private readonly Dictionary<Vector2I, PlacedTile> _byCell = new();
     private readonly List<PlacedTile> _ordered = new();
+
+    /// <summary>
+    /// How many tiles have crumbled off the back. They stay in <see cref="_ordered"/> to keep the
+    /// indices stable, so this is also the index of the oldest tile still standing.
+    /// </summary>
+    private int _retired;
 
     /// <summary>The open cell the next tile goes in.</summary>
     public Vector2I HeadCell { get; private set; }
@@ -114,19 +125,52 @@ public sealed class TrackGrid
     /// </summary>
     public int HeadHeight { get; private set; }
 
-    /// <summary>Tiles in track order, from the start line onward.</summary>
+    /// <summary>
+    /// Tiles in track order, from the start line onward — including the ones that have already
+    /// crumbled away, so an index into this list means the same thing for the whole race.
+    /// </summary>
     public IReadOnlyList<PlacedTile> Tiles => _ordered;
 
+    /// <summary>How many tiles have ever been laid, crumbled ones included.</summary>
     public int Count => _ordered.Count;
+
+    /// <summary>
+    /// Index of the oldest tile still standing. Everything before this has crumbled away and is
+    /// no longer road, however solid it looks in <see cref="Tiles"/>.
+    /// </summary>
+    public int OldestLiveIndex => _retired;
 
     /// <summary>Clear the track and start a new one at the given cell and heading.</summary>
     public void Reset(Vector2I startCell, TrackDirection startDirection)
     {
         _byCell.Clear();
         _ordered.Clear();
+        _retired = 0;
         HeadCell = startCell;
         HeadDirection = startDirection;
         HeadHeight = 0;
+    }
+
+    /// <summary>
+    /// Crumble the back of the track away up to and including <paramref name="index"/>. The tiles
+    /// stop occupying their cells, so a car standing on one is standing on nothing.
+    ///
+    /// Takes an index rather than simply retiring the oldest, so it does not matter what order the
+    /// callers arrive in: retiring through 4 twice is retiring through 4, and a tile that somehow
+    /// expires out of turn takes the ones in front of it with it rather than leaving the count
+    /// pointing at the wrong tile.
+    ///
+    /// The head is never touched. The track only ever grows from the front, and a tail that could
+    /// push the head backwards would be rewriting road the racers are already driving on.
+    /// </summary>
+    public void RetireThrough(int index)
+    {
+        while (_retired <= index && _retired < _ordered.Count)
+        {
+            foreach (Vector2I cell in _ordered[_retired].Cells)
+                _byCell.Remove(cell);
+            _retired++;
+        }
     }
 
     public PlacedTile? TileAt(Vector2I cell)
@@ -229,7 +273,10 @@ public sealed class TrackGrid
     /// </summary>
     public PlacedTile? RemoveLast()
     {
-        if (_ordered.Count == 0)
+        // Nothing left that is still road. Undo and crumbling never meet in practice — undo is a
+        // lobby thing and crumbling is a match thing — but a tile that has already fallen away is
+        // not there to be taken back.
+        if (_ordered.Count <= _retired)
             return null;
 
         PlacedTile last = _ordered[^1];

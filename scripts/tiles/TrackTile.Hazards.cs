@@ -19,9 +19,22 @@ namespace MasterTrack.Tiles;
 /// </summary>
 public partial class TrackTile
 {
-	/// <summary>Length of the hole in a <see cref="TileHazard.Gap"/> tile, along the direction
-	/// of travel. Car-scale: whether it can be cleared is a question of speed and gravity.</summary>
-	private const float GapLength = 6.0f;
+	/// <summary>
+	/// Length of the hole in a <see cref="TileHazard.Gap"/> tile, along the direction of travel.
+	/// Car-scale: whether it can be cleared is a question of speed and gravity.
+	///
+	/// A flat gap is never <i>jumped</i> — there is no lip to leave the ground from, so the car is
+	/// simply a projectile the moment the road stops and it clears the hole only if it does not
+	/// drop its own ride height (0.55 m) on the way across. At 2 g that is 0.226 s of fall, which
+	/// is <b>12.6 m at <c>TopSpeed</c></b> and 22.6 m on a chained boost.
+	///
+	/// So this number is a speed check, and 6 m put it far below anything that could fail it: a car
+	/// at 200 km/h dropped under three centimetres crossing it, which is not a hazard, it is a
+	/// paint stripe. At 14 m the threshold lands just above top speed — flat out you skim it, lift
+	/// to 180 km/h and you go in. A longer gap needs a take-off lip like <c>BuildJumpRamp</c>'s
+	/// wedge, at which point it is a jump and not a gap.
+	/// </summary>
+	private const float GapLength = 14.0f;
 
 	/// <summary>
 	/// Upward impulse a launch pad gives, as a multiple of the car's own weight-second — so it
@@ -408,12 +421,27 @@ public partial class TrackTile
 	///
 	/// Ridges a little taller and further apart than the proving ground's bump strip, because this
 	/// one is meant to be hit at racing speed and to unsettle the car when it is.
+	///
+	/// <b>The spacing is tuned to resonance, not to look right.</b> The suspension's natural
+	/// frequency is <c>sqrt(4 × SpringStrength / Mass)</c> — 16.73 rad/s, or <b>2.66 Hz</b>, on the
+	/// racer's 84000 N/m springs and 1200 kg. At <c>TopSpeed</c> that is one ridge every 20.9 m.
+	///
+	/// This is the whole tile. At 7 m the ridges arrived at 7.9 Hz, three times above resonance,
+	/// and the springs filtered them out completely: whoops did nothing at all above 70 km/h, which
+	/// is the only speed anybody meets them at. Sitting them <i>on</i> resonance instead means each
+	/// ridge arrives exactly as the car is coming back down off the last one, so the excursion
+	/// compounds — and it stops compounding the moment the driver comes off the throttle. One tile
+	/// that punishes precisely one speed band and goes quiet if you lift.
+	///
+	/// The height is sized against the travel for the same reason. Static compression is 0.14 m of
+	/// a 0.48 m stroke, so 0.40 m of ridge at resonance reaches the bump stop, which is what "the
+	/// car never settles between them" has to mean if it is to mean anything.
 	/// </summary>
 	private void BuildWhoops(TileDefinition definition)
 	{
-		const float ridgeHeight = 0.22f;
+		const float ridgeHeight = 0.40f;
 		const float ridgeDepth = 1.6f;
-		const float spacing = 7.0f;
+		const float spacing = 21.0f;
 
 		StandardMaterial3D material = RampMaterial(definition.Accent);
 

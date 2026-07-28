@@ -408,6 +408,32 @@ public partial class Vehicle : RigidBody3D
     /// </summary>
     [Export] public float HopCooldown { get; set; } = 0.35f;
 
+    /// <summary>
+    /// How hard the car presses itself into the road while the hop button is held, as a multiple
+    /// of its own weight. This is the crouch before the jump: the springs take it, the body sinks
+    /// onto them, and the wheels stay where they were — which is the whole look.
+    ///
+    /// A multiple of weight rather than a force in newtons, so the squat is the same depth on
+    /// every car in the game and stays the same depth if the gravity scale is ever touched. At the
+    /// default the springs carry three and a half times what they hold the car up at normally,
+    /// which on the racer's tune takes about seventeen centimetres out of a forty-eight centimetre
+    /// stance — a crouch that reads from the chase camera, and still less than half the travel the
+    /// suspension has, so the car never bottoms out just for holding the button.
+    ///
+    /// It is worth noticing that nothing here adds anything to the hop, and it does not need to.
+    /// The suspension is a real spring solved every frame, so squatting genuinely loads it, and
+    /// letting go genuinely gives some of that back on the way up. The pop you get for holding it
+    /// is the springs', not a bonus.
+    /// </summary>
+    [Export] public float HopSquatForce { get; set; } = 2.5f;
+
+    /// <summary>
+    /// How long the squat takes to reach full depth, in seconds, and how long it takes to let go
+    /// again. Short, but not instant: slamming the full force on in one frame reads as the car
+    /// being hit from above rather than as it crouching.
+    /// </summary>
+    [Export] public float HopSquatRamp { get; set; } = 0.10f;
+
     // ---------------------------------------------------------------- Airborne
 
     /// <summary>
@@ -664,6 +690,12 @@ public partial class Vehicle : RigidBody3D
 
     /// <summary>Seconds until another hop may be sprung. See <see cref="HopCooldown"/>.</summary>
     private float _hopCooldown;
+
+    /// <summary>
+    /// How far into the crouch the car is, 0 to 1. Ramped rather than switched — see
+    /// <see cref="HopSquatRamp"/> — and readable so the cosmetics can follow it.
+    /// </summary>
+    public float SquatAmount { get; private set; }
     private float _burstLength = 1.0f;
     private Vector3 _gravity = Vector3.Down * 9.8f;
 
@@ -996,20 +1028,77 @@ public partial class Vehicle : RigidBody3D
             return false;
 
         _hopCooldown = HopCooldown;
+
+        // The crouch is over the instant the car goes, however far through its release ramp it
+        // was. Left to decay on its own it would spend the first few frames of the hop still
+        // pushing down on a car that is trying to climb.
+        SquatAmount = 0.0f;
+
         ApplyCentralImpulse(Vector3.Up * (HopImpulse * Mass));
         EmitSignal(SignalName.Hopped);
         return true;
     }
 
+    /// <summary>
+    /// The whole hop gesture: crouch while the button is down, spring when it comes back up.
+    ///
+    /// The hop fires on the <b>release</b> rather than the press, which is what makes the crouch
+    /// mean anything — a hop that had already happened could hardly be about to. A tap is still a
+    /// hop, because the release is one physics step behind the press and nobody can feel a
+    /// sixtieth of a second; what changes is that leaning on the button now holds the car down
+    /// instead of firing it immediately, which is the point.
+    /// </summary>
     private void ProcessHop(float delta)
     {
         if (_hopCooldown > 0.0f)
             _hopCooldown = Mathf.Max(_hopCooldown - delta, 0.0f);
 
-        // Edge, not level: holding the button is one hop, not one per frame the wheels are down.
-        if (HopInput && !_hopWasHeld)
+        // Edge, not level, and the falling one: holding the button is one hop, not one per frame,
+        // and it is the letting go that springs it.
+        //
+        // Settled before the squat is stepped, and not after, so that the frame the car is trying
+        // to leave the ground is not also a frame it is being pressed into it. TryHop drops the
+        // crouch on the way past, which is what leaves ProcessSquat with nothing to apply.
+        if (!HopInput && _hopWasHeld)
             TryHop();
         _hopWasHeld = HopInput;
+
+        ProcessSquat(delta);
+    }
+
+    /// <summary>
+    /// Press the car into the road while the button is held, so it visibly gathers itself before
+    /// it goes. The springs are what actually do it: this only adds weight, and the suspension
+    /// solve turns that into a body that sinks while the wheels stay put.
+    ///
+    /// Along the chassis' own down rather than the world's, which is the opposite of the way
+    /// <see cref="TryHop"/> goes. A hop wants to be the same hop whatever the car is sitting on,
+    /// so it fires along world up; a squat wants to load the springs squarely, and the springs
+    /// push along the chassis — pressing straight down on a banked corner would be trying to
+    /// compress them at an angle and would shove the car down the camber instead.
+    ///
+    /// Only on the ground, and only while there is a hop to be had. Pushing down on nothing is a
+    /// way to fall faster, which is not what the button is for; and holding it through the
+    /// cooldown after a hop should not pin the car to the floor while it waits.
+    /// </summary>
+    private void ProcessSquat(float delta)
+    {
+        bool crouching = HopInput && !IsAirborne && HopImpulse > 0.0f && _hopCooldown <= 0.0f;
+
+        // Ramped both ways, so letting go releases the springs over a couple of frames rather
+        // than dropping the load in one and punching the car off its own suspension.
+        float step = HopSquatRamp > 0.0f ? delta / HopSquatRamp : 1.0f;
+        SquatAmount = Mathf.Clamp(SquatAmount + (crouching ? step : -step), 0.0f, 1.0f);
+
+        if (SquatAmount <= 0.0f || HopSquatForce <= 0.0f)
+            return;
+
+        // Scaled by how much of the car is actually on the road: a car balanced on two wheels
+        // over a crest has half the suspension to push into, and pressing at full strength there
+        // would pivot it rather than crouch it.
+        float weight = Mass * _gravity.Length();
+        ApplyCentralForce(-GlobalTransform.Basis.Y
+                          * (weight * HopSquatForce * SquatAmount * GroundFraction));
     }
 
     /// <summary>Refill the charges and cancel any boost. Call when a run starts.</summary>
