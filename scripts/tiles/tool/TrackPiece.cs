@@ -38,40 +38,19 @@ public partial class TrackPiece : StaticBody3D
 
 	private TrackProfile? _profile;
 
-	/// <summary>Whether <see cref="_profile"/>'s change signal is currently hooked up. Tracked rather
-	/// than asked, because the callable a lambda-free handler produces is a new object each time and
-	/// would never compare equal to the one that was connected.</summary>
-	private bool _watchingProfile;
-
 	/// <summary>
 	/// The cross-section carried along the spine. Shared between pieces on purpose — the road is
 	/// supposed to be the same width everywhere, and a profile per tile is a hundred chances for one
 	/// of them to be 53 m wide.
+	///
+	/// Its fields are watched by <see cref="ShapeFingerprint"/> rather than by its change signal, so
+	/// editing a shared profile reshapes every piece using it without any connection to keep alive.
 	/// </summary>
 	[Export]
 	public TrackProfile? Profile
 	{
 		get => _profile;
-		set
-		{
-			if (_profile != null && _watchingProfile)
-			{
-				_profile.Changed -= RequestRebuild;
-				_watchingProfile = false;
-			}
-
-			_profile = value;
-
-			// Watched so that editing the shared profile reshapes every piece using it at once,
-			// which is the point of it being shared.
-			if (_profile != null)
-			{
-				_profile.Changed += RequestRebuild;
-				_watchingProfile = true;
-			}
-
-			RequestRebuild();
-		}
+		set { _profile = value; RequestRebuild(); }
 	}
 
 	private string _surface = SurfaceGroups.Road;
@@ -139,6 +118,17 @@ public partial class TrackPiece : StaticBody3D
 	/// <summary>The authored curve, or null before it exists.</summary>
 	public Path3D? Spine => GetNodeOrNull<Path3D>(SpineName);
 
+	/// <summary>
+	/// Where the spine sits relative to the piece.
+	///
+	/// A <see cref="Path3D"/> is a node, so it can be moved and turned like any other, and its curve
+	/// points are relative to it rather than to the piece. Every reading taken off the curve has to
+	/// go through this or the two disagree — which shows up as the road refusing to follow the spine
+	/// when it is dragged in the viewport, because the geometry hangs off the piece and the curve
+	/// does not.
+	/// </summary>
+	private Transform3D SpineTransform => Spine?.Transform ?? Transform3D.Identity;
+
 	private Curve3D? Curve
 	{
 		get
@@ -167,8 +157,10 @@ public partial class TrackPiece : StaticBody3D
 			if (curve == null)
 				return new TrackAnchor(Vector3.Zero, 0.0f);
 
-			return new TrackAnchor(curve.GetPointPosition(curve.PointCount - 1),
-								   YawOf(ExitTangent(curve)));
+			Transform3D spine = SpineTransform;
+
+			return new TrackAnchor(spine * curve.GetPointPosition(curve.PointCount - 1),
+								   YawOf(spine.Basis * ExitTangent(curve)));
 		}
 	}
 
@@ -218,11 +210,98 @@ public partial class TrackPiece : StaticBody3D
 		if (Engine.IsEditorHint())
 			EnsureSpine();
 
-		if (Spine?.Curve != null)
-			Spine.Curve.Changed += RequestRebuild;
-
 		ApplySurfaceGroup();
 		Rebuild();
+
+		// Seeded from what was just built, so the first frame does not see a change that has already
+		// been applied and sweep the whole piece a second time.
+		_shape = ShapeFingerprint();
+
+		// Only the editor has anything to watch for. In a running game a piece is swept once and
+		// then never changes shape again, so a per-frame check would be pure waste on every tile of
+		// a long track.
+		SetProcess(Engine.IsEditorHint());
+	}
+
+	/// <summary>
+	/// Watch the things the road is built from, and sweep it again when any of them moves.
+	///
+	/// <b>Polled rather than driven by <see cref="Resource.Changed"/>, deliberately.</b> The signal
+	/// covers the curve's own points and nothing else: it says nothing about the Spine node being
+	/// dragged, and the connection is silently lost whenever the script is reloaded, the curve
+	/// resource is swapped, or an undo replaces what was connected. Every one of those reads to the
+	/// author as "the tool stopped working", with nothing to see in the log.
+	///
+	/// A fingerprint over a handful of floats, once a frame, in the editor only, is not a cost worth
+	/// avoiding for that.
+	/// </summary>
+	public override void _Process(double delta)
+	{
+		if (!Engine.IsEditorHint())
+			return;
+
+		int shape = ShapeFingerprint();
+		if (shape == _shape)
+			return;
+
+		_shape = shape;
+		Rebuild();
+	}
+
+	/// <summary>Fingerprint of everything the sweep reads, so a change to any of it is one
+	/// comparison away.</summary>
+	private int _shape;
+
+	private int ShapeFingerprint()
+	{
+		var hash = new System.HashCode();
+
+		hash.Add(SegmentLength);
+		hash.Add(BankBlend);
+		hash.Add(GenerateCollision);
+
+		Transform3D spine = SpineTransform;
+		hash.Add(spine.Origin);
+		hash.Add(spine.Basis.X);
+		hash.Add(spine.Basis.Y);
+		hash.Add(spine.Basis.Z);
+
+		Curve3D? curve = Spine?.Curve;
+		if (curve != null)
+		{
+			hash.Add(curve.PointCount);
+			hash.Add(curve.UpVectorEnabled);
+
+			for (var i = 0; i < curve.PointCount; i++)
+			{
+				hash.Add(curve.GetPointPosition(i));
+				hash.Add(curve.GetPointIn(i));
+				hash.Add(curve.GetPointOut(i));
+				hash.Add(curve.GetPointTilt(i));
+			}
+		}
+
+		// The profile is a shared resource edited through the inspector, and its own fields are as
+		// much a part of the shape as the curve is.
+		if (Profile is { } profile)
+		{
+			hash.Add(profile.Width);
+			hash.Add(profile.FlatFraction);
+			hash.Add(profile.EdgeBankDegrees);
+			hash.Add(profile.BankToLeft);
+			hash.Add(profile.LateralSamples);
+			hash.Add(profile.Thickness);
+			hash.Add(profile.WallHeight);
+			hash.Add(profile.WallThickness);
+			hash.Add(profile.LeftWall);
+			hash.Add(profile.RightWall);
+			hash.Add(profile.CentreLineWidth);
+			hash.Add(profile.RoadColor);
+			hash.Add(profile.WallColor);
+			hash.Add(profile.LineColor);
+		}
+
+		return hash.ToHashCode();
 	}
 
 	/// <summary>
@@ -307,7 +386,7 @@ public partial class TrackPiece : StaticBody3D
 		if (!curve.UpVectorEnabled)
 			curve.UpVectorEnabled = true;
 
-		TrackSweep.Frame[] frames = TrackSweep.Frames(curve, SegmentLength);
+		TrackSweep.Frame[] frames = TrackSweep.Frames(curve, SegmentLength, SpineTransform);
 		if (frames.Length < 2)
 			return;
 
@@ -630,19 +709,34 @@ public partial class TrackPiece : StaticBody3D
 			return warnings.ToArray();
 		}
 
-		if (!curve.GetPointPosition(0).IsEqualApprox(Vector3.Zero))
+		// Everything below is measured in the piece's space rather than the curve's, because that is
+		// the space the chain joins pieces in. A spine that has been dragged off the origin is
+		// exactly as broken as one whose first point was moved, and until the transform was
+		// accounted for only the second was caught.
+		Transform3D spine = SpineTransform;
+
+		if (!(spine * curve.GetPointPosition(0)).IsEqualApprox(Vector3.Zero))
 		{
 			warnings.Add("The spine must start at the piece's origin — that point is the seam the "
-						 + "previous tile hands the racer over on.");
+						 + "previous tile hands the racer over on. Move the curve's first point, or "
+						 + "the Spine node, back to zero.");
+		}
+
+		// A rolled or pitched spine node tips every section the sweep lays down, and the chain has
+		// nowhere to record that any more than it does a tilted curve point.
+		if (Mathf.Abs((spine.Basis * Vector3.Up).Normalized().Dot(Vector3.Up)) < Mathf.Cos(Mathf.DegToRad(1.0f)))
+		{
+			warnings.Add("The Spine node is rolled or pitched. Keep its rotation to yaw only — the "
+						 + "shape belongs in the curve, not in the node holding it.");
 		}
 
 		// The chain carries a position and a yaw and nothing else, so a piece that ends pitched or
 		// rolled hands its neighbour a frame the anchor cannot represent. Both ends, because a piece
 		// is entered as well as left.
-		CheckSeam(curve, 0, EntryTangent(curve), "entry", warnings);
-		CheckSeam(curve, curve.PointCount - 1, ExitTangent(curve), "exit", warnings);
+		CheckSeam(curve, 0, spine.Basis * EntryTangent(curve), "entry", warnings);
+		CheckSeam(curve, curve.PointCount - 1, spine.Basis * ExitTangent(curve), "exit", warnings);
 
-		Vector3 entry = EntryTangent(curve);
+		Vector3 entry = spine.Basis * EntryTangent(curve);
 		if (entry.LengthSquared() > 1e-9f && Mathf.Abs(YawOf(entry)) > Mathf.DegToRad(1.0f))
 		{
 			warnings.Add("The spine must leave the origin heading down local -Z. The racer arrives "

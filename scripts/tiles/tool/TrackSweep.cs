@@ -46,7 +46,12 @@ public static class TrackSweep
 	/// <paramref name="segmentLength"/> is therefore a plain quality knob: at the default a 63 m
 	/// corner comes out at about the twelve segments the old build fought for.
 	/// </summary>
-	public static Frame[] Frames(Curve3D curve, float segmentLength)
+	/// <param name="transform">
+	/// Where the curve sits relative to whoever is sweeping it. A <see cref="Path3D"/> is a node
+	/// with a transform of its own, and leaving it out means the road ignores the spine being moved
+	/// or turned — the curve visibly shifts in the viewport and the geometry stays where it was.
+	/// </param>
+	public static Frame[] Frames(Curve3D curve, float segmentLength, Transform3D transform)
 	{
 		float length = curve.GetBakedLength();
 		if (length <= 0.0f)
@@ -63,19 +68,19 @@ public static class TrackSweep
 		{
 			float at = length * i / steps;
 
-			Vector3 position = curve.SampleBaked(at, cubic: true);
+			Vector3 position = transform * curve.SampleBaked(at, cubic: true);
 
 			// One-sided at the ends so the tangent is never taken across the end of the curve, where
 			// SampleBaked clamps and would hand back a direction of zero length.
 			Vector3 ahead = curve.SampleBaked(Mathf.Min(length, at + epsilon), cubic: true);
 			Vector3 behind = curve.SampleBaked(Mathf.Max(0.0f, at - epsilon), cubic: true);
 
-			Vector3 forward = (ahead - behind);
+			Vector3 forward = transform.Basis * (ahead - behind);
 			forward = forward.LengthSquared() > 1e-9f ? forward.Normalized() : Vector3.Forward;
 
-			Vector3 up = curve.UpVectorEnabled
+			Vector3 up = transform.Basis * (curve.UpVectorEnabled
 				? curve.SampleBakedUpVector(at, applyTilt: true)
-				: Vector3.Up;
+				: Vector3.Up);
 
 			frames[i] = Orthonormal(position, forward, up);
 		}
