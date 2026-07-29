@@ -35,7 +35,7 @@ curve = SubResource("Curve_right")
 [node name="Build" type="CSGCombiner3D" parent="."]
 use_collision = true
 
-[node name="Road" type="CSGPolygon3D" parent="Build" node_paths=PackedStringArray("path_node")]
+[node name="Road" type="CSGPolygon3D" parent="Build"]
 material = ExtResource("2_road")
 polygon = PackedVector2Array(-27, -1.6, 27, -1.6, 27, 2, 24.57, 2, 24.57, 0, -24.57, 0, -24.57, 2, -27, 2)
 mode = 2

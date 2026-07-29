@@ -101,6 +101,55 @@ public partial class PhysicsTestArea
 
 		GD.Print($"[TestArea] Chained {paths.Length} authored piece(s): {vertices} vertices, "
 				 + $"{shapes} collision shape(s), ending at {anchor.Position}.");
+
+		ReportGeometry();
+	}
+
+	/// <summary>
+	/// Say whether each piece actually produced any geometry.
+	///
+	/// Worth its own pass because an empty piece is completely silent otherwise: a
+	/// <see cref="CsgPolygon3D"/> in path mode with no path builds nothing, reports no error, and
+	/// leaves an author staring at a bake button that appears to do nothing. This is the check that
+	/// names it — and it has to be a frame late, because CSG rebuilds are deferred.
+	/// </summary>
+	private async void ReportGeometry()
+	{
+		await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+		await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+
+		foreach (Node child in _generated.GetChildren())
+		{
+			if (child is not TrackPiece piece)
+				continue;
+
+			if (piece.IsBaked)
+			{
+				GD.Print($"[TestArea]   {piece.Name}: baked geometry.");
+				continue;
+			}
+
+			CsgShape3D? build = piece.Build;
+			if (build == null)
+			{
+				GD.PushWarning($"[TestArea] {piece.Name} has no Build node and nothing baked.");
+				continue;
+			}
+
+			int surfaces = build.GetMeshes().Count;
+			Aabb bounds = build.GetAabb();
+
+			if (surfaces == 0 || bounds.Size.LengthSquared() < 1.0f)
+			{
+				GD.PushWarning($"[TestArea] {piece.Name} builds no geometry. If its Road is a "
+							   + "CSGPolygon3D in path mode, check path_node actually points at the "
+							   + "Spine — an empty NodePath silently produces nothing.");
+				continue;
+			}
+
+			GD.Print($"[TestArea]   {piece.Name}: live CSG, extent "
+					 + $"{bounds.Size.X:0.##} x {bounds.Size.Y:0.##} x {bounds.Size.Z:0.##} m.");
+		}
 	}
 
 	/// <summary>
