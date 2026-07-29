@@ -228,6 +228,111 @@ public partial class TrackPiece : StaticBody3D
 	/// <summary>The CSG the shape is built out of, or null once it has been baked away.</summary>
 	public CsgShape3D? Build => GetNodeOrNull<CsgShape3D>(BuildName);
 
+	/// <summary>
+	/// The first swept polygon under <c>Build</c> — the road's cross-section, as opposed to any
+	/// wedges or holes unioned and subtracted around it.
+	/// </summary>
+	public CsgPolygon3D? RoadPolygon => FindPolygon(Build);
+
+	private static CsgPolygon3D? FindPolygon(Node? from)
+	{
+		if (from == null)
+			return null;
+
+		if (from is CsgPolygon3D polygon)
+			return polygon;
+
+		foreach (Node child in from.GetChildren())
+		{
+			if (FindPolygon(child) is { } found)
+				return found;
+		}
+
+		return null;
+	}
+
+	/// <summary>
+	/// How wide the road is, in metres, measured across the cross-section. Zero if there is no
+	/// swept polygon to measure.
+	///
+	/// <b>This wants to match <see cref="TileCatalog.TileSize"/>, and the reason is joints.</b> Two
+	/// pieces butt together at a seam that carries a position and a heading but says nothing about
+	/// width, so a 48 m road meeting a 54 m one leaves a three metre step down each side — at the
+	/// exact place a car is crossing between them. Nothing stops a piece being any width; this is
+	/// what makes the cost visible.
+	/// </summary>
+	public float RoadWidth
+	{
+		get
+		{
+			Vector2[]? polygon = RoadPolygon?.Polygon;
+			if (polygon is not { Length: >= 2 })
+				return 0.0f;
+
+			float low = polygon[0].X;
+			float high = polygon[0].X;
+
+			foreach (Vector2 point in polygon)
+			{
+				low = Mathf.Min(low, point.X);
+				high = Mathf.Max(high, point.X);
+			}
+
+			return high - low;
+		}
+	}
+
+	/// <summary>
+	/// Tick to scale the cross-section across its width until it measures exactly
+	/// <see cref="TileCatalog.TileSize"/>, keeping it centred on the spine. Unticks itself.
+	///
+	/// Scaled rather than clamped, so the shape you drew survives — a half-pipe stays a half-pipe,
+	/// it is just the right width afterwards. Only the X axis is touched: the heights are what make
+	/// it the shape it is, and stretching those to fix a width would be a different tile.
+	/// </summary>
+	[Export]
+	public bool SnapToRoadWidth
+	{
+		get => false;
+		set
+		{
+			if (value && Engine.IsEditorHint())
+				ScaleToCatalogWidth();
+		}
+	}
+
+	private void ScaleToCatalogWidth()
+	{
+		CsgPolygon3D? road = RoadPolygon;
+		float width = RoadWidth;
+
+		if (road == null || width <= 0.01f)
+		{
+			GD.PushWarning($"[TrackPiece] {Name} has no CSGPolygon3D under {BuildName} to measure.");
+			return;
+		}
+
+		float scale = TileCatalog.TileSize / width;
+		if (Mathf.IsEqualApprox(scale, 1.0f))
+			return;
+
+		Vector2[] polygon = road.Polygon;
+
+		// About the section's own middle rather than about zero, so a cross-section drawn off to one
+		// side keeps its offset instead of being dragged onto the spine.
+		var centre = 0.0f;
+		foreach (Vector2 point in polygon)
+			centre += point.X;
+		centre /= polygon.Length;
+
+		for (var i = 0; i < polygon.Length; i++)
+			polygon[i] = polygon[i] with { X = centre + (polygon[i].X - centre) * scale };
+
+		road.Polygon = polygon;
+
+		GD.Print($"[TrackPiece] {Name}: road width {width:0.##} m -> {TileCatalog.TileSize:0.##} m.");
+	}
+
 	/// <summary>Whether this piece has geometry that does not need CSG to exist.</summary>
 	public bool IsBaked => GetNodeOrNull<MeshInstance3D>(BakedMeshName) != null;
 
@@ -575,6 +680,18 @@ public partial class TrackPiece : StaticBody3D
 
 		if (Build == null && !IsBaked)
 			warnings.Add($"No {BuildName} node and nothing baked, so this piece has no shape yet.");
+
+		// A seam carries a position and a heading and says nothing about width, so two pieces of
+		// different widths meet with a step down each side — at the exact place a car crosses
+		// between them. Tick SnapToRoadWidth to scale the section back without redrawing it.
+		float width = RoadWidth;
+		if (width > 0.01f && Mathf.Abs(width - TileCatalog.TileSize) > 0.5f)
+		{
+			warnings.Add($"The road is {width:0.##} m wide against the catalog's "
+						 + $"{TileCatalog.TileSize:0.##} m, so it meets its neighbours with a "
+						 + $"{Mathf.Abs(width - TileCatalog.TileSize) * 0.5f:0.##} m step down each "
+						 + "side. Tick SnapToRoadWidth to scale the section to match.");
+		}
 
 		Transform3D seam = SeamTransform;
 

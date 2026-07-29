@@ -114,6 +114,7 @@ public partial class PhysicsTestArea
 			GD.Print($"[TestArea]   {piece.Name}: run {piece.RunLength:0.###} m, "
 					 + $"exit {exit.Position} at {Mathf.RadToDeg(exit.Yaw):0.###} deg, "
 					 + $"rise {piece.HeightChange:0.###} m, roll {piece.ExitRollDegrees:0.##} deg, "
+					 + $"road {piece.RoadWidth:0.##} m (catalog {TileCatalog.TileSize:0.##}), "
 					 + (piece.IsBaked ? "baked." : "live CSG (not baked)."));
 		}
 
