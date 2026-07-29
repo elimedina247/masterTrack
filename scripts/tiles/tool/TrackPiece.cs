@@ -87,8 +87,143 @@ public partial class TrackPiece : StaticBody3D
 		}
 	}
 
-	/// <summary>The authored curve, or null before it exists.</summary>
+	/// <summary>
+	/// The curve the shape is swept along. <b>Generated — do not hand-edit it.</b>
+	///
+	/// It is rebuilt from <see cref="Entry"/>, the waypoints, and <see cref="Exit"/> every time one
+	/// of them moves. That is what makes the seam trustworthy: while this was authored directly it
+	/// could drift away from the markers that declare where the piece joins, and a road ending
+	/// twelve metres from where the chain thought it did is a hole in the track that neither the
+	/// mesh nor the marker looks wrong on its own.
+	/// </summary>
 	public Path3D? Spine => GetNodeOrNull<Path3D>(SpineName);
+
+	/// <summary>
+	/// The nodes the road is threaded through, between the two seams, in tree order.
+	///
+	/// <b>Add a Marker3D as a child and drag it.</b> Its position is where the road goes, the way it
+	/// faces is the direction the road runs through it, and rolling it banks the road there. Reorder
+	/// them in the scene tree to reorder the path.
+	///
+	/// This is the whole authoring model, and it replaces editing a Curve3D by its handles. A curve
+	/// point has a position and two tangent handles you drag with a modifier held down, plus a tilt
+	/// on a separate small handle; a node has a transform gizmo everybody already knows.
+	/// </summary>
+	public IEnumerable<Marker3D> Waypoints
+	{
+		get
+		{
+			foreach (Node child in GetChildren())
+			{
+				if (child is Marker3D marker
+					&& marker.Name != EntryName
+					&& marker.Name != ExitName)
+					yield return marker;
+			}
+		}
+	}
+
+	/// <summary>
+	/// Rebuild the spine from the seams and the waypoints.
+	///
+	/// Each node contributes its position, the direction it faces, and its roll. The handles are a
+	/// third of the way to each neighbour along that facing, which is the standard construction for
+	/// a smooth curve through a set of points with chosen tangents — so rotating a waypoint swings
+	/// the road through it rather than kinking it.
+	/// </summary>
+	private void RebuildSpine()
+	{
+		Path3D? spine = Spine;
+		Marker3D? entry = Entry;
+		Marker3D? exit = Exit;
+
+		if (spine == null || entry == null || exit == null)
+			return;
+
+		var nodes = new List<Marker3D> { entry };
+		nodes.AddRange(Waypoints);
+		nodes.Add(exit);
+
+		// A piece with no waypoints but a curve that clearly did not come from two points was
+		// authored by hand, before the route was made of nodes. Regenerating it would silently
+		// straighten somebody's spiral the moment they opened the scene, which is the worst thing a
+		// tool can do. Add a waypoint to it and it converts.
+		if (nodes.Count == 2 && spine.Curve is { PointCount: > 2 })
+			return;
+
+		var curve = new Curve3D { UpVectorEnabled = true };
+
+		for (var i = 0; i < nodes.Count; i++)
+		{
+			Transform3D at = nodes[i].Transform;
+			Vector3 position = at.Origin;
+			Vector3 forward = (at.Basis * Vector3.Forward).Normalized();
+
+			// A third of the distance to the neighbour, which keeps the curve close to the straight
+			// line between two points and stops it bulging when they are far apart.
+			float back = i > 0 ? position.DistanceTo(nodes[i - 1].Transform.Origin) / 3.0f : 0.0f;
+			float on = i < nodes.Count - 1
+				? position.DistanceTo(nodes[i + 1].Transform.Origin) / 3.0f
+				: 0.0f;
+
+			curve.AddPoint(position, -forward * back, forward * on);
+			curve.SetPointTilt(i, RollOf(at.Basis));
+		}
+
+		spine.Curve = curve;
+	}
+
+	/// <summary>
+	/// How far a basis is rolled about its own forward axis, in radians — which is what a curve's
+	/// tilt means, so banking a piece is rotating a waypoint.
+	///
+	/// Measured against the un-rolled frame: the up vector you would have if the same heading and
+	/// pitch carried no roll at all.
+	/// </summary>
+	private static float RollOf(Basis basis)
+	{
+		Vector3 forward = (basis * Vector3.Forward).Normalized();
+		Vector3 up = (basis * Vector3.Up).Normalized();
+
+		Vector3 right = forward.Cross(Vector3.Up);
+
+		// Pointing straight up or down: every roll looks the same and there is no reference to
+		// measure against, so call it none rather than pick one arbitrarily.
+		if (right.LengthSquared() < 1e-6f)
+			return 0.0f;
+
+		right = right.Normalized();
+		return Mathf.Atan2(up.Dot(right), up.Dot(right.Cross(forward)));
+	}
+
+	/// <summary>
+	/// Hold the two seams level.
+	///
+	/// <b>Flat by construction rather than by warning.</b> The chain carries a position and a yaw,
+	/// so a seam with pitch or roll in it is a frame the next piece cannot be built against — and
+	/// being told off about it after the fact is worse than it simply not being possible. Position
+	/// and heading stay free; only the pitch and the roll are taken back out.
+	/// </summary>
+	private void LevelSeams()
+	{
+		foreach (Marker3D? seam in new[] { Entry, Exit })
+		{
+			if (seam == null)
+				continue;
+
+			Vector3 forward = seam.Transform.Basis * Vector3.Forward;
+			var flat = new Vector3(forward.X, 0.0f, forward.Z);
+
+			// Facing straight up or down: there is no heading left to keep, so leave it be rather
+			// than snapping it to an arbitrary one.
+			if (flat.LengthSquared() < 1e-6f)
+				continue;
+
+			var level = new Basis(Vector3.Up, Mathf.Atan2(-flat.X, -flat.Z));
+			if (!seam.Transform.Basis.IsEqualApprox(level))
+				seam.Transform = new Transform3D(level, seam.Transform.Origin);
+		}
+	}
 
 	/// <summary>The CSG the shape is built out of, or null once it has been baked away.</summary>
 	public CsgShape3D? Build => GetNodeOrNull<CsgShape3D>(BuildName);
@@ -201,16 +336,22 @@ public partial class TrackPiece : StaticBody3D
 		if (Engine.IsEditorHint())
 		{
 			EnsureAnchors();
+			LevelSeams();
 			SetProcess(true);
 		}
-		else
+		else if (IsBaked)
 		{
 			// CSG is an authoring tool. A baked piece has everything it needs, and leaving the
 			// combiner in the tree would have the engine rebuilding the same shape on load for every
 			// tile on the track, plus a second set of collision on top of the baked one.
-			if (IsBaked)
-				Build?.QueueFree();
+			Build?.QueueFree();
 		}
+
+		// Rebuilt on load as well as on edit, in the game as much as in the editor. The spine is
+		// derived from the route, so generating it in only one of those would mean the scene file
+		// had to carry a copy — and a saved copy of derived data is a copy that can go stale.
+		if (!IsBaked)
+			RebuildSpine();
 
 		ApplySurfaceGroup();
 	}
@@ -233,24 +374,53 @@ public partial class TrackPiece : StaticBody3D
 			return;
 
 		_seam = shape;
+
+		// Order matters: the seams are levelled first so the spine is generated through frames that
+		// already satisfy the contract, rather than being built and then contradicted.
+		LevelSeams();
+		RebuildSpine();
 		UpdateConfigurationWarnings();
 	}
 
 	private int _seam;
 
+	/// <summary>
+	/// Everything the spine is generated from, so that moving any node in the piece rebuilds the
+	/// road through it.
+	///
+	/// The waypoints are hashed in tree order, which is also the order they are threaded in — so
+	/// dragging one up or down the scene tree reroutes the piece and this notices.
+	/// </summary>
 	private int SeamFingerprint()
 	{
 		var hash = new System.HashCode();
 
-		Transform3D seam = SeamTransform;
-		hash.Add(seam.Origin);
-		hash.Add(seam.Basis.X);
-		hash.Add(seam.Basis.Y);
-		hash.Add(seam.Basis.Z);
 		hash.Add(Build != null);
 		hash.Add(IsBaked);
 
+		foreach (Marker3D node in Route())
+		{
+			Transform3D at = node.Transform;
+			hash.Add(at.Origin);
+			hash.Add(at.Basis.X);
+			hash.Add(at.Basis.Y);
+			hash.Add(at.Basis.Z);
+		}
+
 		return hash.ToHashCode();
+	}
+
+	/// <summary>Entry, then the waypoints in tree order, then Exit — the road's whole route.</summary>
+	private IEnumerable<Marker3D> Route()
+	{
+		if (Entry is { } entry)
+			yield return entry;
+
+		foreach (Marker3D waypoint in Waypoints)
+			yield return waypoint;
+
+		if (Exit is { } exit)
+			yield return exit;
 	}
 
 	/// <summary>
@@ -270,18 +440,27 @@ public partial class TrackPiece : StaticBody3D
 			Adopt(entry);
 		}
 
-		if (Exit != null)
-			return;
-
 		// A tile-length straight ahead: the commonest piece there is, and an obvious thing to drag
 		// somewhere else.
-		var exit = new Marker3D
+		if (Exit == null)
 		{
-			Name = ExitName,
-			Position = new Vector3(0.0f, 0.0f, -TileCatalog.ShortRun),
-		};
-		AddChild(exit);
-		Adopt(exit);
+			var exit = new Marker3D
+			{
+				Name = ExitName,
+				Position = new Vector3(0.0f, 0.0f, -TileCatalog.ShortRun),
+			};
+			AddChild(exit);
+			Adopt(exit);
+		}
+
+		// The spine is generated rather than authored, but it still has to exist as a node for the
+		// CSG polygon's path_node to point at.
+		if (Spine != null)
+			return;
+
+		var spine = new Path3D { Name = SpineName, Curve = new Curve3D { UpVectorEnabled = true } };
+		AddChild(spine);
+		Adopt(spine);
 	}
 
 	/// <summary>

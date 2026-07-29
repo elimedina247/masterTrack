@@ -1,45 +1,30 @@
-[gd_scene load_steps=4 format=3]
+[gd_scene format=3 uid="uid://wkvxvvp48dbl"]
 
-[ext_resource type="Script" path="res://scripts/tiles/tool/TrackPiece.cs" id="1_piece"]
+[ext_resource type="Script" uid="uid://crov4aijvusum" path="res://scripts/tiles/tool/TrackPiece.cs" id="1_piece"]
 [ext_resource type="Material" path="res://resources/tiles/road.tres" id="2_road"]
 
-; A parking-garage spiral: one full turn to the right around a 45 m circle while climbing 72 m.
-;
-; The exit lands directly above the entry, still heading -Z, which is exactly what a garage ramp
-; does. That is expressible only because the contract is the transform between two markers - the
-; anchor carries height as well as position, so "72 m up, same heading" is an ordinary seam.
-;
-; Five points, one per quarter plus the close. The middle three carry tilt, which is the bank: with
-; path_rotation = PATH_FOLLOW the cross-section rolls with it. Flip the sign if it banks the wrong
-; way; the outside of a right-hand turn is the left, and 0.3 rad is about 17 degrees.
-;
-; The first and last handles are deliberately horizontal. A helix climbs at a constant angle, and
-; if it were still climbing at the seam the next piece would be built flat against it and the joint
-; would be a kerb - so the climb eases in and out, and TrackPiece warns if it stops doing that.
 [sub_resource type="Curve3D" id="Curve_twist"]
 _data = {
-"points": PackedVector3Array(0, 0, 0, 0, 0, -24.85, 0, 0, 0, -24.85, -6.33, 0, 24.85, 6.33, 0, 45, 18, -45, 0, -6.33, -24.85, 0, 6.33, 24.85, 90, 36, 0, 24.85, -6.33, 0, -24.85, 6.33, 0, 45, 54, 45, 0, 0, 24.85, 0, 0, 0, 0, 72, 0),
-"tilts": PackedFloat32Array(0, 0.3, 0.3, 0.3, 0)
+"points": PackedVector3Array(0, 0, 0, 0, 0, -24.85, 0, 0, 0, -24.85, -6.33, 0, 24.85, 6.33, 0, 45, 18, -51.487, 0, -6.33, -24.85, 0, 6.33, 24.85, 101.57028, 36, 19.453697, 24.85, -6.33, 0, -24.85, 6.33, 0, 39.68251, 54, 95.243324, 0, 0, 24.85, 0, 0, 0, 0, 60, 58.257),
+"tilts": PackedFloat32Array(0, 0.1, 0.1, 0.1, 0)
 }
 point_count = 5
 
-[node name="Twister" type="StaticBody3D"]
+[node name="Twister" type="StaticBody3D" unique_id=1044364552]
 script = ExtResource("1_piece")
-Surface = "Road"
 
-[node name="Entry" type="Marker3D" parent="."]
+[node name="Entry" type="Marker3D" parent="." unique_id=2065066069]
 
-[node name="Exit" type="Marker3D" parent="."]
+[node name="Exit" type="Marker3D" parent="." unique_id=1012172048]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 72, 0)
 
-[node name="Spine" type="Path3D" parent="."]
+[node name="Spine" type="Path3D" parent="." unique_id=778976251]
 curve = SubResource("Curve_twist")
 
-[node name="Build" type="CSGCombiner3D" parent="."]
+[node name="Build" type="CSGCombiner3D" parent="." unique_id=853825168]
 use_collision = true
 
-[node name="Road" type="CSGPolygon3D" parent="Build"]
-material = ExtResource("2_road")
+[node name="Road" type="CSGPolygon3D" parent="Build" unique_id=33214527]
 polygon = PackedVector2Array(-27, -1.6, 27, -1.6, 27, 2, 24.57, 2, 24.57, 0, -24.57, 0, -24.57, 2, -27, 2)
 mode = 2
 path_node = NodePath("../../Spine")
@@ -47,4 +32,9 @@ path_interval_type = 0
 path_interval = 8.0
 path_simplify_angle = 1.0
 path_rotation = 2
+path_rotation_accurate = false
+path_local = false
 path_continuous_u = true
+path_u_distance = 1.0
+path_joined = false
+material = ExtResource("2_road")

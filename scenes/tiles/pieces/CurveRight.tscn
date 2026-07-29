@@ -5,20 +5,13 @@
 
 ; A banked quarter turn to the right, 63 m radius - the catalog's CornerRadius.
 ;
-; Three points rather than two so the middle one can carry tilt, which is the bank. The ends are at
-; zero tilt because the chain has nowhere to record a roll: a piece that leaves banked hands its
-; neighbour a frame that says nothing about the bank, and the neighbour is built flat against it.
+; Entry, one waypoint, Exit. The waypoint sits at the 45-degree point of the arc, faces along the
+; tangent there, and is rolled 29 degrees - that roll is the bank. Drag it to reshape the corner;
+; rotate it to change how hard it banks. The spine and the mesh follow.
 ;
-; 0.5 rad is about 29 degrees. The hand-built corners used a 60 degree lip solved against
-; v = sqrt(g * r * tan(theta)) so that riding the wall flat out was the car holding itself up - if
-; you want that back, raise this and check it against TopSpeed. Flip the sign if it banks the wrong
-; way: the outside of a right-hand turn is the left.
+; Entry and Exit are held level automatically, so the bank always eases away to flat before the
+; seam and the next piece has something square to attach to.
 [sub_resource type="Curve3D" id="Curve_right"]
-_data = {
-"points": PackedVector3Array(0, 0, 0, 0, 0, -16.71, 0, 0, 0, -11.82, 0, 11.82, 11.82, 0, -11.82, 18.45, 0, -44.55, -16.71, 0, 0, 0, 0, 0, 63, 0, -63),
-"tilts": PackedFloat32Array(0, 0.5, 0)
-}
-point_count = 3
 
 [node name="CurveRight" type="StaticBody3D"]
 script = ExtResource("1_piece")
@@ -28,6 +21,9 @@ Surface = "Road"
 
 [node name="Exit" type="Marker3D" parent="."]
 transform = Transform3D(0, 0, -1, 0, 1, 0, 1, 0, 0, 63, 0, -63)
+
+[node name="Point" type="Marker3D" parent="."]
+transform = Transform3D(0.6184, 0.3428, -0.7071, -0.4848, 0.8746, 0, 0.6184, 0.3428, 0.7071, 18.45, 0, -44.55)
 
 [node name="Spine" type="Path3D" parent="."]
 curve = SubResource("Curve_right")
