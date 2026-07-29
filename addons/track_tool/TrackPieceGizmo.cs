@@ -102,12 +102,48 @@ public partial class TrackPieceGizmo : EditorNode3DGizmoPlugin
 				DrawPiece(gizmo, piece);
 				break;
 
-			// A selected marker draws the whole route around itself, converted into its own space —
-			// so dragging one with the standard gizmo still shows the road it is reshaping.
+			// A selected marker gets its own handles as well as the route drawn around it. Clicking
+			// the thing you mean to move is the instinct worth serving: putting the handles only on
+			// the piece meant selecting Exit gave you its bare Marker3D gizmo and nothing else,
+			// which reads as the tool not being there at all.
 			case Marker3D marker when marker.GetParent() is TrackPiece piece:
 				DrawRoute(gizmo, piece, marker.Transform.AffineInverse());
+				DrawMarker(gizmo, piece, marker);
 				break;
 		}
+	}
+
+	/// <summary>
+	/// The handles for a single selected marker, drawn in its own space.
+	///
+	/// The ids carry no node index, because the gizmo is already attached to the node they belong
+	/// to — which is what <see cref="Resolve"/> reads them back through.
+	/// </summary>
+	private void DrawMarker(EditorNode3DGizmo gizmo, TrackPiece piece, Marker3D marker)
+	{
+		Basis toLocal = marker.Transform.Basis.Inverse();
+
+		var handles = new List<Vector3>
+		{
+			Vector3.Zero,
+			// Straight up in the piece's space, not the marker's: the height handle has to stay
+			// vertical however the marker has been aimed or banked.
+			toLocal * (Vector3.Up * HeightLift),
+			Vector3.Forward * ArrowLength,
+		};
+
+		var ids = new List<int> { KindMove, KindHeight, KindAim };
+
+		if (!IsSeam(piece, marker))
+		{
+			handles.Add(Vector3.Left * SeamHalfWidth + Vector3.Up * BarUpright);
+			ids.Add(KindBankLeft);
+
+			handles.Add(Vector3.Right * SeamHalfWidth + Vector3.Up * BarUpright);
+			ids.Add(KindBankRight);
+		}
+
+		gizmo.AddHandles(handles.ToArray(), GetMaterial(HandleMaterial, gizmo), ids.ToArray());
 	}
 
 	private void DrawPiece(EditorNode3DGizmo gizmo, TrackPiece piece)
@@ -238,15 +274,52 @@ public partial class TrackPieceGizmo : EditorNode3DGizmoPlugin
 		};
 	}
 
+	/// <summary>
+	/// Which route node a handle belongs to, and which kind it is — the one place that knows a
+	/// gizmo may be sitting on the piece (ids carry a node index) or on a single marker (they do
+	/// not, because the node is the gizmo's own).
+	/// </summary>
+	private static bool Resolve(EditorNode3DGizmo gizmo, int handleId,
+							   out TrackPiece? piece, out Marker3D? node, out int kind)
+	{
+		piece = null;
+		node = null;
+		kind = handleId % KindStride;
+
+		switch (gizmo.GetNode3D())
+		{
+			case TrackPiece owner:
+			{
+				piece = owner;
+				List<Marker3D> route = RouteOf(owner);
+				int index = handleId / KindStride;
+
+				if (index >= route.Count)
+					return false;
+
+				node = route[index];
+				return true;
+			}
+
+			case Marker3D marker when marker.GetParent() is TrackPiece parent:
+				piece = parent;
+				node = marker;
+				kind = handleId;
+				return true;
+
+			default:
+				return false;
+		}
+	}
+
 	public override Variant _GetHandleValue(EditorNode3DGizmo gizmo, int handleId, bool secondary)
 	{
-		if (secondary || gizmo.GetNode3D() is not TrackPiece piece)
+		if (secondary)
 			return handleId;
 
-		List<Marker3D> route = RouteOf(piece);
-		int index = handleId / KindStride;
-
-		return index < route.Count ? route[index].Transform : default;
+		return Resolve(gizmo, handleId, out _, out Marker3D? node, out _) && node != null
+			? node.Transform
+			: default;
 	}
 
 	public override void _SetHandle(EditorNode3DGizmo gizmo, int handleId, bool secondary,
@@ -257,15 +330,10 @@ public partial class TrackPieceGizmo : EditorNode3DGizmoPlugin
 		if (secondary)
 			return;
 
-		if (gizmo.GetNode3D() is not TrackPiece piece)
+		if (!Resolve(gizmo, handleId, out TrackPiece? piece, out Marker3D? node, out int kind)
+			|| piece == null || node == null)
 			return;
 
-		List<Marker3D> route = RouteOf(piece);
-		int index = handleId / KindStride;
-		if (index >= route.Count)
-			return;
-
-		Marker3D node = route[index];
 		bool seam = IsSeam(piece, node);
 		Transform3D at = node.Transform;
 
@@ -274,7 +342,7 @@ public partial class TrackPieceGizmo : EditorNode3DGizmoPlugin
 		Vector3 from = inverse * camera.ProjectRayOrigin(screenPos);
 		Vector3 direction = (inverse.Basis * camera.ProjectRayNormal(screenPos)).Normalized();
 
-		switch (handleId % KindStride)
+		switch (kind)
 		{
 			case KindMove:
 			{
@@ -355,7 +423,7 @@ public partial class TrackPieceGizmo : EditorNode3DGizmoPlugin
 					return;
 
 				float bank = Mathf.Atan2(b, a);
-				if (handleId % KindStride == KindBankLeft)
+				if (kind == KindBankLeft)
 					bank = Mathf.Wrap(bank + Mathf.Pi, -Mathf.Pi, Mathf.Pi);
 
 				bank = Mathf.Clamp(bank, Mathf.DegToRad(-MaxBankDegrees),
@@ -373,23 +441,19 @@ public partial class TrackPieceGizmo : EditorNode3DGizmoPlugin
 	public override void _CommitHandle(EditorNode3DGizmo gizmo, int handleId, bool secondary,
 									   Variant restore, bool cancel)
 	{
-		if (gizmo.GetNode3D() is not TrackPiece piece)
-			return;
-
 		if (secondary)
 		{
 			// The insert happens here rather than in _SetHandle so it lands as one undoable action.
-			if (!cancel)
-				Plugin?.InsertWaypointAfter(piece, handleId);
+			// Only ever offered on the piece's own gizmo, where the segment index means something.
+			if (!cancel && gizmo.GetNode3D() is TrackPiece owner)
+				Plugin?.InsertWaypointAfter(owner, handleId);
 			return;
 		}
 
-		List<Marker3D> route = RouteOf(piece);
-		int index = handleId / KindStride;
-		if (index >= route.Count)
+		if (!Resolve(gizmo, handleId, out TrackPiece? piece, out Marker3D? node, out _)
+			|| piece == null || node == null)
 			return;
 
-		Marker3D node = route[index];
 		var previous = restore.AsTransform3D();
 
 		if (cancel)

@@ -1,11 +1,11 @@
-[gd_scene format=3 uid="uid://ckan3bs3ngtjm"]
+[gd_scene format=3 uid="uid://b6nfimy25uewu"]
 
 [ext_resource type="Script" uid="uid://crov4aijvusum" path="res://scripts/tiles/tool/TrackPiece.cs" id="1_piece"]
 [ext_resource type="Material" path="res://resources/tiles/road.tres" id="2_road"]
 
 [sub_resource type="Curve3D" id="Curve3D_v586k"]
 _data = {
-"points": PackedVector3Array(0, 0, 0, 0, 0, -25.632011, 0, 0, 0, -25.632011, 0, 0, 25.632011, 0, 0, 54, 9, -54, 0, 0, -25.632011, 0, 0, 25.632011, 108, 18, 0, 25.632011, 0, 0, -26.023567, 0, 0, 54, 27, 54, -0.17702407, 0, 26.022964, 0, 0, 0, -1.6599865, 36, 0),
+"points": PackedVector3Array(0, 0, 0, 0, 0, -25.632011, 0, 0, 0, -25.632011, 0, 0, 25.632011, 0, 0, 54, 9, -54, 0, 0, -25.632011, 0, 0, 25.632011, 108, 18, 0, 25.632011, 0, 0, -26.532808, 0, 0, 54, 27, 54, 6.7435784, 0, 25.66153, 0, 0, 0, -1.6599865, 44.940865, 0),
 "tilts": PackedFloat32Array(0, 0, 0, 0, 0)
 }
 point_count = 5
@@ -25,7 +25,7 @@ transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 108, 18, 0)
 transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 54, 27, 54)
 
 [node name="Exit" type="Marker3D" parent="." unique_id=705265451]
-transform = Transform3D(0.9999769, 0, -0.006802452, 0, 1, 0, 0.006802452, 0, 0.9999769, -1.6599865, 36, 0)
+transform = Transform3D(0.9671622, 0, 0.25416, 0, 1, 0, -0.25416, 0, 0.9671622, -1.6599865, 44.940865, 0)
 
 [node name="Spine" type="Path3D" parent="." unique_id=344803992]
 curve = SubResource("Curve3D_v586k")

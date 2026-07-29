@@ -1,0 +1,40 @@
+[gd_scene format=3 uid="uid://dxfmeyaiwd6rb"]
+
+[ext_resource type="Script" uid="uid://crov4aijvusum" path="res://scripts/tiles/tool/TrackPiece.cs" id="1_11lad"]
+[ext_resource type="Material" path="res://resources/tiles/road.tres" id="2_lrrnq"]
+
+[sub_resource type="Curve3D" id="Curve_straight"]
+_data = {
+"points": PackedVector3Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -108),
+"tilts": PackedFloat32Array(0, 0)
+}
+point_count = 2
+
+[node name="Straight" type="StaticBody3D" unique_id=1110771082]
+script = ExtResource("1_11lad")
+
+[node name="Entry" type="Marker3D" parent="." unique_id=1265946842]
+
+[node name="Exit" type="Marker3D" parent="." unique_id=1831475451]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -108)
+
+[node name="Spine" type="Path3D" parent="." unique_id=466528866]
+curve = SubResource("Curve_straight")
+
+[node name="Build" type="CSGCombiner3D" parent="." unique_id=791106200]
+use_collision = true
+
+[node name="Road" type="CSGPolygon3D" parent="Build" unique_id=1483541369]
+polygon = PackedVector2Array(-27, -1.6, 27, -1.6, 27, 2, 24.57, 2, 24.57, 0, -24.57, 0, -24.57, 2, -27, 2)
+mode = 2
+path_node = NodePath("../../Spine")
+path_interval_type = 0
+path_interval = 12.0
+path_simplify_angle = 1.0
+path_rotation = 2
+path_rotation_accurate = false
+path_local = false
+path_continuous_u = true
+path_u_distance = 1.0
+path_joined = false
+material = ExtResource("2_lrrnq")
