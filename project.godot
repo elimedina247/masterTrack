@@ -32,6 +32,10 @@ window/stretch/aspect="expand"
 
 project/assembly_name="masterTrack"
 
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/track_tool/plugin.cfg")
+
 [input]
 
 racer_accelerate={
@@ -163,7 +167,3 @@ common/physics_ticks_per_second=120
 [rendering]
 
 rendering_device/driver.windows="d3d12"
-
-[editor_plugins]
-
-enabled=PackedStringArray("res://addons/track_tool/plugin.cfg")

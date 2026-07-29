@@ -9,14 +9,14 @@ namespace MasterTrack.Editor;
 ///
 /// <b>The contract was invisible, and that was most of what made the tool unpleasant.</b> A piece's
 /// entry and exit are two <see cref="Marker3D"/>s, which the editor draws as small crosses that say
-/// nothing about which way the racer is travelling, how wide the road is meant to be there, or —
-/// the one that actually bites — whether the road ends anywhere near where the marker claims it
+/// nothing about which way the racer is travelling, how wide the road is meant to be there, or â€”
+/// the one that actually bites â€” whether the road ends anywhere near where the marker claims it
 /// does. You could drag a spine for ten minutes and have no way of seeing that the seam had stopped
 /// matching it.
 ///
 /// So this draws every point on the route as a bar across the road with an arrow through it: the
 /// <b>entry</b> in green, the <b>exit</b> in cyan, and each <b>waypoint</b> in white. The arrow is
-/// the part worth having � a bar alone is symmetric and says nothing about direction, and a piece
+/// the part worth having — a bar alone is symmetric and says nothing about direction, and a piece
 /// whose exit faces backwards looks entirely correct until it is chained onto something.
 ///
 /// Nothing here reports a mismatch between the road and the seam, because there is no longer one to
@@ -38,7 +38,7 @@ public partial class TrackPieceGizmo : EditorNode3DGizmoPlugin
 
 	/// <summary>
 	/// How far apart the spine's end and the exit marker may drift before it is called an error, in
-	/// metres. Tight, because the chain butts pieces together exactly — anything visible here is a
+	/// metres. Tight, because the chain butts pieces together exactly â€” anything visible here is a
 	/// visible hole in the road.
 	/// </summary>
 	private const float SeamTolerance = 0.5f;
