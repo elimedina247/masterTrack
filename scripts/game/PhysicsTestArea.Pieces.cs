@@ -110,11 +110,14 @@ public partial class PhysicsTestArea
 			AddLabel(label, world + new Vector3(0.0f, 8.0f, TileCatalog.TileSize * 0.7f),
 					 new Color(1.0f, 0.82f, 0.05f));
 
+			float bend = ReportBend(piece);
+
 			TrackAnchor exit = piece.ExitAnchor;
 			GD.Print($"[TestArea]   {piece.Name}: run {piece.RunLength:0.###} m, "
 					 + $"exit {exit.Position} at {Mathf.RadToDeg(exit.Yaw):0.###} deg, "
 					 + $"rise {piece.HeightChange:0.###} m, roll {piece.ExitRollDegrees:0.##} deg, "
 					 + $"road {piece.RoadWidth:0.##} m (catalog {TileCatalog.TileSize:0.##}), "
+					 + $"bend {bend:0.##} deg/m (63 m corner is 0.91), "
 					 + (piece.IsBaked ? "baked." : "live CSG (not baked)."));
 		}
 
@@ -127,6 +130,62 @@ public partial class PhysicsTestArea
 				 + $"westward, every {PieceCellStride} cells, at ground level.");
 
 		ReportGeometry();
+	}
+
+	/// <summary>
+	/// How hard the spine bends, measured as degrees of heading change per metre travelled, and
+	/// where the worst of it is.
+	///
+	/// <b>Per metre rather than per sample, which is the whole point.</b> A curve sampled finely
+	/// turns a little at every step and one sampled coarsely turns a lot, so the raw angle between
+	/// consecutive segments says more about the sampling than about the road. Divided through by
+	/// the distance it is spread over, it becomes curvature — a number that means the same thing at
+	/// any resolution, and one a car can be judged against.
+	///
+	/// A 63 m corner, which is <c>TileCatalog.CornerRadius</c> and the tightest the catalog turns at
+	/// speed, works out at 0.91 deg/m. Anything much past that is tighter than the game's own
+	/// corners; several times it is a kink rather than a curve.
+	/// </summary>
+	private static float ReportBend(TrackPiece piece)
+	{
+		if (piece.Spine?.Curve is not { PointCount: >= 2 } curve)
+			return 0.0f;
+
+		Vector3[] baked = curve.GetBakedPoints();
+		if (baked.Length < 3)
+			return 0.0f;
+
+		var worst = 0.0f;
+		Vector3 worstAt = Vector3.Zero;
+
+		for (var i = 1; i < baked.Length - 1; i++)
+		{
+			Vector3 into = baked[i] - baked[i - 1];
+			Vector3 outOf = baked[i + 1] - baked[i];
+
+			float span = (into.Length() + outOf.Length()) * 0.5f;
+			if (span < 0.01f || into.LengthSquared() < 1e-6f || outOf.LengthSquared() < 1e-6f)
+				continue;
+
+			float turn = Mathf.RadToDeg(into.Normalized().AngleTo(outOf.Normalized())) / span;
+			if (turn <= worst)
+				continue;
+
+			worst = turn;
+			worstAt = baked[i];
+		}
+
+		// 0.91 deg/m is the catalog's own corner radius. Twice that is tighter than anything the
+		// game ships and is where a curve starts reading as a crease.
+		if (worst >= 1.8f)
+		{
+			GD.PushWarning($"[TestArea] {piece.Name} bends {worst:0.##} deg/m at "
+						   + $"({worstAt.X:0.#}, {worstAt.Y:0.#}, {worstAt.Z:0.#}) — a 63 m corner is "
+						   + "0.91. Raise Smoothing, move the waypoints apart, or aim them closer to "
+						   + "the way the road actually runs between them.");
+		}
+
+		return worst;
 	}
 
 	/// <summary>

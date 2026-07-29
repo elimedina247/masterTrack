@@ -151,26 +151,104 @@ public partial class TrackPiece : StaticBody3D
 		if (nodes.Count == 2 && spine.Curve is { PointCount: > 2 })
 			return;
 
+		var positions = new Vector3[nodes.Count];
+		var headings = new Vector3[nodes.Count];
+
+		for (var i = 0; i < nodes.Count; i++)
+		{
+			positions[i] = nodes[i].Transform.Origin;
+			headings[i] = (nodes[i].Transform.Basis * Vector3.Forward).Normalized();
+		}
+
+		Vector3[] tangents = Tangents(positions, headings);
+
 		var curve = new Curve3D { UpVectorEnabled = true };
 
 		for (var i = 0; i < nodes.Count; i++)
 		{
-			Transform3D at = nodes[i].Transform;
-			Vector3 position = at.Origin;
-			Vector3 forward = (at.Basis * Vector3.Forward).Normalized();
+			float back = i > 0 ? HandleLength(positions[i - 1], positions[i],
+											  tangents[i - 1], tangents[i]) : 0.0f;
+			float on = i < nodes.Count - 1 ? HandleLength(positions[i], positions[i + 1],
+														 tangents[i], tangents[i + 1]) : 0.0f;
 
-			// A third of the distance to the neighbour, which keeps the curve close to the straight
-			// line between two points and stops it bulging when they are far apart.
-			float back = i > 0 ? position.DistanceTo(nodes[i - 1].Transform.Origin) / 3.0f : 0.0f;
-			float on = i < nodes.Count - 1
-				? position.DistanceTo(nodes[i + 1].Transform.Origin) / 3.0f
-				: 0.0f;
-
-			curve.AddPoint(position, -forward * back, forward * on);
-			curve.SetPointTilt(i, RollOf(at.Basis));
+			curve.AddPoint(positions[i], -tangents[i] * back, tangents[i] * on);
+			curve.SetPointTilt(i, RollOf(nodes[i].Transform.Basis));
 		}
 
 		spine.Curve = curve;
+	}
+
+	/// <summary>
+	/// The direction the road actually travels through each point: the node's own heading, eased
+	/// toward the line its neighbours make, by <see cref="Smoothing"/>.
+	///
+	/// <b>This is what makes a sharp kink hard to build by accident.</b> A waypoint aimed somewhere
+	/// unrelated to where its neighbours sit forces the curve to swing out and back to obey it, and
+	/// the swing has to happen in whatever distance is available — put two such points close
+	/// together and the road folds. Easing the heading toward the chord through the neighbours
+	/// spends that disagreement as a gentler curve instead of a crease.
+	///
+	/// The seams are never eased. Their headings are the piece's contract with its neighbours, and
+	/// a seam quietly rotated to smooth the road would be a piece that no longer joins.
+	/// </summary>
+	private Vector3[] Tangents(Vector3[] positions, Vector3[] headings)
+	{
+		var tangents = new Vector3[positions.Length];
+		float ease = Mathf.Clamp(Smoothing, 0.0f, 1.0f);
+
+		for (var i = 0; i < positions.Length; i++)
+		{
+			tangents[i] = headings[i];
+
+			bool seam = i == 0 || i == positions.Length - 1;
+			if (seam || ease <= 0.0f)
+				continue;
+
+			Vector3 chord = positions[i + 1] - positions[i - 1];
+			if (chord.LengthSquared() < 1e-6f)
+				continue;
+
+			Vector3 eased = headings[i].Lerp(chord.Normalized(), ease);
+
+			// Only degenerate if the heading is aimed straight back down the chord, where there is
+			// no sensible midpoint between them. Keep what the author asked for.
+			if (eased.LengthSquared() > 1e-6f)
+				tangents[i] = eased.Normalized();
+		}
+
+		return tangents;
+	}
+
+	/// <summary>
+	/// How long a Bezier handle has to be for the segment between two points to trace a circular
+	/// arc, given the direction the road leaves one and arrives at the other.
+	///
+	/// <b>A third of the chord is the wrong answer, and it was the one being used.</b> That rule
+	/// only holds for gentle bends: a quarter turn needs <c>0.39</c> of its chord, so at a third
+	/// every arc pulled inside itself and spiked the curvature by each control point. Measured on
+	/// the proving ground, a hand-built garage helix bent twice as hard as the catalog's own tightest
+	/// corner for no reason but this.
+	///
+	/// The exact figure for an arc turning <c>t</c> across a chord <c>d</c> is
+	/// <c>(4/3)·tan(t/4)·d / (2·sin(t/2))</c>, which tends to <c>d/3</c> as the turn goes to nothing
+	/// — so a straight run is unchanged and only the corners move.
+	/// </summary>
+	private static float HandleLength(Vector3 from, Vector3 to, Vector3 leaving, Vector3 arriving)
+	{
+		float chord = from.DistanceTo(to);
+		if (chord < 0.01f)
+			return 0.0f;
+
+		float turn = leaving.AngleTo(arriving);
+
+		// Straight, or near enough that the arc formula is dividing two vanishing numbers.
+		if (turn < 0.01f)
+			return chord / 3.0f;
+
+		// Past a half turn there is no single arc through the pair, and the formula runs away.
+		turn = Mathf.Min(turn, Mathf.Pi * 0.9f);
+
+		return 4.0f / 3.0f * Mathf.Tan(turn * 0.25f) * chord / (2.0f * Mathf.Sin(turn * 0.5f));
 	}
 
 	/// <summary>
@@ -223,6 +301,33 @@ public partial class TrackPiece : StaticBody3D
 			if (!seam.Transform.Basis.IsEqualApprox(level))
 				seam.Transform = new Transform3D(level, seam.Transform.Origin);
 		}
+	}
+
+	private float _smoothing = 0.5f;
+
+	/// <summary>
+	/// How far each waypoint's heading is eased toward the line its neighbours make, from 0 (obey
+	/// the way the node is aimed, exactly) to 1 (ignore it and follow the neighbours).
+	///
+	/// The knob for how hard it is to build a crease. A waypoint aimed away from where its
+	/// neighbours sit forces the road to swing out and back to obey it, in whatever distance
+	/// happens to be available — and two such points close together fold the road rather than curve
+	/// it. Easing spends the disagreement as a gentler bend instead.
+	///
+	/// A half by default: enough that a carelessly aimed point rounds off, little enough that
+	/// aiming one still visibly steers the road. Drop it to 0 while matching an exact arc; raise it
+	/// when a piece is fighting you.
+	///
+	/// Seams are never eased whatever this says — their headings are the contract with the pieces
+	/// either side, and rotating one to smooth the road would be a piece that no longer joins.
+	/// </summary>
+	[Export(PropertyHint.Range, "0,1,0.05")]
+	public float Smoothing
+	{
+		get => _smoothing;
+		// No rebuild call: the editor's fingerprint poll carries this, and at runtime the spine is
+		// generated once in _Ready with whatever the scene file saved.
+		set => _smoothing = value;
 	}
 
 	/// <summary>The CSG the shape is built out of, or null once it has been baked away.</summary>
@@ -482,7 +587,11 @@ public partial class TrackPiece : StaticBody3D
 		// Rebuilt on load as well as on edit, in the game as much as in the editor. The spine is
 		// derived from the route, so generating it in only one of those would mean the scene file
 		// had to carry a copy — and a saved copy of derived data is a copy that can go stale.
-		if (!IsBaked)
+		//
+		// Baked pieces are regenerated too, but only in the editor: their mesh is already made and
+		// does not need the curve, yet a stale spine is exactly what the next bake would build
+		// from. At runtime a baked piece needs neither.
+		if (Engine.IsEditorHint() || !IsBaked)
 			RebuildSpine();
 
 		ApplySurfaceGroup();
@@ -535,6 +644,7 @@ public partial class TrackPiece : StaticBody3D
 
 		hash.Add(Build != null);
 		hash.Add(IsBaked);
+		hash.Add(Smoothing);
 
 		foreach (Marker3D node in Route())
 		{

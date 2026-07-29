@@ -3,28 +3,32 @@
 [ext_resource type="Script" uid="uid://crov4aijvusum" path="res://scripts/tiles/tool/TrackPiece.cs" id="1_11lad"]
 [ext_resource type="Material" path="res://resources/tiles/road.tres" id="2_lrrnq"]
 
-[sub_resource type="Curve3D" id="Curve_straight"]
+[sub_resource type="Curve3D" id="Curve3D_11lad"]
 _data = {
-"points": PackedVector3Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -108),
-"tilts": PackedFloat32Array(0, 0)
+"points": PackedVector3Array(0, 0, 0, 0, 0, -28.543283, 0, 0, 0, 12.203253, -12.695876, 22.463623, -20.568037, 21.398333, -37.861435, -14.696111, 41.618355, -73.37853, -16.125504, 0, -45.325367, 0, 0, 0, 125.106125, 56.384323, -40.71218),
+"tilts": PackedFloat32Array(0, 0.32922542, 0)
 }
-point_count = 2
+point_count = 3
 
 [node name="Straight" type="StaticBody3D" unique_id=1110771082]
 script = ExtResource("1_11lad")
 
 [node name="Entry" type="Marker3D" parent="." unique_id=1265946842]
 
+[node name="P1" type="Marker3D" parent="." unique_id=2096812392]
+transform = Transform3D(0.76287085, 0.48501727, 0.427535, -0.28956723, 0.8475314, -0.44479382, -0.57808197, 0.2155201, 0.7870021, -14.696111, 41.618355, -73.37853)
+
 [node name="Exit" type="Marker3D" parent="." unique_id=1831475451]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -108)
+transform = Transform3D(-0.94215024, 0, -0.3351908, 0, 1, 0, 0.3351908, 0, -0.94215024, 125.106125, 56.384323, -40.71218)
 
 [node name="Spine" type="Path3D" parent="." unique_id=466528866]
-curve = SubResource("Curve_straight")
+curve = SubResource("Curve3D_11lad")
 
 [node name="Build" type="CSGCombiner3D" parent="." unique_id=791106200]
 use_collision = true
 
 [node name="Road" type="CSGPolygon3D" parent="Build" unique_id=1483541369]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.513134, 0, 0.12652588)
 polygon = PackedVector2Array(-27, -1.6, 27, -1.6, 27, 2, 24.57, 2, 24.57, 0, -24.57, 0, -24.57, 2, -27, 2)
 mode = 2
 path_node = NodePath("../../Spine")
