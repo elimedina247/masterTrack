@@ -7,17 +7,23 @@ using MasterTrack.Tiles.Tool;
 namespace MasterTrack.Game;
 
 /// <summary>
-/// The authored pieces, chained end to end off the west edge of the pad.
+/// The authored pieces, each set out as its own specimen on the pad with tarmac under it and a
+/// run-up to it.
 ///
-/// <b>Chained rather than set out as specimens, and that is the whole point of it.</b> The tile
-/// layout on the pad answers "what does this look like"; a piece authored by hand has a second
-/// question to answer, which is whether it still meets its neighbours squarely once a person has
-/// been dragging its spine about. Joining them up is the only thing that shows that — a seam that
-/// steps, gaps or kinks is invisible on a piece sitting by itself and unmissable at 200 km/h with
-/// another piece bolted to it.
+/// <b>Specimens rather than a chain, and that was a correction.</b> They were laid end to end,
+/// which is the right way to check that seams meet — and completely the wrong way to look at a
+/// piece you are in the middle of building. Two things went wrong with it. The chain started off
+/// the western edge of the pad, so there was no ground to drive out to it on; and because each
+/// piece was laid at the one before's exit, a single climbing piece put <i>everything after it</i>
+/// in the air. A Twister that rises seventy-two metres left the rest of the row hanging over the
+/// void.
+///
+/// Set out separately, every piece starts on the ground, sits on tarmac, and can be driven onto
+/// from the pad — which is what an author actually needs while shaping one. The fold arithmetic is
+/// still reported per piece, so a seam that has gone wrong is still visible in the log.
 ///
 /// Everything in <c>res://scenes/tiles/pieces</c> is picked up, in name order, so authoring a new
-/// one is dropping a scene in a folder. Nothing here has to be told about it.
+/// one is dropping a scene in a folder.
 /// </summary>
 public partial class PhysicsTestArea
 {
@@ -25,84 +31,117 @@ public partial class PhysicsTestArea
 	private const string PieceFolder = "res://scenes/tiles/pieces";
 
 	/// <summary>
-	/// Which way the chain runs off the pad: west, because north and south are already spoken for by
-	/// the buildable track and the fixed course, and three tracks growing away from each other can
-	/// never meet in the middle.
+	/// Cell the row of specimens runs along, and the cell the first one sits on.
+	///
+	/// West of the catalog's layout and south of its rows, which is the one region of the pad
+	/// nothing else claims: the tile grid spans cells -7 to 8 across and -12 to 12 along, and the
+	/// two tracks anchor off the north and south edges at -15 and 15.
 	/// </summary>
-	private static float PieceChainYaw => Mathf.Pi * 0.5f;
+	private static readonly Vector2I PieceFirstCell = new(-14, 10);
 
 	/// <summary>
-	/// Lay every authored piece down in a row, each one starting where the last one finished.
-	///
-	/// The fold is the same one <c>TrackGrid</c> performs: a piece reports where it hands the track
-	/// on, in its own local space, and that is carried onto the running anchor. So this is not a
-	/// preview of how the pieces would chain — it is the chain, run by the same arithmetic the game
-	/// uses, which is what makes a seam that looks right here evidence that it is right.
+	/// Cells between one specimen and the next. Six, because an authored piece has no size limit the
+	/// way a catalog tile does — the Twister is about a hundred and fifty metres across — and a row
+	/// of them overlapping would be worse than a row spread too thin.
 	/// </summary>
-	private void BuildPieceChain()
+	private const int PieceCellStride = 6;
+
+	/// <summary>How many authored pieces there are, counted without loading any of them.</summary>
+	private static int PieceCount => PieceScenePaths().Length;
+
+	/// <summary>
+	/// How far west the pad has to reach for the whole row to have ground under it.
+	///
+	/// The pad is grown to this in <see cref="MeasurePad"/>, for the same reason it is grown to
+	/// reach the two tracks: everything off the pad is open air, so a specimen a metre past the edge
+	/// is one you can only arrive at by falling.
+	/// </summary>
+	private static float PadEdgeForPieces
+	{
+		get
+		{
+			int count = PieceCount;
+			if (count == 0)
+				return 0.0f;
+
+			int furthest = Mathf.Abs(PieceFirstCell.X) + (count - 1) * PieceCellStride;
+
+			// Plus a piece's own width, since a specimen is placed by its entry and sweeps outward
+			// from there.
+			return (furthest + PieceCellStride) * TileCatalog.TileSize;
+		}
+	}
+
+	/// <summary>
+	/// Set every authored piece down on the pad, at ground level, facing north — so the run-up is
+	/// from +Z, which is the way a racer meets a tile in a match.
+	/// </summary>
+	private void BuildPieceSpecimens()
 	{
 		string[] paths = PieceScenePaths();
 		if (paths.Length == 0)
 			return;
 
-		var anchor = new TrackAnchor(new Vector3(-_padHalfX, 0.0f, 0.0f), PieceChainYaw);
-
-		AddLabel("Authored pieces →", anchor.Position + new Vector3(0.0f, 10.0f, 0.0f),
-				 new Color(1.0f, 0.82f, 0.05f));
-
-		var vertices = 0;
-		var shapes = 0;
-
-		foreach (string path in paths)
+		for (var i = 0; i < paths.Length; i++)
 		{
-			var scene = GD.Load<PackedScene>(path);
+			var scene = GD.Load<PackedScene>(paths[i]);
 			if (scene == null)
 			{
-				GD.PushError($"[TestArea] Could not load the authored piece at {path}.");
+				GD.PushError($"[TestArea] Could not load the authored piece at {paths[i]}.");
 				continue;
 			}
 
 			if (scene.Instantiate() is not TrackPiece piece)
 			{
-				GD.PushError($"[TestArea] {path} is not a TrackPiece, so it cannot be chained.");
+				GD.PushError($"[TestArea] {paths[i]} is not a TrackPiece.");
 				continue;
 			}
 
-			piece.Name = $"Piece_{System.IO.Path.GetFileNameWithoutExtension(path)}";
-			piece.Position = anchor.Position;
-			piece.Rotation = new Vector3(0.0f, anchor.Yaw, 0.0f);
+			string label = System.IO.Path.GetFileNameWithoutExtension(paths[i]);
+			piece.Name = $"Piece_{label}";
+
+			var cell = new Vector2I(PieceFirstCell.X - i * PieceCellStride, PieceFirstCell.Y);
+			Vector3 world = TileCatalog.CellToWorld(cell);
+
 			_generated.AddChild(piece);
+			PlaceByEntry(piece, world, 0.0f);
 
-			// Read after the piece is in the tree, so its spine has been readied and the geometry it
-			// reports on is the geometry that actually got built.
-			TrackAnchor exit = piece.ExitAnchor;
-
-			AddLabel(piece.Name.ToString().Replace("Piece_", ""),
-					 anchor.Position + new Vector3(0.0f, 7.0f, 0.0f),
+			// On the near side, so it is readable from the run-up rather than buried in the piece.
+			AddLabel(label, world + new Vector3(0.0f, 8.0f, TileCatalog.TileSize * 0.7f),
 					 new Color(1.0f, 0.82f, 0.05f));
 
-			anchor = Fold(anchor, exit);
-
-			int pieceVertices = CountVertices(piece);
-			int pieceShapes = CountShapes(piece);
-			vertices += pieceVertices;
-			shapes += pieceShapes;
-
-			// The exit is the number an author has to be able to check, because it is the one the
-			// chain acts on: a piece that reports the wrong seam still looks perfectly correct on
-			// its own and puts a step in every joint it is ever used at.
+			TrackAnchor exit = piece.ExitAnchor;
 			GD.Print($"[TestArea]   {piece.Name}: run {piece.RunLength:0.###} m, "
 					 + $"exit {exit.Position} at {Mathf.RadToDeg(exit.Yaw):0.###} deg, "
 					 + $"rise {piece.HeightChange:0.###} m, roll {piece.ExitRollDegrees:0.##} deg, "
-					 + (piece.IsBaked
-						 ? $"baked: {pieceVertices} vertices, {pieceShapes} shape(s)."
-						 : "live CSG (not baked)."));
+					 + (piece.IsBaked ? "baked." : "live CSG (not baked)."));
 		}
 
-		GD.Print($"[TestArea] Chained {paths.Length} authored piece(s): {vertices} vertices, "
-				 + $"{shapes} collision shape(s), ending at {anchor.Position}.");
+		AddLabel("Authored pieces ↓",
+				 TileCatalog.CellToWorld(PieceFirstCell)
+				 + new Vector3(TileCatalog.TileSize * 2.0f, 14.0f, TileCatalog.TileSize * 0.7f),
+				 new Color(1.0f, 0.82f, 0.05f));
+
+		GD.Print($"[TestArea] Laid out {paths.Length} authored piece(s) from {PieceFirstCell} "
+				 + $"westward, every {PieceCellStride} cells, at ground level.");
 
 		ReportGeometry();
+	}
+
+	/// <summary>
+	/// Position a piece so that its <c>Entry</c> marker lands exactly on a spot, facing a heading.
+	///
+	/// By the entry rather than by the piece's own origin, because those are not the same thing and
+	/// only one of them is the contract: a piece may be built anywhere in its own scene, and it is
+	/// the entry that says where the racer arrives. This is the same placement the chain performs.
+	/// </summary>
+	private static void PlaceByEntry(TrackPiece piece, Vector3 position, float yaw)
+	{
+		var wanted = new Transform3D(new Basis(Vector3.Up, yaw), position);
+
+		piece.Transform = piece.Entry is { } entry
+			? wanted * entry.Transform.AffineInverse()
+			: wanted;
 	}
 
 	/// <summary>
@@ -148,22 +187,27 @@ public partial class PhysicsTestArea
 			}
 
 			GD.Print($"[TestArea]   {piece.Name}: live CSG, extent "
-					 + $"{bounds.Size.X:0.##} x {bounds.Size.Y:0.##} x {bounds.Size.Z:0.##} m.");
+					 + $"{bounds.Size.X:0.##} x {bounds.Size.Y:0.##} x {bounds.Size.Z:0.##} m, "
+					 + $"base Y {bounds.Position.Y:0.##} m.");
+
+			// A specimen is set down by its Entry marker, so a piece whose geometry does not reach
+			// down to the entry is a piece hanging in the air above the spot it was placed on. It
+			// happens when the spine and the Entry have come apart — which the generated route makes
+			// impossible, but a hand-authored curve kept from before it can still be carrying.
+			if (bounds.Position.Y > 2.0f)
+			{
+				GD.PushWarning($"[TestArea] {piece.Name}'s road starts {bounds.Position.Y:0.#} m above "
+							   + "its Entry, so it floats above the pad. Its spine is authored rather "
+							   + "than generated — add a waypoint to the piece and the route is rebuilt "
+							   + "from Entry through to Exit, which puts it back on the ground.");
+			}
 		}
 	}
 
 	/// <summary>
-	/// Carry a piece's local exit onto the anchor it was placed at — the one operation the whole
-	/// chain is built from, and the same one <c>PlacedTile.ExitAnchorFor</c> performs for the
-	/// catalog's tiles.
-	/// </summary>
-	private static TrackAnchor Fold(TrackAnchor at, TrackAnchor exit)
-		=> new(at.Position + new Basis(Vector3.Up, at.Yaw) * exit.Position, at.Yaw + exit.Yaw);
-
-	/// <summary>
 	/// Every authored piece, in name order.
 	///
-	/// Sorted rather than left in whatever order the filesystem hands them over, so the chain is the
+	/// Sorted rather than left in whatever order the filesystem hands them over, so the row is the
 	/// same on every machine and a screenshot of it means something.
 	/// </summary>
 	private static string[] PieceScenePaths()
@@ -188,60 +232,5 @@ public partial class PhysicsTestArea
 
 		paths.Sort(StringComparer.Ordinal);
 		return paths.ToArray();
-	}
-
-	/// <summary>Vertices a piece's generated mesh came out at. Reported so that the cost of a change
-	/// to a profile's resolution is visible rather than guessed at.</summary>
-	private static int CountVertices(Node piece)
-	{
-		var total = 0;
-
-		foreach (Node child in piece.GetChildren())
-		{
-			if (child is not MeshInstance3D { Mesh: { } mesh })
-				continue;
-
-			for (var surface = 0; surface < mesh.GetSurfaceCount(); surface++)
-				total += mesh.SurfaceGetArrays(surface)[(int)Mesh.ArrayType.Vertex].AsVector3Array().Length;
-		}
-
-		return total;
-	}
-
-	/// <summary>
-	/// The box a piece's geometry actually occupies, in its own local space.
-	///
-	/// Worth printing beside the exit anchor because the two answer different questions and an
-	/// author needs both: the anchor says where the piece hands the track on, and this says how much
-	/// room it swept getting there — which is what decides whether it can be placed at all.
-	/// </summary>
-	private static Aabb Bounds(Node piece)
-	{
-		var bounds = new Aabb();
-		var started = false;
-
-		foreach (Node child in piece.GetChildren())
-		{
-			if (child is not MeshInstance3D mesh)
-				continue;
-
-			Aabb box = mesh.GetAabb();
-			bounds = started ? bounds.Merge(box) : box;
-			started = true;
-		}
-
-		return bounds;
-	}
-
-	private static int CountShapes(Node piece)
-	{
-		var total = 0;
-		foreach (Node child in piece.GetChildren())
-		{
-			if (child is CollisionShape3D)
-				total++;
-		}
-
-		return total;
 	}
 }

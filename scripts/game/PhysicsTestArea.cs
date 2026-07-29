@@ -227,7 +227,7 @@ public partial class PhysicsTestArea : Node3D
 		BuildBumpStrip();
 		BuildRaceTrack();
 		BuildStartLine();
-		BuildPieceChain();
+		BuildPieceSpecimens();
 	}
 
 	/// <summary>Rows the tile layout needs to hold the whole catalog.</summary>
@@ -260,6 +260,10 @@ public partial class PhysicsTestArea : Node3D
 		// everything off the pad is open air, so a metre short and the only way onto a track is a
 		// fall. One half-extent covers both because the pad is symmetric about the origin.
 		_padHalfZ = Mathf.Max(_padHalfZ, Mathf.Max(PadEdgeForRaceTrack, PadEdgeForBuildableTrack));
+
+		// And west, under the row of authored pieces. They have no size limit the way a catalog
+		// tile does, so this is worked out from how many there are rather than from a constant.
+		_padHalfX = Mathf.Max(_padHalfX, PadEdgeForPieces);
 	}
 
 	public override void _UnhandledInput(InputEvent @event)
