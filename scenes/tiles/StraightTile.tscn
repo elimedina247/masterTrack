@@ -1,4 +1,4 @@
-[gd_scene load_steps=6 format=3 uid="uid://c0master0tile0st"]
+[gd_scene format=3 uid="uid://dtg0byk2mfqoh"]
 
 [sub_resource type="StandardMaterial3D" id="Mat_road"]
 albedo_color = Color(0.4, 0.4, 0.4, 1)

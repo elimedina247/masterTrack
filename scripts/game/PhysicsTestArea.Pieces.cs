@@ -91,15 +91,12 @@ public partial class PhysicsTestArea
 			// The exit is the number an author has to be able to check, because it is the one the
 			// chain acts on: a piece that reports the wrong seam still looks perfectly correct on
 			// its own and puts a step in every joint it is ever used at.
-			Aabb bounds = Bounds(piece);
-
 			GD.Print($"[TestArea]   {piece.Name}: run {piece.RunLength:0.###} m, "
 					 + $"exit {exit.Position} at {Mathf.RadToDeg(exit.Yaw):0.###} deg, "
-					 + $"rise {piece.HeightChange:0.###} m, "
-					 + $"{pieceVertices} vertices, {pieceShapes} shape(s), "
-					 + $"extent {bounds.Size.X:0.##} x {bounds.Size.Y:0.##} x {bounds.Size.Z:0.##} m "
-					 + $"from {bounds.Position.X:0.##}, {bounds.Position.Y:0.##}, "
-					 + $"{bounds.Position.Z:0.##}.");
+					 + $"rise {piece.HeightChange:0.###} m, roll {piece.ExitRollDegrees:0.##} deg, "
+					 + (piece.IsBaked
+						 ? $"baked: {pieceVertices} vertices, {pieceShapes} shape(s)."
+						 : "live CSG (not baked)."));
 		}
 
 		GD.Print($"[TestArea] Chained {paths.Length} authored piece(s): {vertices} vertices, "

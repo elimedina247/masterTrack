@@ -5,53 +5,53 @@ using MasterTrack.Vehicles;
 namespace MasterTrack.Tiles.Tool;
 
 /// <summary>
-/// A piece of track authored in the editor: a spine you shape in the viewport, a cross-section
-/// swept along it, and whatever you park on top.
+/// A piece of track authored in the editor. You build the shape out of CSG nodes in the viewport,
+/// press bake, and the piece carries a plain mesh and a collision shape from then on.
 ///
-/// <b>The spine is the truth.</b> Where the piece hands the track on, how much room it takes up and
-/// where its centre line runs are all read off the same curve, so they cannot disagree with each
-/// other — which is the failure the hand-built tiles kept producing, most visibly as a centre line
-/// that was struck down the middle of a straight, replaced by a bank seam on a corner and abandoned
-/// altogether on a squiggle.
+/// <b>This deliberately does not generate geometry.</b> It used to — a cross-section swept along the
+/// spine, parameterised by width and bank angle — and that was the wrong tool: a parameterised
+/// profile can only describe the shapes somebody thought of in advance, which ruled out a half-pipe,
+/// an overhang, a tube, or a road with a launch ramp welded onto it. <see cref="CsgPolygon3D"/> in
+/// path mode does the same sweep with an arbitrary polygon you draw, and CSG's booleans do the rest.
+/// Godot already has both, and neither needed writing.
 ///
-/// The geometry is <b>never saved</b>. A scene file holds the curve, the profile and your props; the
-/// road is rebuilt from those on load, in the editor and in the game alike. So a piece costs a few
-/// hundred bytes on disk rather than the tens of thousands a baked mesh would, and a change to the
-/// profile is picked up by every piece using it instead of leaving a stale copy behind.
+/// So what is left here is the part CSG has no idea about: <b>the contract</b>. A tile is not just a
+/// shape, it is a shape that has to join the ones either side of it, report where it hands the track
+/// on, and tell the tires what it is made of.
 ///
-/// <b>What the chain requires of you.</b> The track is a fold down a list of <see cref="TrackAnchor"/>
-/// — a position and a yaw, four floats, no pitch and no roll — so every piece has to hand its
-/// neighbour a level frame. That is not a style rule, it is the reason the anchor can stay four
-/// floats instead of a basis that drifts. The spine's two ends must therefore sit level and
-/// un-banked, and <see cref="_GetConfigurationWarnings"/> says so when they do not, which is the
-/// railing this whole tool exists to give you.
+/// <code>
+/// TrackPiece                 this — contract, surface, baking
+/// ├── Entry (Marker3D)       where the racer arrives  \ the contract, and the whole of it
+/// ├── Exit  (Marker3D)       where they leave         /
+/// ├── Spine (Path3D)         optional — only if the shape is swept along a curve
+/// ├── Build (CSGCombiner3D)  the shape. Authoring only; freed at runtime once baked
+/// │   ├── Road   (CSGPolygon3D, path mode, path_node = Spine)
+/// │   └── ...    unions and subtractions: ramps, holes, whatever
+/// ├── BakedMesh               \ written by Bake, saved with the scene
+/// └── BakedCollision          /
+/// </code>
+///
+/// <b>The contract is two markers, and nothing about the shape.</b> Everything the chain needs is
+/// the transform from <c>Entry</c> to <c>Exit</c>, so a piece may be built anywhere in its own
+/// scene, out of anything, facing any way. There is no spine to keep at the origin and no axis the
+/// geometry has to run down.
+///
+/// Almost every mismatch between neighbours is free, because the next piece is placed <i>at</i>
+/// this one's exit: position, heading and height always agree by construction. The two that survive
+/// that are roll and pitch at the seam, because <see cref="TrackAnchor"/> is a position and a yaw
+/// with nowhere to record either — see <see cref="ExitRollDegrees"/>.
+/// <see cref="_GetConfigurationWarnings"/> names them rather than forbidding the shape.
 /// </summary>
 [Tool]
 [GlobalClass]
 public partial class TrackPiece : StaticBody3D
 {
-	/// <summary>Marks the nodes this piece builds, so a rebuild can clear its own work without
-	/// touching the spine or anything you authored beside it.</summary>
-	private const string GeneratedMeta = "track_generated";
-
 	private const string SpineName = "Spine";
-
-	private TrackProfile? _profile;
-
-	/// <summary>
-	/// The cross-section carried along the spine. Shared between pieces on purpose — the road is
-	/// supposed to be the same width everywhere, and a profile per tile is a hundred chances for one
-	/// of them to be 53 m wide.
-	///
-	/// Its fields are watched by <see cref="ShapeFingerprint"/> rather than by its change signal, so
-	/// editing a shared profile reshapes every piece using it without any connection to keep alive.
-	/// </summary>
-	[Export]
-	public TrackProfile? Profile
-	{
-		get => _profile;
-		set { _profile = value; RequestRebuild(); }
-	}
+	private const string BuildName = "Build";
+	private const string EntryName = "Entry";
+	private const string ExitName = "Exit";
+	private const string BakedMeshName = "BakedMesh";
+	private const string BakedCollisionName = "BakedCollision";
 
 	private string _surface = SurfaceGroups.Road;
 
@@ -59,9 +59,8 @@ public partial class TrackPiece : StaticBody3D
 	/// What the piece is made of, as far as the tires are concerned.
 	///
 	/// A <c>GroundRay</c> reads the <b>first</b> group on whatever body it hit and looks the name up
-	/// in the vehicle's grip tables, so this is the whole of what makes a piece slippery — an ice
-	/// tile is this set to <see cref="SurfaceGroups.Ice"/> and nothing else, and a gravel trap is a
-	/// piece of <see cref="SurfaceGroups.Dirt"/> beside one of road.
+	/// in the vehicle's grip tables, so this is the whole of what makes a piece slippery. A tile of
+	/// sheet ice is this set to <see cref="SurfaceGroups.Ice"/> and nothing else.
 	/// </summary>
 	[Export(PropertyHint.Enum, "Road,Dirt,Grass,Ice")]
 	public string Surface
@@ -70,64 +69,32 @@ public partial class TrackPiece : StaticBody3D
 		set { _surface = value; ApplySurfaceGroup(); }
 	}
 
-	private float _segmentLength = 8.0f;
-
 	/// <summary>
-	/// Metres of spine per ring of geometry. The quality knob, and a cheap one — see
-	/// <see cref="TrackSweep.Frames"/>.
-	/// </summary>
-	[Export(PropertyHint.Range, "0.5,40,0.5")]
-	public float SegmentLength
-	{
-		get => _segmentLength;
-		set { _segmentLength = value; RequestRebuild(); }
-	}
-
-	private float _bankBlend = 0.25f;
-
-	/// <summary>
-	/// Fraction of the spine spent easing the profile's bank in at each end. See
-	/// <see cref="BankScale"/> for why it cannot be zero on anything banked.
-	/// </summary>
-	[Export(PropertyHint.Range, "0,0.5,0.01")]
-	public float BankBlend
-	{
-		get => _bankBlend;
-		set { _bankBlend = value; RequestRebuild(); }
-	}
-
-	private bool _generateCollision = true;
-
-	/// <summary>
-	/// Whether the piece builds collision as well as a mesh. Off for a ghost — a preview of a
-	/// placement that has not happened must never be something a car can hit.
+	/// Tick to bake the CSG under <c>Build</c> into a mesh and a collision shape. Unticks itself.
+	///
+	/// A button rather than something automatic, because baking is the moment the shape stops being
+	/// cheap to change: CSG rebuilds itself as you drag things, and a bake writes a few thousand
+	/// vertices into the scene file. Author freely, bake when you are happy.
 	/// </summary>
 	[Export]
-	public bool GenerateCollision
+	public bool Bake
 	{
-		get => _generateCollision;
-		set { _generateCollision = value; ApplySurfaceGroup(); RequestRebuild(); }
+		get => false;
+		set
+		{
+			if (value && Engine.IsEditorHint())
+				RunBake();
+		}
 	}
-
-	/// <summary>Rebuild pending this frame, so a drag across the curve costs one sweep rather than
-	/// one per mouse movement.</summary>
-	private bool _rebuildQueued;
-
-	// ---- The chain contract, read off the spine ----
 
 	/// <summary>The authored curve, or null before it exists.</summary>
 	public Path3D? Spine => GetNodeOrNull<Path3D>(SpineName);
 
-	/// <summary>
-	/// Where the spine sits relative to the piece.
-	///
-	/// A <see cref="Path3D"/> is a node, so it can be moved and turned like any other, and its curve
-	/// points are relative to it rather than to the piece. Every reading taken off the curve has to
-	/// go through this or the two disagree — which shows up as the road refusing to follow the spine
-	/// when it is dragged in the viewport, because the geometry hangs off the piece and the curve
-	/// does not.
-	/// </summary>
-	private Transform3D SpineTransform => Spine?.Transform ?? Transform3D.Identity;
+	/// <summary>The CSG the shape is built out of, or null once it has been baked away.</summary>
+	public CsgShape3D? Build => GetNodeOrNull<CsgShape3D>(BuildName);
+
+	/// <summary>Whether this piece has geometry that does not need CSG to exist.</summary>
+	public bool IsBaked => GetNodeOrNull<MeshInstance3D>(BakedMeshName) != null;
 
 	private Curve3D? Curve
 	{
@@ -138,69 +105,93 @@ public partial class TrackPiece : StaticBody3D
 		}
 	}
 
-	/// <summary>How far the piece runs along its own spine, in metres. What the catalog calls a
-	/// tile's run length, measured rather than declared.</summary>
+	/// <summary>How far the piece runs along its own spine, in metres. Zero when it has no spine —
+	/// a piece built entirely out of CSG boxes is perfectly legal.</summary>
 	public float RunLength => Curve?.GetBakedLength() ?? 0.0f;
 
 	/// <summary>
-	/// Where the racer leaves the piece, relative to where they entered it.
+	/// Where the racer comes in, and where they leave. Two markers you place.
 	///
-	/// This is what the chain folds onto the head, and it is taken straight from the end of the
-	/// curve. Nothing declares it separately, so there is no second number to fall out of step with
-	/// the road you can see.
+	/// <b>The contract is the transform between these two and nothing else.</b> That is what frees
+	/// the shape: there is no requirement that the geometry start at the origin, run down any
+	/// particular axis, or have a spine at all. Build the piece however it wants to be built, then
+	/// say where it is entered and where it is left.
+	/// </summary>
+	public Marker3D? Entry => GetNodeOrNull<Marker3D>(EntryName);
+
+	public Marker3D? Exit => GetNodeOrNull<Marker3D>(ExitName);
+
+	/// <summary>
+	/// Where the racer leaves the piece, <i>relative to where they entered it</i> — what the chain
+	/// folds onto the head.
+	///
+	/// Relative, which is the whole point. The old version read the spine's last point in the
+	/// piece's own space, so the entry had to be pinned at the origin heading down -Z for the
+	/// arithmetic to mean anything. Measuring exit-against-entry instead means the piece can sit
+	/// anywhere in its own scene and still report the one thing the chain needs.
 	/// </summary>
 	public TrackAnchor ExitAnchor
 	{
 		get
 		{
-			Curve3D? curve = Curve;
-			if (curve == null)
-				return new TrackAnchor(Vector3.Zero, 0.0f);
-
-			Transform3D spine = SpineTransform;
-
-			return new TrackAnchor(spine * curve.GetPointPosition(curve.PointCount - 1),
-								   YawOf(spine.Basis * ExitTangent(curve)));
+			Transform3D seam = SeamTransform;
+			return new TrackAnchor(seam.Origin, YawOf(-seam.Basis.Z));
 		}
 	}
 
 	/// <summary>
-	/// The direction the spine heads as it leaves the origin, and as it arrives at its far end.
-	///
-	/// <b>Taken from the Bezier handles rather than by sampling the curve, and the difference is not
-	/// academic.</b> A chord measured back over the last half metre of a 63 m corner points 0.227
-	/// degrees away from the true tangent — half the angle that half metre sweeps — and that is an
-	/// error the chain <i>accumulates</i>, because every piece is laid relative to the one before.
-	/// A handle is the tangent, exactly, so there is nothing to accumulate.
-	///
-	/// A zero handle means the segment is straight, and then the neighbouring point is the honest
-	/// answer.
+	/// The exit expressed in the entry's frame. Everything about how this piece joins its
+	/// neighbours is in here, including the parts <see cref="TrackAnchor"/> cannot carry — see
+	/// <see cref="ExitRollDegrees"/>.
 	/// </summary>
-	private static Vector3 ExitTangent(Curve3D curve)
+	public Transform3D SeamTransform
 	{
-		int last = curve.PointCount - 1;
-		Vector3 handle = -curve.GetPointIn(last);
+		get
+		{
+			Marker3D? entry = Entry;
+			Marker3D? exit = Exit;
 
-		return handle.LengthSquared() > 1e-9f
-			? handle
-			: curve.GetPointPosition(last) - curve.GetPointPosition(last - 1);
-	}
+			if (entry == null || exit == null)
+				return Transform3D.Identity;
 
-	private static Vector3 EntryTangent(Curve3D curve)
-	{
-		Vector3 handle = curve.GetPointOut(0);
-
-		return handle.LengthSquared() > 1e-9f
-			? handle
-			: curve.GetPointPosition(1) - curve.GetPointPosition(0);
+			return entry.Transform.AffineInverse() * exit.Transform;
+		}
 	}
 
 	/// <summary>Metres the piece climbs from entry to exit. Negative drops.</summary>
-	public float HeightChange => ExitAnchor.Position.Y;
+	public float HeightChange => SeamTransform.Origin.Y;
 
 	/// <summary>
-	/// The heading a direction reads as, in the convention <see cref="TrackAnchor"/> uses: yaw 0
-	/// runs down local -Z, and turning right takes it negative.
+	/// How far the exit is rolled relative to the entry, in degrees.
+	///
+	/// <b>The one mismatch the chain genuinely cannot absorb.</b> Position, heading and height are
+	/// free — the next piece is placed <i>at</i> this seam, so those always agree by construction.
+	/// Roll does not: <see cref="TrackAnchor"/> is a position and a yaw, so a piece that leaves
+	/// banked hands its neighbour a frame with nowhere to record the bank, and the neighbour is
+	/// built as though it were flat. Until there is a transition piece to twist between them, this
+	/// wants to be zero at both ends.
+	/// </summary>
+	public float ExitRollDegrees
+	{
+		get
+		{
+			Vector3 up = SeamTransform.Basis * Vector3.Up;
+			Vector3 forward = SeamTransform.Basis * Vector3.Forward;
+
+			// Roll measured about the direction of travel: how far the piece's up has been turned
+			// out of the vertical plane that contains it.
+			Vector3 flatRight = forward.Cross(Vector3.Up);
+			if (flatRight.LengthSquared() < 1e-6f)
+				return 0.0f;
+
+			return Mathf.RadToDeg(Mathf.Asin(Mathf.Clamp(
+				up.Normalized().Dot(flatRight.Normalized()), -1.0f, 1.0f)));
+		}
+	}
+
+	/// <summary>
+	/// The heading a direction reads as, in the convention <see cref="TrackAnchor"/> uses: yaw 0 runs
+	/// down local -Z, and turning right takes it negative.
 	/// </summary>
 	private static float YawOf(Vector3 direction)
 		=> Mathf.Atan2(-direction.X, -direction.Z);
@@ -208,110 +199,95 @@ public partial class TrackPiece : StaticBody3D
 	public override void _Ready()
 	{
 		if (Engine.IsEditorHint())
-			EnsureSpine();
+		{
+			EnsureAnchors();
+			SetProcess(true);
+		}
+		else
+		{
+			// CSG is an authoring tool. A baked piece has everything it needs, and leaving the
+			// combiner in the tree would have the engine rebuilding the same shape on load for every
+			// tile on the track, plus a second set of collision on top of the baked one.
+			if (IsBaked)
+				Build?.QueueFree();
+		}
 
 		ApplySurfaceGroup();
-		Rebuild();
-
-		// Seeded from what was just built, so the first frame does not see a change that has already
-		// been applied and sweep the whole piece a second time.
-		_shape = ShapeFingerprint();
-
-		// Only the editor has anything to watch for. In a running game a piece is swept once and
-		// then never changes shape again, so a per-frame check would be pure waste on every tile of
-		// a long track.
-		SetProcess(Engine.IsEditorHint());
 	}
 
 	/// <summary>
-	/// Watch the things the road is built from, and sweep it again when any of them moves.
+	/// Keep the configuration warnings honest while the spine is being dragged.
 	///
-	/// <b>Polled rather than driven by <see cref="Resource.Changed"/>, deliberately.</b> The signal
-	/// covers the curve's own points and nothing else: it says nothing about the Spine node being
-	/// dragged, and the connection is silently lost whenever the script is reloaded, the curve
-	/// resource is swapped, or an undo replaces what was connected. Every one of those reads to the
-	/// author as "the tool stopped working", with nothing to see in the log.
-	///
-	/// A fingerprint over a handful of floats, once a frame, in the editor only, is not a cost worth
-	/// avoiding for that.
+	/// Polled rather than driven by <see cref="Resource.Changed"/>, which only ever covered the
+	/// curve's own points — it said nothing about the Spine node being moved, and the connection was
+	/// silently lost on a script reload, an undo, or a resource swap. Each of those reads to an
+	/// author as the tool having quietly stopped working.
 	/// </summary>
 	public override void _Process(double delta)
 	{
 		if (!Engine.IsEditorHint())
 			return;
 
-		int shape = ShapeFingerprint();
-		if (shape == _shape)
+		int shape = SeamFingerprint();
+		if (shape == _seam)
 			return;
 
-		_shape = shape;
-		Rebuild();
+		_seam = shape;
+		UpdateConfigurationWarnings();
 	}
 
-	/// <summary>Fingerprint of everything the sweep reads, so a change to any of it is one
-	/// comparison away.</summary>
-	private int _shape;
+	private int _seam;
 
-	private int ShapeFingerprint()
+	private int SeamFingerprint()
 	{
 		var hash = new System.HashCode();
 
-		hash.Add(SegmentLength);
-		hash.Add(BankBlend);
-		hash.Add(GenerateCollision);
-
-		Transform3D spine = SpineTransform;
-		hash.Add(spine.Origin);
-		hash.Add(spine.Basis.X);
-		hash.Add(spine.Basis.Y);
-		hash.Add(spine.Basis.Z);
-
-		Curve3D? curve = Spine?.Curve;
-		if (curve != null)
-		{
-			hash.Add(curve.PointCount);
-			hash.Add(curve.UpVectorEnabled);
-
-			for (var i = 0; i < curve.PointCount; i++)
-			{
-				hash.Add(curve.GetPointPosition(i));
-				hash.Add(curve.GetPointIn(i));
-				hash.Add(curve.GetPointOut(i));
-				hash.Add(curve.GetPointTilt(i));
-			}
-		}
-
-		// The profile is a shared resource edited through the inspector, and its own fields are as
-		// much a part of the shape as the curve is.
-		if (Profile is { } profile)
-		{
-			hash.Add(profile.Width);
-			hash.Add(profile.FlatFraction);
-			hash.Add(profile.EdgeBankDegrees);
-			hash.Add(profile.BankToLeft);
-			hash.Add(profile.LateralSamples);
-			hash.Add(profile.Thickness);
-			hash.Add(profile.WallHeight);
-			hash.Add(profile.WallThickness);
-			hash.Add(profile.LeftWall);
-			hash.Add(profile.RightWall);
-			hash.Add(profile.CentreLineWidth);
-			hash.Add(profile.RoadColor);
-			hash.Add(profile.WallColor);
-			hash.Add(profile.LineColor);
-		}
+		Transform3D seam = SeamTransform;
+		hash.Add(seam.Origin);
+		hash.Add(seam.Basis.X);
+		hash.Add(seam.Basis.Y);
+		hash.Add(seam.Basis.Z);
+		hash.Add(Build != null);
+		hash.Add(IsBaked);
 
 		return hash.ToHashCode();
 	}
 
 	/// <summary>
-	/// Put the piece in exactly one surface group, and make sure it is the only one — a
-	/// <c>GroundRay</c> reads the first group it finds, so a body left in two of them grips
-	/// according to whichever happens to come back first.
+	/// Give a new piece the two markers that are its contract, so that dropping a TrackPiece into a
+	/// scene gives you something to drag rather than an error.
 	///
-	/// A piece with no collision is a preview of a placement that has not happened. Nothing will
-	/// ever raycast it, and putting it in a surface group would be describing the grip of something
-	/// that is not there.
+	/// No spine is created. A spine is only useful to a piece whose shape is swept along one, and
+	/// plenty are not — a jump is a wedge and a box, and inventing a curve for it would be inventing
+	/// a requirement.
+	/// </summary>
+	private void EnsureAnchors()
+	{
+		if (Entry == null)
+		{
+			var entry = new Marker3D { Name = EntryName };
+			AddChild(entry);
+			Adopt(entry);
+		}
+
+		if (Exit != null)
+			return;
+
+		// A tile-length straight ahead: the commonest piece there is, and an obvious thing to drag
+		// somewhere else.
+		var exit = new Marker3D
+		{
+			Name = ExitName,
+			Position = new Vector3(0.0f, 0.0f, -TileCatalog.ShortRun),
+		};
+		AddChild(exit);
+		Adopt(exit);
+	}
+
+	/// <summary>
+	/// Put the piece in exactly one surface group, and make sure it is the only one — a
+	/// <c>GroundRay</c> reads the first group it finds, so a body left in two grips according to
+	/// whichever comes back first.
 	/// </summary>
 	private void ApplySurfaceGroup()
 	{
@@ -322,452 +298,132 @@ public partial class TrackPiece : StaticBody3D
 				RemoveFromGroup(group);
 		}
 
-		if (GenerateCollision && SurfaceGroups.IsKnown(Surface))
+		if (SurfaceGroups.IsKnown(Surface))
 			AddToGroup(Surface);
 	}
 
-	/// <summary>
-	/// Give a new piece a spine to shape, running one tile-length straight ahead.
-	///
-	/// Created rather than demanded so that a piece is drivable the moment it is dropped into a
-	/// scene: an empty <see cref="Path3D"/> and a configuration warning is a worse first five
-	/// minutes than a plain straight you can start dragging.
-	/// </summary>
-	private void EnsureSpine()
-	{
-		if (Spine != null)
-			return;
-
-		var curve = new Curve3D { UpVectorEnabled = true };
-		curve.AddPoint(Vector3.Zero);
-		curve.AddPoint(new Vector3(0.0f, 0.0f, -TileCatalog.ShortRun));
-
-		var spine = new Path3D { Name = SpineName, Curve = curve };
-		AddChild(spine);
-
-		// Owned by the scene's root rather than by this node, which is what puts it in the tree the
-		// editor shows and saves it with the file. The generated geometry deliberately gets neither.
-		spine.Owner = GetTree()?.EditedSceneRoot ?? Owner ?? this;
-	}
-
-	/// <summary>Coalesce a rebuild into the end of the frame. Dragging a curve point fires the
-	/// change signal continuously and each sweep would otherwise be paid in full.</summary>
-	private void RequestRebuild()
-	{
-		if (_rebuildQueued || !IsInsideTree())
-			return;
-
-		_rebuildQueued = true;
-		CallDeferred(MethodName.Rebuild);
-	}
+	// ---- Baking ----
 
 	/// <summary>
-	/// Throw the old geometry away and sweep it again.
+	/// Turn the CSG under <c>Build</c> into a mesh and a collision shape saved with the scene.
 	///
-	/// Everything this builds is marked and un-owned: marked so the next rebuild can find it, and
-	/// un-owned so the editor neither lists it in the scene tree nor writes it into the file. What
-	/// you see in the tree is the spine and your own props, which is the whole of what a piece
-	/// actually is.
+	/// A frame is awaited first because CSG updates are deferred by one — baking without it hands
+	/// back whatever the shape was before the last edit, which is the sort of bug that looks like
+	/// the bake button working intermittently.
+	///
+	/// The results are given an <see cref="Node.Owner"/>, unlike everything the old generator built:
+	/// they are the point of the exercise and have to be written into the file. The CSG stays too,
+	/// so the shape remains editable and can be baked again.
 	/// </summary>
-	public void Rebuild()
+	private async void RunBake()
 	{
-		_rebuildQueued = false;
-
-		ClearGenerated();
-		UpdateConfigurationWarnings();
-
-		Curve3D? curve = Curve;
-		TrackProfile? profile = Profile;
-		if (curve == null || profile == null)
-			return;
-
-		// The tilt is what banks a corner, and it is read through the curve's up vectors. Left off,
-		// every section stands straight up and the bank silently does nothing.
-		if (!curve.UpVectorEnabled)
-			curve.UpVectorEnabled = true;
-
-		TrackSweep.Frame[] frames = TrackSweep.Frames(curve, SegmentLength, SpineTransform);
-		if (frames.Length < 2)
-			return;
-
-		Vector2[] section = profile.Section();
-		if (section.Length < 2)
-			return;
-
-		Vector2[][] surfaces = BlendBank(section, frames.Length);
-
-		var road = new List<Vector3>();
-		var roadNormals = new List<Vector3>();
-		TrackSweep.SweepClosed(frames, Solidify(surfaces, profile.Thickness), road, roadNormals);
-
-		var walls = new List<Vector3>();
-		var wallNormals = new List<Vector3>();
-		BuildWalls(frames, surfaces, profile, walls, wallNormals);
-
-		var paint = new List<Vector3>();
-		var paintNormals = new List<Vector3>();
-		BuildCentreLine(frames, surfaces, profile, paint, paintNormals);
-
-		BuildMesh(profile, road, roadNormals, walls, wallNormals, paint, paintNormals);
-
-		if (GenerateCollision)
-			BuildCollision(road, walls);
-	}
-
-	private void ClearGenerated()
-	{
-		foreach (Node child in GetChildren())
+		CsgShape3D? build = Build;
+		if (build == null)
 		{
-			if (!child.HasMeta(GeneratedMeta))
-				continue;
-
-			// Detached before being freed so the name is free again this instant — QueueFree runs at
-			// the end of the frame, and the rebuild that follows would find its names taken and get
-			// them silently renamed.
-			RemoveChild(child);
-			child.QueueFree();
-		}
-	}
-
-	/// <summary>
-	/// How much of the profile's bank is present, a fraction <paramref name="t"/> of the way along
-	/// the spine: none at either end, all of it through the middle.
-	///
-	/// <b>Load-bearing, and carried over unchanged from the corners this replaces.</b> The piece
-	/// either side of a bank is flat, so a bank at full height from the first ring would meet its
-	/// neighbour as a step the height of the lip — sixteen metres, on a default corner. Easing it in
-	/// means the piece joins the straight flat and level, which is the same requirement
-	/// <see cref="_GetConfigurationWarnings"/> enforces on the spine's tilt.
-	/// </summary>
-	private float BankScale(float t)
-	{
-		if (BankBlend <= 0.0f)
-			return 1.0f;
-
-		if (t < BankBlend)
-			return Mathf.SmoothStep(0.0f, 1.0f, t / BankBlend);
-
-		if (t > 1.0f - BankBlend)
-			return Mathf.SmoothStep(0.0f, 1.0f, (1.0f - t) / BankBlend);
-
-		return 1.0f;
-	}
-
-	/// <summary>The section at every ring along the spine, with its bank eased in and out.</summary>
-	private Vector2[][] BlendBank(Vector2[] section, int rings)
-	{
-		var sections = new Vector2[rings][];
-
-		for (int i = 0; i < rings; i++)
-		{
-			float scale = BankScale(rings > 1 ? (float)i / (rings - 1) : 0.0f);
-
-			var scaled = new Vector2[section.Length];
-			for (int j = 0; j < section.Length; j++)
-				scaled[j] = section[j] with { Y = section[j].Y * scale };
-
-			sections[i] = scaled;
+			GD.PushWarning($"[TrackPiece] {Name} has no {BuildName} node, so there is no CSG to bake. "
+						   + "Add a CSGCombiner3D called Build and put the shape under it.");
+			return;
 		}
 
-		return sections;
-	}
+		await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
 
-	/// <summary>Give every ring's surface a thickness, so the sweep describes a solid.</summary>
-	private static Vector2[][] Solidify(Vector2[][] surfaces, float thickness)
-	{
-		var solid = new Vector2[surfaces.Length][];
-		for (int i = 0; i < surfaces.Length; i++)
-			solid[i] = TrackSweep.Solidify(surfaces[i], thickness);
-
-		return solid;
-	}
-
-	/// <summary>
-	/// Barriers standing on the road's two edges, each a small closed section swept the length of
-	/// the piece.
-	///
-	/// Built from the surface's own end points at every ring rather than from the width, so a wall
-	/// on a banked corner rides up the lip with the road instead of standing vertically through a
-	/// surface that has tilted out from under it.
-	/// </summary>
-	private static void BuildWalls(TrackSweep.Frame[] frames, Vector2[][] surfaces,
-								   TrackProfile profile, List<Vector3> vertices,
-								   List<Vector3> normals)
-	{
-		if (profile.WallHeight <= 0.0f || profile.WallThickness <= 0.0f)
-			return;
-
-		float thickness = profile.WallThickness;
-		float height = profile.WallHeight;
-
-		if (profile.LeftWall)
+		ArrayMesh mesh = build.BakeStaticMesh();
+		if (mesh == null || mesh.GetSurfaceCount() == 0)
 		{
-			var left = new Vector2[surfaces.Length][];
-			for (int i = 0; i < surfaces.Length; i++)
-			{
-				Vector2 edge = surfaces[i][0];
-				left[i] = TrackSweep.Solidify(new[]
-				{
-					new Vector2(edge.X, edge.Y + height),
-					new Vector2(edge.X + thickness, edge.Y + height),
-				}, height);
-			}
-
-			TrackSweep.SweepClosed(frames, left, vertices, normals);
+			GD.PushWarning($"[TrackPiece] {Name} baked to an empty mesh. Check that {BuildName} is a "
+						   + "CSG root with geometry under it.");
+			return;
 		}
 
-		if (!profile.RightWall)
-			return;
+		ConcavePolygonShape3D shape = build.BakeCollisionShape();
 
-		var right = new Vector2[surfaces.Length][];
-		for (int i = 0; i < surfaces.Length; i++)
+		Replace(BakedMeshName, new MeshInstance3D { Name = BakedMeshName, Mesh = mesh });
+
+		if (shape != null && shape.GetFaces().Length > 0)
 		{
-			Vector2 edge = surfaces[i][^1];
-			right[i] = TrackSweep.Solidify(new[]
-			{
-				new Vector2(edge.X - thickness, edge.Y + height),
-				new Vector2(edge.X, edge.Y + height),
-			}, height);
-		}
-
-		TrackSweep.SweepClosed(frames, right, vertices, normals);
-	}
-
-	/// <summary>
-	/// The centre line, painted along the spine.
-	///
-	/// <b>This is the bug the rewrite was partly for.</b> A stripe used to be struck per tile from
-	/// that tile's own idea of its middle, and the ideas disagreed: a straight painted x=0, a corner
-	/// painted the flat/bank seam a third of the way in from the inside and had no centre line at
-	/// all, the loop's aprons jumped theirs ten metres sideways and the squiggle abandoned it. Here
-	/// the line is the spine, so every piece agrees with every other by construction.
-	///
-	/// Two centimetres proud and mesh only — a lip in the road would be a bump the suspension reads
-	/// for no reason.
-	/// </summary>
-	private static void BuildCentreLine(TrackSweep.Frame[] frames, Vector2[][] surfaces,
-										TrackProfile profile, List<Vector3> vertices,
-										List<Vector3> normals)
-	{
-		if (profile.CentreLineWidth <= 0.0f)
-			return;
-
-		float half = profile.CentreLineWidth * 0.5f;
-
-		// Read off the surface at each ring rather than assumed flat, so the stripe still lies on
-		// the road where the bank has lifted the middle of it.
-		var stripe = new Vector2[surfaces.Length][];
-		for (int i = 0; i < surfaces.Length; i++)
-		{
-			stripe[i] = new[]
-			{
-				new Vector2(-half, HeightAt(surfaces[i], -half) + 0.02f),
-				new Vector2(half, HeightAt(surfaces[i], half) + 0.02f),
-			};
-		}
-
-		TrackSweep.SweepRibbon(frames, stripe, vertices, normals);
-	}
-
-	/// <summary>Height of the surface at a lateral offset, interpolated between the section's
-	/// samples.</summary>
-	private static float HeightAt(Vector2[] surface, float lateral)
-	{
-		if (surface.Length == 0)
-			return 0.0f;
-
-		if (lateral <= surface[0].X)
-			return surface[0].Y;
-
-		for (int i = 1; i < surface.Length; i++)
-		{
-			if (lateral > surface[i].X)
-				continue;
-
-			float span = surface[i].X - surface[i - 1].X;
-			if (span <= 0.0f)
-				return surface[i].Y;
-
-			return Mathf.Lerp(surface[i - 1].Y, surface[i].Y, (lateral - surface[i - 1].X) / span);
-		}
-
-		return surface[^1].Y;
-	}
-
-	/// <summary>
-	/// One mesh, three surfaces, three materials.
-	///
-	/// One, rather than the several hundred <see cref="MeshInstance3D"/>s a hand-built corner used to
-	/// need. That is the bulk of what the sweep buys: a hairpin was some 288 boxes, each with its own
-	/// node and its own <c>BoxMesh</c> resource, all of it constructed from C# a property at a time
-	/// while a tile was being placed mid-race.
-	/// </summary>
-	private void BuildMesh(TrackProfile profile,
-						   List<Vector3> road, List<Vector3> roadNormals,
-						   List<Vector3> walls, List<Vector3> wallNormals,
-						   List<Vector3> paint, List<Vector3> paintNormals)
-	{
-		var mesh = new ArrayMesh();
-
-		AddSurface(mesh, road, roadNormals, Finish(profile.RoadColor));
-		AddSurface(mesh, walls, wallNormals, Finish(profile.WallColor));
-		AddSurface(mesh, paint, paintNormals, Finish(profile.LineColor));
-
-		if (mesh.GetSurfaceCount() == 0)
-			return;
-
-		Adopt(new MeshInstance3D { Name = "Surface", Mesh = mesh });
-	}
-
-	private static void AddSurface(ArrayMesh mesh, List<Vector3> vertices, List<Vector3> normals,
-								   Material material)
-	{
-		if (vertices.Count == 0)
-			return;
-
-		var arrays = new Godot.Collections.Array();
-		arrays.Resize((int)Mesh.ArrayType.Max);
-		arrays[(int)Mesh.ArrayType.Vertex] = vertices.ToArray();
-		arrays[(int)Mesh.ArrayType.Normal] = normals.ToArray();
-
-		mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
-		mesh.SurfaceSetMaterial(mesh.GetSurfaceCount() - 1, material);
-	}
-
-	/// <summary>
-	/// The house style, unchanged from the hand-built tiles: per-vertex shading, no specular, and
-	/// nothing set on a material but its colour.
-	///
-	/// It is Gouraud shading, which is what the arcade hardware this look comes from actually did.
-	/// Specular is off and roughness pinned at 1 because a highlight sliding across a surface is the
-	/// single most modern-looking thing a renderer does.
-	/// </summary>
-	private static StandardMaterial3D Finish(Color color) => new()
-	{
-		AlbedoColor = color,
-		ShadingMode = BaseMaterial3D.ShadingModeEnum.PerVertex,
-		SpecularMode = BaseMaterial3D.SpecularModeEnum.Disabled,
-		Metallic = 0.0f,
-		Roughness = 1.0f,
-	};
-
-	/// <summary>
-	/// One collision shape for the whole piece, from the same triangles the mesh is drawn from.
-	///
-	/// A <see cref="ConcavePolygonShape3D"/> rather than the stack of boxes the hand-built tiles
-	/// used. The swept sections are closed and capped, so the soup describes a solid rather than a
-	/// sheet, and what keeps a car out of it is the physics step being too short to cross the slab:
-	/// at the project's 120 Hz a car at <c>TopSpeed</c> moves 0.46 m against a 1.6 m thickness. See
-	/// <see cref="TrackProfile.Thickness"/> before thinning that.
-	///
-	/// The paint is left out. It is two centimetres of decoration and giving it a surface to be the
-	/// top of is how you get a lip in the middle of the road.
-	/// </summary>
-	private void BuildCollision(List<Vector3> road, List<Vector3> walls)
-	{
-		if (road.Count == 0 && walls.Count == 0)
-			return;
-
-		var faces = new Vector3[road.Count + walls.Count];
-		road.CopyTo(faces, 0);
-		walls.CopyTo(faces, road.Count);
-
-		Adopt(new CollisionShape3D
-		{
-			Name = "Collision",
 			// A direct child of the body, never nested under a helper: a CollisionShape3D is only
 			// picked up as an immediate child of the body it belongs to.
-			Shape = new ConcavePolygonShape3D { Data = faces },
-		});
+			Replace(BakedCollisionName,
+					new CollisionShape3D { Name = BakedCollisionName, Shape = shape });
+		}
+
+		int vertices = mesh.SurfaceGetArrays(0)[(int)Mesh.ArrayType.Vertex].AsVector3Array().Length;
+		int faces = shape?.GetFaces().Length / 3 ?? 0;
+		GD.Print($"[TrackPiece] Baked {Name}: {vertices} vertices across "
+				 + $"{mesh.GetSurfaceCount()} surface(s), {faces} collision triangle(s).");
+	}
+
+	/// <summary>Swap a saved child for a freshly baked one, keeping the name free.</summary>
+	private void Replace(string name, Node node)
+	{
+		if (GetNodeOrNull(name) is { } existing)
+		{
+			// Detached rather than only queued, so the name is available this instant — QueueFree
+			// runs at the end of the frame and Godot would quietly rename the new node.
+			RemoveChild(existing);
+			existing.QueueFree();
+		}
+
+		AddChild(node);
+		Adopt(node);
 	}
 
 	/// <summary>
-	/// Take ownership of a node this piece built: mark it so the next rebuild can find it, and leave
-	/// it un-owned so it is neither listed in the editor's tree nor written into the scene file.
+	/// Make a node part of the saved scene rather than a runtime child. Without an owner the editor
+	/// neither lists it in the tree nor writes it to the file, which is right for scratch geometry
+	/// and wrong for a bake.
 	/// </summary>
 	private void Adopt(Node node)
-	{
-		node.SetMeta(GeneratedMeta, true);
-		AddChild(node);
-	}
+		=> node.Owner = GetTree()?.EditedSceneRoot ?? Owner ?? this;
+
+	// ---- The railings ----
 
 	/// <summary>
-	/// The railings. Everything here is a way the piece would not join its neighbours, checked
-	/// against what <see cref="TrackAnchor"/> actually requires rather than against taste.
+	/// Everything here is a way the piece would fail to join its neighbours, checked against what
+	/// <see cref="TrackAnchor"/> actually requires rather than against taste. Nothing here has an
+	/// opinion about the shape.
 	/// </summary>
 	public override string[] _GetConfigurationWarnings()
 	{
 		var warnings = new List<string>();
 
-		if (Profile == null)
-			warnings.Add("No TrackProfile, so there is no cross-section to sweep. Assign one.");
-
-		Curve3D? curve = Curve;
-		if (curve == null)
+		if (Entry == null || Exit == null)
 		{
-			warnings.Add($"The {SpineName} needs a Curve3D with at least two points.");
+			warnings.Add($"A piece needs an {EntryName} and an {ExitName} Marker3D. They are the "
+						 + "whole contract — where the racer arrives and where they leave.");
 			return warnings.ToArray();
 		}
 
-		// Everything below is measured in the piece's space rather than the curve's, because that is
-		// the space the chain joins pieces in. A spine that has been dragged off the origin is
-		// exactly as broken as one whose first point was moved, and until the transform was
-		// accounted for only the second was caught.
-		Transform3D spine = SpineTransform;
+		if (Build == null && !IsBaked)
+			warnings.Add($"No {BuildName} node and nothing baked, so this piece has no shape yet.");
 
-		if (!(spine * curve.GetPointPosition(0)).IsEqualApprox(Vector3.Zero))
+		Transform3D seam = SeamTransform;
+
+		if (seam.Origin.LengthSquared() < 1.0f)
 		{
-			warnings.Add("The spine must start at the piece's origin — that point is the seam the "
-						 + "previous tile hands the racer over on. Move the curve's first point, or "
-						 + "the Spine node, back to zero.");
+			warnings.Add($"{ExitName} is on top of {EntryName}. A piece of no length leaves the head "
+						 + "where it already was, so the track would quietly stop growing.");
 		}
 
-		// A rolled or pitched spine node tips every section the sweep lays down, and the chain has
-		// nowhere to record that any more than it does a tilted curve point.
-		if (Mathf.Abs((spine.Basis * Vector3.Up).Normalized().Dot(Vector3.Up)) < Mathf.Cos(Mathf.DegToRad(1.0f)))
+		// Position, heading and height need no checking at all: the next piece is placed *at* this
+		// seam, so those agree by construction. These two are the mismatches that survive that, and
+		// they survive it because TrackAnchor is a position and a yaw with nowhere to put them.
+		float roll = ExitRollDegrees;
+		if (Mathf.Abs(roll) > 1.0f)
 		{
-			warnings.Add("The Spine node is rolled or pitched. Keep its rotation to yaw only — the "
-						 + "shape belongs in the curve, not in the node holding it.");
+			warnings.Add($"{ExitName} is rolled {roll:0.#} degrees relative to {EntryName}. The chain "
+						 + "carries no roll, so the next piece will be built flat and the joint will "
+						 + "be a step. Level the exit, or wait for transition pieces.");
 		}
 
-		// The chain carries a position and a yaw and nothing else, so a piece that ends pitched or
-		// rolled hands its neighbour a frame the anchor cannot represent. Both ends, because a piece
-		// is entered as well as left.
-		CheckSeam(curve, 0, spine.Basis * EntryTangent(curve), "entry", warnings);
-		CheckSeam(curve, curve.PointCount - 1, spine.Basis * ExitTangent(curve), "exit", warnings);
-
-		Vector3 entry = spine.Basis * EntryTangent(curve);
-		if (entry.LengthSquared() > 1e-9f && Mathf.Abs(YawOf(entry)) > Mathf.DegToRad(1.0f))
+		Vector3 forward = (seam.Basis * Vector3.Forward).Normalized();
+		if (Mathf.Abs(forward.Y) > Mathf.Sin(Mathf.DegToRad(1.0f)))
 		{
-			warnings.Add("The spine must leave the origin heading down local -Z. The racer arrives "
-						 + "along that axis, so a piece that starts turned meets them at an angle.");
+			warnings.Add($"{ExitName} is pitched {Mathf.RadToDeg(Mathf.Asin(forward.Y)):0.#} degrees. "
+						 + "A climb has to flatten out before the seam, or the joint with the next "
+						 + "piece is a kerb.");
 		}
 
 		return warnings.ToArray();
-	}
-
-	/// <summary>
-	/// Whether one end of the spine is level and un-banked. Both are required and for the same
-	/// reason: <see cref="TrackAnchor"/> is a position and a yaw, so there is nowhere for a pitch or
-	/// a roll at the seam to be recorded, and the next piece would simply be built as though it
-	/// were not there.
-	/// </summary>
-	private static void CheckSeam(Curve3D curve, int point, Vector3 tangent, string which,
-								  List<string> warnings)
-	{
-		if (Mathf.Abs(curve.GetPointTilt(point)) > Mathf.DegToRad(0.5f))
-		{
-			warnings.Add($"The {which} point is banked. Tilt has to ease to zero at both ends or the "
-						 + "piece meets its neighbour rolled, and the chain cannot carry a roll.");
-		}
-
-		if (tangent.LengthSquared() < 1e-9f)
-			return;
-
-		if (Mathf.Abs(tangent.Normalized().Y) > Mathf.Sin(Mathf.DegToRad(1.0f)))
-		{
-			warnings.Add($"The {which} point is pitched. A ramp has to flatten out before the seam, "
-						 + "or the joint with the next piece is a kerb.");
-		}
 	}
 }

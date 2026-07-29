@@ -1,31 +1,47 @@
 [gd_scene load_steps=4 format=3]
 
 [ext_resource type="Script" path="res://scripts/tiles/tool/TrackPiece.cs" id="1_piece"]
-[ext_resource type="Resource" path="res://resources/tiles/road_banked_right.tres" id="2_profile"]
+[ext_resource type="Material" path="res://resources/tiles/road.tres" id="2_road"]
 
-; A quarter turn to the right of 63 m radius — the catalog's CornerRadius, and the number the
-; profile's 60-degree lip was written against: a bank holds a car unaided at
-; v = sqrt(g * r * tan(theta)), which at 2 g and these two lands neutral just under TopSpeed.
+; A banked quarter turn to the right, 63 m radius - the catalog's CornerRadius.
 ;
-; The arc is one cubic Bezier. Two control points with handles of 4/3 * tan(45/2) * r = 34.794 m
-; reproduce a quarter circle to well under a centimetre, which is far inside the width of the
-; paint. Entry sits at the origin heading -Z and the exit lands at (63, 0, -63) heading +X, which
-; is exactly what TrackAnchor.Swept folds onto the head for a right-hand quarter turn.
+; Three points rather than two so the middle one can carry tilt, which is the bank. The ends are at
+; zero tilt because the chain has nowhere to record a roll: a piece that leaves banked hands its
+; neighbour a frame that says nothing about the bank, and the neighbour is built flat against it.
+;
+; 0.5 rad is about 29 degrees. The hand-built corners used a 60 degree lip solved against
+; v = sqrt(g * r * tan(theta)) so that riding the wall flat out was the car holding itself up - if
+; you want that back, raise this and check it against TopSpeed. Flip the sign if it banks the wrong
+; way: the outside of a right-hand turn is the left.
 [sub_resource type="Curve3D" id="Curve_right"]
-up_vector_enabled = true
 _data = {
-"points": PackedVector3Array(0, 0, 0, 0, 0, -34.7939, 0, 0, 0, -34.7939, 0, 0, 0, 0, 0, 63, 0, -63),
-"tilts": PackedFloat32Array(0, 0)
+"points": PackedVector3Array(0, 0, 0, 0, 0, -16.71, 0, 0, 0, -11.82, 0, 11.82, 11.82, 0, -11.82, 18.45, 0, -44.55, -16.71, 0, 0, 0, 0, 0, 63, 0, -63),
+"tilts": PackedFloat32Array(0, 0.5, 0)
 }
-point_count = 2
+point_count = 3
 
 [node name="CurveRight" type="StaticBody3D"]
 script = ExtResource("1_piece")
-Profile = ExtResource("2_profile")
-SegmentLength = 8.0
-BankBlend = 0.25
-GenerateCollision = true
 Surface = "Road"
+
+[node name="Entry" type="Marker3D" parent="."]
+
+[node name="Exit" type="Marker3D" parent="."]
+transform = Transform3D(0, 0, -1, 0, 1, 0, 1, 0, 0, 63, 0, -63)
 
 [node name="Spine" type="Path3D" parent="."]
 curve = SubResource("Curve_right")
+
+[node name="Build" type="CSGCombiner3D" parent="."]
+use_collision = true
+
+[node name="Road" type="CSGPolygon3D" parent="Build" node_paths=PackedStringArray("path_node")]
+material = ExtResource("2_road")
+polygon = PackedVector2Array(-27, -1.6, 27, -1.6, 27, 2, 24.57, 2, 24.57, 0, -24.57, 0, -24.57, 2, -27, 2)
+mode = 2
+path_node = NodePath("../../Spine")
+path_interval_type = 0
+path_interval = 8.0
+path_simplify_angle = 1.0
+path_rotation = 2
+path_continuous_u = true

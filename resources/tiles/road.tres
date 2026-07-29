@@ -1,0 +1,13 @@
+[gd_resource type="StandardMaterial3D" format=3]
+
+; The house style: per-vertex shading, no specular, roughness pinned.
+;
+; It is Gouraud shading, which is what the arcade hardware this look comes from actually did.
+; Specular is off because a highlight sliding across a surface is the single most modern-looking
+; thing a renderer does.
+[resource]
+albedo_color = Color(0.36, 0.37, 0.4, 1)
+shading_mode = 2
+specular_mode = 1
+metallic_specular = 0.0
+roughness = 1.0

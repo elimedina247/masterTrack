@@ -1,0 +1,46 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/tiles/tool/TrackPiece.cs" id="1_piece"]
+[ext_resource type="Material" path="res://resources/tiles/road.tres" id="2_road"]
+
+; Your Jump tile, as a clean starting point - it was a duplicate of Straight pointing at a profile
+; resource that no longer exists, so it would not have loaded.
+;
+; To build the launch tile you described, add nodes under Build:
+;   - a CSGPolygon3D or CSGBox3D set to Operation = Union for the take-off wedge;
+;   - a CSGBox3D set to Operation = Subtraction to carve a hole under it.
+; The C-turn version is the same idea with the Spine curved round and the Exit marker moved to
+; where the turn comes out. The launch ramp does not need its own exit: the track is the turn, and
+; a car that clears the ramp lands on whatever is there - which is the shortcut.
+[sub_resource type="Curve3D" id="Curve_jump"]
+_data = {
+"points": PackedVector3Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -162),
+"tilts": PackedFloat32Array(0, 0)
+}
+point_count = 2
+
+[node name="Jump" type="StaticBody3D"]
+script = ExtResource("1_piece")
+Surface = "Road"
+
+[node name="Entry" type="Marker3D" parent="."]
+
+[node name="Exit" type="Marker3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -162)
+
+[node name="Spine" type="Path3D" parent="."]
+curve = SubResource("Curve_jump")
+
+[node name="Build" type="CSGCombiner3D" parent="."]
+use_collision = true
+
+[node name="Road" type="CSGPolygon3D" parent="Build" node_paths=PackedStringArray("path_node")]
+material = ExtResource("2_road")
+polygon = PackedVector2Array(-27, -1.6, 27, -1.6, 27, 2, 24.57, 2, 24.57, 0, -24.57, 0, -24.57, 2, -27, 2)
+mode = 2
+path_node = NodePath("../../Spine")
+path_interval_type = 0
+path_interval = 12.0
+path_simplify_angle = 1.0
+path_rotation = 2
+path_continuous_u = true
