@@ -275,12 +275,16 @@ public partial class TrackPiece : StaticBody3D
 	}
 
 	/// <summary>
-	/// Hold the two seams level.
+	/// Hold the two seams level, and — if asked — on a tidy heading.
 	///
 	/// <b>Flat by construction rather than by warning.</b> The chain carries a position and a yaw,
 	/// so a seam with pitch or roll in it is a frame the next piece cannot be built against — and
 	/// being told off about it after the fact is worse than it simply not being possible. Position
 	/// and heading stay free; only the pitch and the roll are taken back out.
+	///
+	/// The heading is then snapped to <see cref="SeamSnapDegrees"/>, which is the difference between
+	/// a piece that chains predictably and one that does not: a tile leaving at -160.4 degrees sends
+	/// everything after it off at 160.4 degrees, and nothing downstream ever lines up with anything.
 	/// </summary>
 	private void LevelSeams()
 	{
@@ -297,10 +301,41 @@ public partial class TrackPiece : StaticBody3D
 			if (flat.LengthSquared() < 1e-6f)
 				continue;
 
-			var level = new Basis(Vector3.Up, Mathf.Atan2(-flat.X, -flat.Z));
+			float yaw = Mathf.Atan2(-flat.X, -flat.Z);
+
+			if (SeamSnapDegrees > 0.0f)
+			{
+				float step = Mathf.DegToRad(SeamSnapDegrees);
+				yaw = Mathf.Round(yaw / step) * step;
+			}
+
+			var level = new Basis(Vector3.Up, yaw);
 			if (!seam.Transform.Basis.IsEqualApprox(level))
 				seam.Transform = new Transform3D(level, seam.Transform.Origin);
 		}
+	}
+
+	private float _seamSnapDegrees;
+
+	/// <summary>
+	/// Snap both seams' headings to a multiple of this many degrees. 0 leaves them wherever they
+	/// are pointed.
+	///
+	/// <b>What makes a piece chain predictably.</b> A seam's yaw <i>is</i> the turn the piece makes
+	/// — a right-hander exits at -90 because that is what turning right means — so it cannot simply
+	/// be zeroed without making every tile a straight. What can be done is to keep it on a tidy
+	/// number: at 90 a piece leaves heading straight on, or square left or right, and the tile after
+	/// it starts from an angle that lines up with everything else. At -160.4 degrees it does not,
+	/// and nothing downstream of it ever will.
+	///
+	/// 45 for pieces that want the diagonals too. Off by default, so it never quietly rotates a
+	/// piece that was deliberately at some other angle.
+	/// </summary>
+	[Export(PropertyHint.Range, "0,90,15")]
+	public float SeamSnapDegrees
+	{
+		get => _seamSnapDegrees;
+		set => _seamSnapDegrees = value;
 	}
 
 	private float _smoothing = 0.5f;
@@ -645,6 +680,7 @@ public partial class TrackPiece : StaticBody3D
 		hash.Add(Build != null);
 		hash.Add(IsBaked);
 		hash.Add(Smoothing);
+		hash.Add(SeamSnapDegrees);
 
 		foreach (Marker3D node in Route())
 		{
