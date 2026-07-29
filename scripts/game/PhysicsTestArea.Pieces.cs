@@ -111,6 +111,7 @@ public partial class PhysicsTestArea
 					 new Color(1.0f, 0.82f, 0.05f));
 
 			float bend = ReportBend(piece);
+			ReportSeamRoll(piece);
 
 			TrackAnchor exit = piece.ExitAnchor;
 			GD.Print($"[TestArea]   {piece.Name}: run {piece.RunLength:0.###} m, "
@@ -186,6 +187,67 @@ public partial class PhysicsTestArea
 		}
 
 		return worst;
+	}
+
+	/// <summary>
+	/// How far the road itself is banked where it meets its neighbours — as opposed to how far the
+	/// seam marker says it is.
+	///
+	/// Those are not the same thing, which is the whole reason this exists. A curve that both climbs
+	/// and turns carries its own frame along itself, and that frame accumulates roll as it goes: the
+	/// marker can sit dead level, report zero rotation, and still have the road arrive at it visibly
+	/// banked. It is the road the next tile butts against, so the road is what has to be measured.
+	/// </summary>
+	private static void ReportSeamRoll(TrackPiece piece)
+	{
+		if (piece.Spine?.Curve is not { PointCount: >= 2 } curve)
+			return;
+
+		float length = curve.GetBakedLength();
+		if (length < 0.01f)
+			return;
+
+		float entry = RoadRollAt(curve, 0.0f);
+		float exit = RoadRollAt(curve, length);
+
+		if (Mathf.Abs(entry) < 1.0f && Mathf.Abs(exit) < 1.0f)
+			return;
+
+		// A baked piece is measured from the curve saved in its file, which is also the curve its
+		// mesh was built from - so this is not a stale reading, it is the shape that actually
+		// shipped, and re-baking is what fixes it.
+		GD.PushWarning($"[TestArea] {piece.Name}'s road is banked {entry:0.#} deg at its entry and "
+					   + $"{exit:0.#} deg at its exit, even though both seams are level. "
+					   + (piece.IsBaked
+						   ? "This piece is baked, so its mesh carries that roll: open it and bake "
+							 + "again to pick up the corrected spine."
+						   : "The spine's frame has picked up roll along the way."));
+	}
+
+	/// <summary>How far the swept road is rolled from vertical at a point along the spine, in
+	/// degrees — read from the same up vector the sweep uses.</summary>
+	private static float RoadRollAt(Curve3D curve, float offset)
+	{
+		float length = curve.GetBakedLength();
+		float epsilon = Mathf.Max(0.05f, length * 0.001f);
+
+		Vector3 ahead = curve.SampleBaked(Mathf.Min(length, offset + epsilon), cubic: true);
+		Vector3 behind = curve.SampleBaked(Mathf.Max(0.0f, offset - epsilon), cubic: true);
+
+		Vector3 forward = ahead - behind;
+		if (forward.LengthSquared() < 1e-9f)
+			return 0.0f;
+
+		forward = forward.Normalized();
+
+		Vector3 up = curve.SampleBakedUpVector(offset, applyTilt: true).Normalized();
+
+		Vector3 right = forward.Cross(Vector3.Up);
+		if (right.LengthSquared() < 1e-6f)
+			return 0.0f;
+
+		right = right.Normalized();
+		return Mathf.RadToDeg(Mathf.Atan2(up.Dot(right), up.Dot(right.Cross(forward))));
 	}
 
 	/// <summary>

@@ -172,10 +172,85 @@ public partial class TrackPiece : StaticBody3D
 														 tangents[i], tangents[i + 1]) : 0.0f;
 
 			curve.AddPoint(positions[i], -tangents[i] * back, tangents[i] * on);
-			curve.SetPointTilt(i, RollOf(nodes[i].Transform.Basis));
 		}
 
+		var rolls = new float[nodes.Count];
+		for (var i = 0; i < nodes.Count; i++)
+			rolls[i] = RollOf(nodes[i].Transform.Basis);
+
+		AlignTilts(curve, rolls);
+
 		spine.Curve = curve;
+	}
+
+	/// <summary>
+	/// Set each control point's tilt so the road is banked by exactly the roll its node asks for —
+	/// cancelling the twist the curve picks up on its own.
+	///
+	/// <b>A curve that climbs and turns rolls even when nothing asked it to.</b> Godot carries a
+	/// frame along a <see cref="Curve3D"/> by transporting it from the start, and on a
+	/// three-dimensional path that transport accumulates torsion. Measured on the proving ground,
+	/// pieces whose seams were dead level and whose every tilt was zero arrived at their exits
+	/// banked by 27, 36 and 45 degrees. The marker reported no rotation and was telling the truth;
+	/// the road meeting it was rolled regardless, and the road is what the next tile butts against.
+	///
+	/// Tilt is applied <i>on top of</i> that transported frame, so the fix is to measure how far the
+	/// frame has drifted at each point and tilt by the difference. The drift is read with tilt
+	/// switched off, which makes it independent of what is being solved for — so one pass is exact
+	/// and there is nothing to iterate.
+	/// </summary>
+	private static void AlignTilts(Curve3D curve, float[] rolls)
+	{
+		float length = curve.GetBakedLength();
+		if (length < 0.01f)
+			return;
+
+		int last = curve.PointCount - 1;
+
+		for (var i = 0; i <= last; i++)
+		{
+			// The ends are known exactly; only the points between have to be found along the curve.
+			float offset = i == 0 ? 0.0f
+						 : i == last ? length
+						 : curve.GetClosestOffset(curve.GetPointPosition(i));
+
+			Vector3 forward = TangentAt(curve, offset, length);
+			if (forward.LengthSquared() < 1e-9f)
+				continue;
+
+			forward = forward.Normalized();
+
+			Vector3 right = forward.Cross(Vector3.Up);
+
+			// Running dead vertical: every roll looks the same and there is no horizon to measure
+			// against, so leave whatever the transport produced.
+			if (right.LengthSquared() < 1e-6f)
+				continue;
+
+			right = right.Normalized();
+
+			Vector3 natural = curve.SampleBakedUpVector(offset, applyTilt: false);
+			if (natural.LengthSquared() < 1e-9f)
+				continue;
+
+			natural = natural.Normalized();
+
+			// Where up should end up: vertical, squared against the direction of travel, then rolled
+			// by however far the node is banked.
+			Vector3 wanted = right.Cross(forward).Normalized().Rotated(forward, rolls[i]);
+
+			curve.SetPointTilt(i, Mathf.Atan2(forward.Dot(natural.Cross(wanted)),
+											  natural.Dot(wanted)));
+		}
+	}
+
+	/// <summary>The direction of travel a given distance along a curve.</summary>
+	private static Vector3 TangentAt(Curve3D curve, float offset, float length)
+	{
+		float epsilon = Mathf.Max(0.05f, length * 0.001f);
+
+		return curve.SampleBaked(Mathf.Min(length, offset + epsilon), cubic: true)
+			   - curve.SampleBaked(Mathf.Max(0.0f, offset - epsilon), cubic: true);
 	}
 
 	/// <summary>
