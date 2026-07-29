@@ -1,0 +1,23 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/tiles/tool/TrackPiece.cs" id="1_piece"]
+[ext_resource type="Resource" path="res://resources/tiles/road_flat.tres" id="2_profile"]
+
+[sub_resource type="Curve3D" id="Curve_straight"]
+up_vector_enabled = true
+_data = {
+"points": PackedVector3Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -108),
+"tilts": PackedFloat32Array(0, 0)
+}
+point_count = 2
+
+[node name="Straight" type="StaticBody3D"]
+script = ExtResource("1_piece")
+Profile = ExtResource("2_profile")
+SegmentLength = 27.0
+BankBlend = 0.25
+GenerateCollision = true
+Surface = "Road"
+
+[node name="Spine" type="Path3D" parent="."]
+curve = SubResource("Curve_straight")

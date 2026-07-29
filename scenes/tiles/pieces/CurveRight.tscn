@@ -1,0 +1,31 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/tiles/tool/TrackPiece.cs" id="1_piece"]
+[ext_resource type="Resource" path="res://resources/tiles/road_banked_right.tres" id="2_profile"]
+
+; A quarter turn to the right of 63 m radius — the catalog's CornerRadius, and the number the
+; profile's 60-degree lip was written against: a bank holds a car unaided at
+; v = sqrt(g * r * tan(theta)), which at 2 g and these two lands neutral just under TopSpeed.
+;
+; The arc is one cubic Bezier. Two control points with handles of 4/3 * tan(45/2) * r = 34.794 m
+; reproduce a quarter circle to well under a centimetre, which is far inside the width of the
+; paint. Entry sits at the origin heading -Z and the exit lands at (63, 0, -63) heading +X, which
+; is exactly what TrackAnchor.Swept folds onto the head for a right-hand quarter turn.
+[sub_resource type="Curve3D" id="Curve_right"]
+up_vector_enabled = true
+_data = {
+"points": PackedVector3Array(0, 0, 0, 0, 0, -34.7939, 0, 0, 0, -34.7939, 0, 0, 0, 0, 0, 63, 0, -63),
+"tilts": PackedFloat32Array(0, 0)
+}
+point_count = 2
+
+[node name="CurveRight" type="StaticBody3D"]
+script = ExtResource("1_piece")
+Profile = ExtResource("2_profile")
+SegmentLength = 8.0
+BankBlend = 0.25
+GenerateCollision = true
+Surface = "Road"
+
+[node name="Spine" type="Path3D" parent="."]
+curve = SubResource("Curve_right")

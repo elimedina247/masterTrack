@@ -227,6 +227,7 @@ public partial class PhysicsTestArea : Node3D
 		BuildBumpStrip();
 		BuildRaceTrack();
 		BuildStartLine();
+		BuildPieceChain();
 	}
 
 	/// <summary>Rows the tile layout needs to hold the whole catalog.</summary>
