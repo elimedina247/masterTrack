@@ -1,71 +1,39 @@
-[gd_scene load_steps=4 format=3]
+[gd_scene format=3 uid="uid://ckan3bs3ngtjm"]
 
-[ext_resource type="Script" path="res://scripts/tiles/tool/TrackPiece.cs" id="1_piece"]
+[ext_resource type="Script" uid="uid://crov4aijvusum" path="res://scripts/tiles/tool/TrackPiece.cs" id="1_piece"]
 [ext_resource type="Material" path="res://resources/tiles/road.tres" id="2_road"]
 
-; A parking-garage helix: one full turn to the right around a 54 m radius, climbing 36 m, coming
-; out directly above the entry and facing the same way. Which is exactly what a garage ramp does.
-;
-; WHY 54 m, AND WHY NOT TIGHTER
-;
-; 54 m is TileCatalog.HairpinRadius - the tightest corner the catalog has - and it is the floor
-; rather than a preference. The road is 54 m wide and centred on the arc, so its inside edge comes
-; out at 54 - 27 = 27 m. TileCatalog.CornerRadius notes that 27 m is already past what the car can
-; hold at speed. Going tighter puts the inside line beyond drivable, and the ramp becomes a wall
-; you scrape along instead of a corner you take.
-;
-; THE FOUR POINTS
-;
-; Centre of the arc is one radius to the RIGHT of Entry, at (54, 0, 0). Each quarter turn then
-; steps a radius forward and a radius right of wherever it was:
-;
-;     Entry   (0,   0,  0)    facing -Z
-;     90      (54,  9,  -54)  facing +X
-;     180     (108, 18, 0)    facing +Z
-;     270     (54,  27, 54)   facing -X
-;     Exit    (0,   36, 0)    facing -Z   <- back over the entry, one storey up
-;
-; The waypoints have to stay in this order in the scene tree, because that is the order the spine
-; is threaded through them.
-;
-; A full turn needs three waypoints. With fewer, the spine is a Bezier whose handles come from the
-; markers' facings, and it doubles back through itself rather than sweeping round - one per quarter
-; is what keeps it an arc.
-;
-; 36 m of climb is TileCatalog.HeightStep, one catalog cube, so this stacks with the ramps. Over
-; 339 m of arc that is about a 6 degree grade - gentle, because the radius is tight and the two
-; fight each other. Raise the climb if you want it steeper; the exit height is the only number that
-; has to move.
-;
-; The waypoints are left level. Rotate one in the viewport to bank the ramp - roll is the bank -
-; which at this radius it will want.
-[sub_resource type="Curve3D" id="Curve_helix"]
+[sub_resource type="Curve3D" id="Curve3D_v586k"]
+_data = {
+"points": PackedVector3Array(0, 0, 0, 0, 0, -25.632011, 0, 0, 0, -25.632011, 0, 0, 25.632011, 0, 0, 54, 9, -54, 0, 0, -25.632011, 0, 0, 25.632011, 108, 18, 0, 25.632011, 0, 0, -26.023567, 0, 0, 54, 27, 54, -0.17702407, 0, 26.022964, 0, 0, 0, -1.6599865, 36, 0),
+"tilts": PackedFloat32Array(0, 0, 0, 0, 0)
+}
+point_count = 5
 
-[node name="SpiralNew" type="StaticBody3D"]
+[node name="SpiralNew" type="StaticBody3D" unique_id=1454167745]
 script = ExtResource("1_piece")
 
-[node name="Entry" type="Marker3D" parent="."]
+[node name="Entry" type="Marker3D" parent="." unique_id=948170971]
 
-[node name="P090" type="Marker3D" parent="."]
+[node name="P090" type="Marker3D" parent="." unique_id=59424498]
 transform = Transform3D(0, 0, -1, 0, 1, 0, 1, 0, 0, 54, 9, -54)
 
-[node name="P180" type="Marker3D" parent="."]
+[node name="P180" type="Marker3D" parent="." unique_id=1516192826]
 transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 108, 18, 0)
 
-[node name="P270" type="Marker3D" parent="."]
+[node name="P270" type="Marker3D" parent="." unique_id=446194889]
 transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 54, 27, 54)
 
-[node name="Exit" type="Marker3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 36, 0)
+[node name="Exit" type="Marker3D" parent="." unique_id=705265451]
+transform = Transform3D(0.9999769, 0, -0.006802452, 0, 1, 0, 0.006802452, 0, 0.9999769, -1.6599865, 36, 0)
 
-[node name="Spine" type="Path3D" parent="."]
-curve = SubResource("Curve_helix")
+[node name="Spine" type="Path3D" parent="." unique_id=344803992]
+curve = SubResource("Curve3D_v586k")
 
-[node name="Build" type="CSGCombiner3D" parent="."]
+[node name="Build" type="CSGCombiner3D" parent="." unique_id=2046389553]
 use_collision = true
 
-[node name="Road" type="CSGPolygon3D" parent="Build"]
-material = ExtResource("2_road")
+[node name="Road" type="CSGPolygon3D" parent="Build" unique_id=1300188330]
 polygon = PackedVector2Array(-27, -1.6, 27, -1.6, 27, 2, 24.57, 2, 24.57, 0, -24.57, 0, -24.57, 2, -27, 2)
 mode = 2
 path_node = NodePath("../../Spine")
@@ -73,4 +41,9 @@ path_interval_type = 0
 path_interval = 6.0
 path_simplify_angle = 1.0
 path_rotation = 2
+path_rotation_accurate = false
+path_local = false
 path_continuous_u = true
+path_u_distance = 1.0
+path_joined = false
+material = ExtResource("2_road")

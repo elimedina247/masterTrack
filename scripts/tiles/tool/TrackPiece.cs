@@ -180,7 +180,7 @@ public partial class TrackPiece : StaticBody3D
 	/// Measured against the un-rolled frame: the up vector you would have if the same heading and
 	/// pitch carried no roll at all.
 	/// </summary>
-	private static float RollOf(Basis basis)
+	public static float RollOf(Basis basis)
 	{
 		Vector3 forward = (basis * Vector3.Forward).Normalized();
 		Vector3 up = (basis * Vector3.Up).Normalized();
@@ -512,6 +512,12 @@ public partial class TrackPiece : StaticBody3D
 		LevelSeams();
 		RebuildSpine();
 		UpdateConfigurationWarnings();
+
+		// The route gizmos draw off these nodes, and only the marker being dragged is refreshed
+		// automatically — the piece's own gizmo, and every other marker's, would show the old road.
+		UpdateGizmos();
+		foreach (Marker3D node in Route())
+			node.UpdateGizmos();
 	}
 
 	private int _seam;
@@ -543,7 +549,7 @@ public partial class TrackPiece : StaticBody3D
 	}
 
 	/// <summary>Entry, then the waypoints in tree order, then Exit — the road's whole route.</summary>
-	private IEnumerable<Marker3D> Route()
+	public IEnumerable<Marker3D> Route()
 	{
 		if (Entry is { } entry)
 			yield return entry;
