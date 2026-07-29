@@ -218,8 +218,11 @@ public partial class Game : Node3D
             if (child is not RacerController car)
                 continue;
 
-            PlacedTile? on = _track.Grid.TileAtWorld(car.GlobalPosition);
-            if (on?.Index == warnIndex)
+            // Which tile a car is standing on used to be a cell lookup. With the track off the
+            // grid there is no lattice to look it up in, and there does not need to be: the car
+            // already collides with exactly one TrackTile body, so the ground ray under it is a
+            // more accurate answer than a cell ever was.
+            if (car.CurrentTrackIndex == warnIndex)
                 car.ServerSendHazardWarning(trackIndex, (TileHazard)hazard);
         }
     }
@@ -229,8 +232,8 @@ public partial class Game : Node3D
     {
         Camera3D current = GetViewport().GetCamera3D();
         GD.Print($"[Game] Racers in tree: {_arena.Racers.GetChildCount()}. " +
-                 $"Track tiles: {_track.Grid.Count}, head {_track.Grid.HeadCell} " +
-                 $"heading {_track.Grid.HeadDirection.DisplayName()}. Current camera: " +
+                 $"Track tiles: {_track.Grid.Count}, head {_track.Grid.HeadAnchor.Position} " +
+                 $"yaw {Mathf.RadToDeg(_track.Grid.HeadAnchor.Yaw):0}deg. Current camera: " +
                  (current != null ? current.GetPath() : "<none>"));
     }
 

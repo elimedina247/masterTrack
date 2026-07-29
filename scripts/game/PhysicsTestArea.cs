@@ -320,14 +320,18 @@ public partial class PhysicsTestArea : Node3D
 
 			var tile = new TrackTile { Name = $"Tile_{definition.DisplayName.Replace(" ", "")}" };
 			_generated.AddChild(tile);
+
+			Vector3 world = TileCatalog.CellToWorld(cell);
+
 			// Facing north, so the run-up is from +Z — the same way a racer meets it in a match.
 			// Always from ground level: a ramp here climbs away from the pad rather than starting
 			// in the air, which is the only way to drive onto one from the tarmac.
-			tile.Initialize(definition.ToTileData(), i, cell, TrackDirection.North, entryHeight: 0);
+			tile.Initialize(definition.ToTileData(), i,
+							PlacedTile.AnchorFor(world, TrackDirection.North,
+												 TileCatalog.TileSize * 0.5f));
 
 			// On the near side of the tile rather than over its middle, so the label is readable
 			// from the run-up and is not buried inside a loop or a ramp.
-			Vector3 world = TileCatalog.CellToWorld(cell);
 			AddLabel(definition.DisplayName,
 					 world + new Vector3(0.0f, 6.0f, TileCatalog.TileSize * 0.7f), definition.Accent);
 		}

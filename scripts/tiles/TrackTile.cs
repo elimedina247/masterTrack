@@ -48,7 +48,7 @@ public partial class TrackTile : StaticBody3D
 
 	/// <summary>
 	/// Length of this tile in metres, along the direction of travel. A multiple of
-	/// <see cref="Size"/>, set from <see cref="TileData.CellLength"/> when the tile is built.
+	/// set from <see cref="TileData.RunLength"/> when the tile is built.
 	/// </summary>
 	public float Length { get; private set; } = Size;
 
@@ -62,11 +62,11 @@ public partial class TrackTile : StaticBody3D
 
 	public TileData Data { get; private set; } = new();
 
-	/// <summary>Direction a racer is travelling as they enter this tile.</summary>
-	public TrackDirection EntryDirection { get; private set; } = TrackDirection.North;
-
-	/// <summary>Elevation the racer enters at, in cubes. The tile sits at this height.</summary>
-	public int EntryHeight { get; private set; }
+	/// <summary>
+	/// The seam this tile was built onto: where the racer crosses into it and which way it runs.
+	/// Everything about where the tile sits in the world comes from this one value.
+	/// </summary>
+	public TrackAnchor EntryAnchor { get; private set; }
 
 	/// <summary>
 	/// Fired when the tile reaches its resting place — after the drop, not when it was spawned.
@@ -151,20 +151,16 @@ public partial class TrackTile : StaticBody3D
 	/// event to the racers driving toward it rather than track that was always there. Leave
 	/// them at zero and it simply exists, which is what the starting straight wants.
 	/// </summary>
-	public void Initialize(TileData data, int trackIndex, Vector2I cell, TrackDirection entryDirection,
-						   int entryHeight, bool isGhost = false, Color? ghostTint = null,
-						   float fallHeight = 0.0f, float fallSpeed = 0.0f)
+	public void Initialize(TileData data, int trackIndex, TrackAnchor anchor, bool isGhost = false,
+						   Color? ghostTint = null, float fallHeight = 0.0f, float fallSpeed = 0.0f)
 	{
 		Data = data;
 		TrackIndex = trackIndex;
-		EntryDirection = entryDirection;
-		EntryHeight = entryHeight;
-		// A hairpin is one cell per leg whatever its CellLength says, and a wide turn sweeps a
-		// square block rather than a straight run, so both anchor on their entry cell and build
-		// their footprint out from there. Only a tile that really is a straight run of cells is
-		// positioned by the middle of that run.
-		int runCells = data.IsHairpin || data.IsWideTurn ? 1 : data.CellLength;
-		Length = Size * runCells;
+		EntryAnchor = anchor;
+		// A turning tile builds its own arc and is anchored where that arc starts, so it reports one
+		// tile of Length purely so the positioning below puts its origin on the arc's centre of
+		// curvature line. Only a tile that really runs straight has a length worth the name.
+		Length = data.IsTurn ? Size : data.RunLength;
 		_isGhost = isGhost;
 		_ghostTint = ghostTint ?? Colors.White;
 
@@ -172,11 +168,12 @@ public partial class TrackTile : StaticBody3D
 		if (!isGhost)
 			AddToGroup(SurfaceGroups.Road);
 
-		// A long tile is positioned by its middle, not its entry cell, so the mesh straddles
-		// every cell the grid handed it — and at the height the racer arrives at, which is where
-		// a ramp's geometry starts climbing from.
-		Position = TileCatalog.SpanCenterToWorld(cell, entryDirection, runCells, entryHeight);
-		Rotation = new Vector3(0.0f, entryDirection.Yaw(), 0.0f);
+		// The anchor is the middle of the entry face and the geometry is built about the tile's own
+		// centre, so the mesh sits half its own length down the road from the seam. One line, and
+		// the same line for every tile in the catalog: a turn reports a single cell of Length, which
+		// puts its centre exactly where the grid used to put it.
+		Position = anchor.Position + anchor.Forward * (Length * 0.5f);
+		Rotation = new Vector3(0.0f, anchor.Yaw, 0.0f);
 
 		BuildGeometry();
 
@@ -282,7 +279,7 @@ public partial class TrackTile : StaticBody3D
 			return;
 		}
 
-		if (Data.IsWideTurn)
+		if (Data.IsTurn && !Data.IsHairpin)
 		{
 			BuildWideTurn(definition);
 			return;
@@ -325,9 +322,11 @@ public partial class TrackTile : StaticBody3D
 
 	/// <summary>
 	/// Whether the hazard paints its own markings instead of taking the centre line. True where a
-	/// stripe down the middle of the tile would be painted across thin air.
+	/// stripe down the middle of the tile would be painted across something that is not road —
+	/// thin air on a split, the runoff either side of a squiggle's ribbon.
 	/// </summary>
-	private bool DrawsOwnRacingLine => Data.Hazard == TileHazard.SplitTrack;
+	private bool DrawsOwnRacingLine
+		=> Data.Hazard is TileHazard.SplitTrack or TileHazard.Squiggle;
 
 	private void BuildWalls(TileDefinition definition, TrackDirection exitLocal)
 	{

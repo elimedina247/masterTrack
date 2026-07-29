@@ -7,38 +7,29 @@ namespace MasterTrack.Tiles;
 /// scratch instead of taking the floor-walls-line-hazard assembly the core partial offers.
 ///
 /// A tile ends up here when the standard assembly has nothing useful to say about it: it walls
-/// off the four edges of a flat straight run, so it cannot describe an L with both openings on
-/// one side (the hairpin), a road that is not level (the ramps) or one that leaves the ground
-/// altogether (the loop).
+/// off the four edges of a flat straight run and floors everything between them, so it cannot
+/// describe an L with both openings on one side (the hairpin), a road that is not level (the
+/// ramps) or one that leaves the ground altogether (the loop).
 /// </summary>
 public partial class TrackTile
 {
 	/// <summary>
-	/// Radius of a hairpin's arc, as a multiple of the tile. One tile means the U is two cells
-	/// across, which lands its exit on a cell face — see <see cref="BuildBankedArc"/> for why the
-	/// radius is not free.
-	///
-	/// It also sets what a hairpin asks of a driver, and the answer is now a question rather than a
-	/// toll. The inside of the U is 30 m and has to be crawled; the outside is 90 m and banked, and
-	/// a bank of that radius carries a car at about 200 km/h unaided. So the quick way round is the
-	/// long way round, held up on the wall — and getting it wrong up there drops you back down the
-	/// bank having lost everything.
+	/// A 180-degree banked U. Its radius and sweep come from <see cref="TileData.TurnRadius"/>, so
+	/// the geometry and the anchor chain that positions the next tile cannot disagree about the
+	/// shape of the same corner.
 	///
 	/// The old hairpin was two straight lanes with an apex wall between them. It could only ever be
 	/// driven one way: brake to nothing, turn, go. That is not a corner, it is a stop sign.
 	/// </summary>
-	private const float HairpinRadius = Size;
-
-	/// <summary>A 180-degree banked U. See <see cref="HairpinRadius"/>.</summary>
 	private void BuildHairpin(TileDefinition definition)
-		=> BuildBankedArc(definition, HairpinRadius, Mathf.Pi);
+		=> BuildBankedArc(definition, Data.TurnRadius, Data.TurnSweep);
 
 	/// <summary>
 	/// A quarter turn swept round a banked arc through a square block of cells. See
-	/// <see cref="TileData.IsWideTurn"/> for why a corner cannot live in one cell.
+	/// <see cref="TileData.TurnRadius"/> for what sets its radius.
 	/// </summary>
 	private void BuildWideTurn(TileDefinition definition)
-		=> BuildBankedArc(definition, (Data.TurnSpan - 0.5f) * Size, Mathf.Pi * 0.5f);
+		=> BuildBankedArc(definition, Data.TurnRadius, Data.TurnSweep);
 
 	// ---- Wide turns ----
 
@@ -268,6 +259,13 @@ public partial class TrackTile
 					   material);
 	}
 
+	/// <summary>
+	/// Width of a painted seam, matching the straight tiles' racing line. Named because a caller
+	/// that paints along the <i>edge</i> of a surface has to inset by half of it to keep the
+	/// stripe on the road — see <see cref="BuildSquiggle"/>.
+	/// </summary>
+	private const float SeamWidth = Size * 0.05f;
+
 	/// <summary>A painted stripe following a boundary across the banked surface. Mesh only.</summary>
 	private void AddTurnSeam(Vector3 near, Vector3 far, Vector3 outerNear, Vector3 outerFar,
 							 StandardMaterial3D material)
@@ -276,7 +274,7 @@ public partial class TrackTile
 						  out Basis basis, out _, out _, out float along))
 			return;
 
-		AddOrientedBox(new Vector3(Size * 0.05f, 0.02f, along * FacetOverlap),
+		AddOrientedBox(new Vector3(SeamWidth, 0.02f, along * FacetOverlap),
 					   new Transform3D(basis, (near + far) * 0.5f + basis.Y * 0.011f),
 					   material, collision: false);
 	}
@@ -349,7 +347,7 @@ public partial class TrackTile
 	private const float SlopeThickness = 1.6f;
 
 	/// <summary>
-	/// A climb or a descent, of one or two cubes over the tile's three cells.
+	/// A climb or a descent, of one or two cubes over the tile's two cells.
 	///
 	/// Built as facets along an eased profile rather than as one flat wedge. A constant slope would
 	/// meet the flat track at a hard kink — an 18-degree kerb at the bottom of the gentle version
@@ -381,7 +379,7 @@ public partial class TrackTile
 			// The tall climb gets a boost strip on its first facet, which is the only stretch of it
 			// shallow enough to still be a road. Without one the tile is only passable by a car that
 			// happened to arrive flat out, and a racer who met a hazard on the way in is left
-			// stalling halfway up an eighty metre hill with nowhere to turn around.
+			// stalling halfway up a seventy metre hill with nowhere to turn around.
 			if (i == 0 && Data.HeightChange >= 2)
 				AddClimbBoost(p0, p1);
 		}
@@ -458,7 +456,7 @@ public partial class TrackTile
 	/// most of the ramp — is a single plane at one angle.
 	///
 	/// With <see cref="RampBlend"/> at 0.22 the constant slope is <c>rise / (run × 0.78)</c>:
-	/// <b>23°</b> for a one-cube climb over three cells and <b>40°</b> for two. Both inside the
+	/// <b>23°</b> for a one-cube climb over two cells and <b>40°</b> for two cubes. Both inside the
 	/// range a car can actually drive up, and the two-cube climb no longer needs its boost strip
 	/// to be passable at all.
 	/// </summary>

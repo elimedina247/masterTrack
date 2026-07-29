@@ -28,10 +28,24 @@ namespace MasterTrack.Tiles;
 public partial class TrackController : Node3D
 {
     /// <summary>Cell the track starts from.</summary>
-    [Export] public Vector2I StartCell { get; set; } = new(0, 3);
+    /// <summary>
+    /// Where the first tile's entry face goes. The default reproduces where the old start cell put
+    /// it: three cells up the +Z axis, less the half cell the face sat back from the cell's centre.
+    /// </summary>
+    [Export] public Vector3 StartPosition { get; set; } = new(0.0f, 0.0f, 189.0f);
 
     /// <summary>Direction the track runs at the start line.</summary>
     [Export] public TrackDirection StartDirection { get; set; } = TrackDirection.North;
+
+    /// <summary>
+    /// The seam the first tile is laid onto, built from <see cref="StartPosition"/> and
+    /// <see cref="StartDirection"/>.
+    ///
+    /// A heading rather than a yaw in the inspector because the start line is the one place a person
+    /// still thinks in compass directions — a track is laid out north or south, not at -1.57
+    /// radians. Everything downstream of here is angles and metres.
+    /// </summary>
+    public TrackAnchor StartAnchor => new(StartPosition, StartDirection.Yaw());
 
     /// <summary>How many plain straights to lay down before the Track Master takes over.</summary>
     [Export] public int StartingStraightLength { get; set; } = 4;
@@ -174,8 +188,7 @@ public partial class TrackController : Node3D
     /// furthest tile. It climbs with the track, so a finish at the top of a ramp is up there too.
     /// </summary>
     public Vector3 FinishWorldPosition
-        => TileCatalog.CellToWorld(Grid.HeadCell, Grid.HeadHeight)
-           - Grid.HeadDirection.Forward() * (TileCatalog.TileSize * 0.5f);
+        => Grid.HeadAnchor.Position;
 
     /// <summary>
     /// How far past the bar still counts as having crossed it, in metres. Generous, because the
@@ -204,7 +217,7 @@ public partial class TrackController : Node3D
 
     private void BuildStartingTrack()
     {
-        Grid.BuildStartingStraight(StartCell, StartDirection, StartingStraightLength);
+        Grid.BuildStartingStraight(StartAnchor, StartingStraightLength);
         _condemnedThrough = -1;
 
         // No drop: the racers are already sitting on this straight, so it has to be under them
@@ -212,8 +225,8 @@ public partial class TrackController : Node3D
         foreach (PlacedTile tile in Grid.Tiles)
             SpawnTileNode(tile, drop: false);
 
-        GD.Print($"[Track] Start line at {StartCell} facing {StartDirection.DisplayName()}; "
-                 + $"{StartingStraightLength} starting tile(s), head now {Grid.HeadCell}.");
+        GD.Print($"[Track] Start line at {StartPosition} facing {StartDirection.DisplayName()}; "
+                 + $"{StartingStraightLength} starting tile(s), head now {Grid.HeadAnchor.Position}.");
 
         EmitSignal(SignalName.TrackHeadChanged);
     }
@@ -293,7 +306,7 @@ public partial class TrackController : Node3D
             return;
         }
 
-        if (!Grid.CanPlace(Grid.HeadCell, definition.ToTileData(), out string reason))
+        if (!Grid.CanPlace(definition.ToTileData(), out string reason))
         {
             GD.PushWarning($"[Track] Rejected {definition.DisplayName} from peer {senderId}: {reason}");
             return;
@@ -362,7 +375,7 @@ public partial class TrackController : Node3D
         if (_finish == null)
             return;
 
-        _finish.PlaceAt(FinishWorldPosition, Grid.HeadDirection);
+        _finish.PlaceAt(FinishWorldPosition, Grid.HeadAnchor.Yaw);
         _finish.SetFinal(AtTileLimit);
     }
 
@@ -402,8 +415,8 @@ public partial class TrackController : Node3D
         _finishSweepCountdown = FinishSweepInterval;
 
         Vector3 line = FinishWorldPosition;
-        Vector3 forward = Grid.HeadDirection.Forward();
-        Vector3 across = Grid.HeadDirection.Right();
+        Vector3 forward = Grid.HeadAnchor.Forward;
+        Vector3 across = Grid.HeadAnchor.Right;
 
         foreach (Node node in GetTree().GetNodesInGroup(RacerController.GroupName))
         {
@@ -644,7 +657,7 @@ public partial class TrackController : Node3D
         var node = new TrackTile { Name = TileNodeName(tile.Index) };
         // Added to the tree first so the geometry it builds enters the tree with it.
         AddChild(node);
-        node.Initialize(tile.Data, tile.Index, tile.Cell, tile.EntryDirection, tile.EntryHeight,
+        node.Initialize(tile.Data, tile.Index, tile.EntryAnchor,
                         fallHeight: drop ? TileFallHeight : 0.0f,
                         fallSpeed: TileFallSpeed);
     }
@@ -653,5 +666,6 @@ public partial class TrackController : Node3D
     /// World position at the centre of the next open cell, at the elevation the next tile will
     /// start from — so the board camera and the head marker climb with the track.
     /// </summary>
-    public Vector3 HeadWorldPosition => TileCatalog.CellToWorld(Grid.HeadCell, Grid.HeadHeight);
+    public Vector3 HeadWorldPosition
+        => Grid.HeadAnchor.Position + Grid.HeadAnchor.Forward * (TrackTile.Size * 0.5f);
 }

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Godot;
 
@@ -15,10 +16,14 @@ public sealed class TileDefinition
 	public int ExitTurn { get; init; }
 
 	/// <summary>
-	/// How many grid cells the tile runs for along the direction of travel. Only meaningful for
-	/// a tile that runs straight through — see <see cref="TileData.CellLength"/>.
+	/// How far the tile runs, in metres. Only meaningful for a tile that runs straight through —
+	/// see <see cref="TileData.RunLength"/>.
 	/// </summary>
-	public int CellLength { get; init; } = 1;
+	public float RunLength { get; init; } = TileCatalog.ShortRun;
+
+	/// <summary>Radius of the arc a turning tile sweeps, in metres. See
+	/// <see cref="TileData.TurnRadius"/>.</summary>
+	public float TurnRadius { get; init; }
 
 	/// <summary>
 	/// Cubes of elevation the tile gains, or loses if negative. See
@@ -37,90 +42,144 @@ public sealed class TileDefinition
 
 	/// <summary>
 	/// How often this tile comes up when the Track Master is dealt one. Relative to every other
-	/// weight, not a probability — though the catalog's currently add up to 100, so each one
-	/// happens to read as a percentage.
+	/// weight, not a probability — though the catalog's currently add up to about a hundred, so
+	/// each one reads near enough as a percentage.
 	/// </summary>
 	public required float Weight { get; init; }
 
-	public TileData ToTileData() => new(Hazard, ExitTurn, CellLength, HeightChange);
+	public TileData ToTileData() => new(Hazard, ExitTurn, RunLength, TurnRadius, HeightChange);
 }
 
 /// <summary>
 /// Every tile type in the game. The Track Master's hand is dealt from here, and the builder
 /// palette is built straight off this list — add an entry and it shows up in both.
 ///
-/// A tile is one cell wide but can run for several along the direction of travel — see
-/// <see cref="StraightCells"/>. Turning tiles are the exception and stay a single cell, because
-/// the turn is what the cell is for; a hairpin is two, one per quarter turn.
+/// A tile is one cell wide but can run for several along the direction of travel, and how many
+/// depends on whether its feature needs the distance: <see cref="LongRun"/> for the seven that do,
+/// <see cref="ShortRun"/> for everything else. Turns answer to neither and take their length from
+/// their radius — see <see cref="CornerRadius"/>.
 /// <see cref="TileHazard.LoopAhead"/> still isn't here — a loop needs vertical geometry, which
 /// the grid doesn't model.
 /// </summary>
 public static class TileCatalog
 {
 	/// <summary>
-	/// Width and depth of one tile, in metres. This is the single knob for the scale of the
-	/// whole board: everything that describes the track's footprint — tile geometry, the
-	/// builder's camera, the start line — is derived from it.
+	/// Width of the road, in metres.
 	///
-	/// Sized against what the car can actually do, which is the only thing a tile has to be
-	/// measured against. Every hazard's dimensions are car-scale metres (see <c>TrackTile</c>), so
-	/// a tile that is short relative to the car's speed makes each one either invisible or
-	/// unavoidable — there is no room in it to place the car.
+	/// <b>This used to be two things and is now one.</b> It was the road's width <i>and</i> the
+	/// grid's step, which is why every length and radius on the track quantised to it — tile lengths
+	/// only came in 54 m jumps, and a corner's radius could only ever be 27, 81 or 135 m. Splitting
+	/// the two apart is what <c>docs/track-without-a-grid.md</c> was about; what is left here is just
+	/// how wide the road is.
 	///
-	/// At 40 m it was sized for a 150 km/h car and the racer now does 200 flat and up to 360 on a
-	/// chained boost, which broke it in both directions at once. At 60 m:
+	/// Sized against what the car can actually do, which is the only thing a road has to be measured
+	/// against. Every hazard's dimensions are car-scale metres (see <c>TrackTile</c>), so a road
+	/// narrow relative to the car's speed makes each one either invisible or unavoidable — there is
+	/// no room across it to place the car.
 	///
-	/// - a three-cell straight is 180 m, so the hand supplies about 57 m/s of track against a
-	///   55.6 m/s top speed — the Track Master can hold their line against a clean driver and
-	///   loses ground only to someone chaining boosts, which is a thing the racer earned;
-	/// - a slalom asks 6.2 g of the tires rather than 9.2, against an 8.5 g <c>MaxGripForce</c>
-	///   cap — the difference between a weave and a wall;
-	/// - a launch pad's 135 m of flight lands back on a 180 m tile instead of past the end of it.
+	/// It is still the number every hazard's lateral budget is spent out of: a slalom asks 6.9 g of
+	/// the tires at this width against an 8.5 g <c>MaxGripForce</c> cap, and narrowing the road
+	/// raises that as one over the width. 54 m is close enough to the wall that it should move down
+	/// only with the slalom and the squiggle re-checked.
 	///
-	/// Ramp angles do not move, because <see cref="HeightStep"/> is this same number: slope is a
-	/// ratio, so it is scale-invariant. What does move is how far there is to fall off one.
-	///
-	/// It does <b>not</b> fix corners, and reaching for it to is the natural mistake. A one-cell
-	/// quarter turn's radius is always half the tile's <i>width</i>, whatever its length, so
-	/// holding one at top speed would need a 74 m tile and holding one at boosted speed a 240 m
-	/// tile. That is why turns have their own footprint — see <c>PlacedTile.CellsFor</c>.
+	/// The proving ground still lays its specimen tiles out on a lattice of this size, which is the
+	/// one place a grid is still the right tool — it is a display case, not a track.
 	/// </summary>
-	public const float TileSize = 60.0f;
+	public const float TileSize = 54.0f;
 
 	/// <summary>
-	/// How many cells a tile that runs straight through covers. Every non-turning tile is this
-	/// long, so a straight is a real stretch of road rather than a single cell: a hazard gets a
-	/// run-up and a run-out either side of it instead of arriving the moment the last one ended,
-	/// and the racers get room to fight over the line between hazards.
+	/// The long run: 162 m, for the seven tiles whose feature genuinely needs the distance. Each one
+	/// earns it for a reason that is checkable rather than a matter of taste:
 	///
-	/// Curves stay one cell — a corner is a quarter turn, and stretching it over three cells
-	/// would make it something else.
+	/// - <b>Launch Pads</b> throw the car 135 m. A shorter tile lands it on whatever comes next.
+	/// - <b>Jump</b> needs a run-up to pick a speed on and a run-out to land on. Its ramp is only
+	///   10 m, so this is the one tile where the empty road really is the mechanic.
+	/// - <b>Slalom</b> and <b>Squiggle</b> are lateral: cornering load goes as one over the
+	///   wavelength squared, so cutting a third off the tile is 2.25x the g. The slalom would ask
+	///   15.5 g of a car that has 8.5.
+	/// - <b>Whoops</b> spaces its ridges on the suspension's resonance, 21 m apart. Six of them
+	///   compound; four do not.
+	/// - <b>Split Track</b> is asking you to hold a line, and the length <i>is</i> the ask.
+	/// - <b>Loop</b> needs the run-up its boost pads sit on.
+	///
+	/// A number of metres now rather than a count of cells, so it can be any number at all. It
+	/// happens still to be 162 because that is what those seven tiles measured out at.
 	/// </summary>
-	public const int StraightCells = 3;
+	public const float LongRun = 162.0f;
 
 	/// <summary>
-	/// Cells on a side of the square block a quarter turn sweeps through. The turn's radius is
-	/// <c>(this - 0.5) x TileSize</c>, so 2 gives 90 m and 3 gives 150 m.
+	/// The short run: 108 m, and the default. Everything not on <see cref="LongRun"/> — the
+	/// straights and ramps that only move the track along, and every hazard that is a single feature
+	/// rather than a stretch of road.
 	///
-	/// A corner cannot be made to work by making the tile longer — see
-	/// <see cref="TileData.IsWideTurn"/> — and 90 m is the first radius the car can actually hold
-	/// at <c>TopSpeed</c> with something left over to drift with.
+	/// That second group is where the dead air was. A gap is a 14 m hole, a bottleneck a 19 m pinch,
+	/// a spinner a 46 m arm; on the long run each of those was under a third of its own tile and the
+	/// rest was transit.
+	///
+	/// <b>This is now genuinely adjustable.</b> While it was a cell count the only values available
+	/// were 108 and 162 with nothing between, which is why "40% shorter" came out at 33%. It can be
+	/// 97 if 97 is what plays best.
 	/// </summary>
-	public const int TurnCells = 2;
-
-	/// <summary>A long sweeper: the same corner at 150 m, taken flat out.</summary>
-	public const int SweeperCells = 3;
+	public const float ShortRun = 108.0f;
 
 	/// <summary>
-	/// One step of track elevation, in metres — a "cube", so a cell on its side. Ramps are the
-	/// only tiles that change height and they come in one- and two-cube versions, which over a
-	/// three-cell run works out to climbs of about 18 and 34 degrees.
+	/// Radius of a quarter turn, in metres.
 	///
-	/// Deliberately the same as <see cref="TileSize"/>: a cube of track is the unit the board
-	/// reads in, so height and length staying the same size is what lets the Track Master judge
-	/// a climb by eye from above.
+	/// <b>This number is a speed, and it is the one the bank was always written for.</b>
+	/// <c>TrackTile.TurnMaxBank</c> banks the outer lip at 60 degrees on the argument that a bank
+	/// holds a car with no help from the tires at exactly <c>v = sqrt(g x r x tan(theta))</c>, and
+	/// that the top of it should therefore be neutral right at <c>TopSpeed</c>. At the grid's 81 m
+	/// that landed at 218 km/h — the corner was over-radiused for its own bank, because 81 m was
+	/// simply the only legal value the cells offered. At 63 m it lands at <b>199 km/h against a
+	/// 200 km/h top speed</b>.
+	///
+	/// So tightening the corner did not compromise the bank, it delivered it. The corner also drops
+	/// from 127 m of arc to 99 — 2.5 seconds to 2.0 at racing speed — which is what was actually
+	/// asked for.
+	///
+	/// The floor is the car, not the geometry: holding <c>TopSpeed</c> at all takes 37 m, and there
+	/// wants to be enough over that to drift with. 63 m asks 5.0 g of the available 8.5.
 	/// </summary>
-	public const float HeightStep = TileSize;
+	public const float CornerRadius = 63.0f;
+
+	/// <summary>
+	/// And a sweeper's: a longer, faster corner meant to be taken flat out on the bank.
+	///
+	/// Cut from 135 m with the same change. At 135 the sweeper was 212 m of arc — 4.2 seconds, the
+	/// longest single tile in the game by a distance, and most of it spent holding one steady angle.
+	/// 99 m is 155 m of arc, still half as long again as a normal corner, which is enough for it to
+	/// read as a different kind of turn rather than just a slow one.
+	/// </summary>
+	public const float SweeperRadius = 99.0f;
+
+	/// <summary>
+	/// A hairpin's, unchanged at 54 m — the one corner radius the grid was not distorting.
+	///
+	/// It sets what a hairpin asks of a driver, and the answer is a question rather than a toll. The
+	/// inside of the U is 27 m and has to be crawled; the outside is 81 m and banked, and a bank of
+	/// that radius carries a car round unaided at about 190 km/h. So the quick way round is the long
+	/// way round, held up on the wall — and getting it wrong up there drops you back down the bank
+	/// having lost everything.
+	/// </summary>
+	public const float HairpinRadius = 54.0f;
+
+	/// <summary>
+	/// One step of track elevation, in metres. Ramps are the only tiles that change height and they
+	/// come in one- and two-cube versions, which over their <see cref="ShortRun"/> works out to
+	/// climbs of about 18 and 34 degrees.
+	///
+	/// <b>This has to move whenever a ramp's length does, because a slope is rise over run.</b> It
+	/// used to be <see cref="TileSize"/> exactly — a cube of track was a cell on its side, which is
+	/// a tidy thing for the Track Master to read a climb by from above — and that is what it cost
+	/// to shorten the ramps: two thirds of 54 is 36, which holds <c>36/108</c> equal to the old
+	/// <c>54/162</c> and lands both ramps on the same 18.4 and 33.7 degrees they already had. Left
+	/// at 54 the tall ramp would have been 45 degrees average and about 70 through the middle,
+	/// which is not a climb, it is a wall with a texture on it.
+	///
+	/// A cube being smaller than a cell also means the track climbs less far for the same tile, so
+	/// an elevated section is 36 m up rather than 54 — less far to fall, and less of a view.
+	/// </summary>
+	public const float HeightStep = 36.0f;
 
 	public static readonly IReadOnlyList<TileDefinition> All = new List<TileDefinition>
 	{
@@ -130,17 +189,22 @@ public static class TileCatalog
 		{
 			Hazard = TileHazard.Straight,
 			ExitTurn = 0,
-			CellLength = StraightCells,
+			RunLength = ShortRun,
 			DisplayName = "Straight",
 			Description = "A plain length of track. No hazard — good for building distance.",
 			Accent = new Color(0.70f, 0.74f, 0.80f),
-			Weight = 12.0f,
+			// Halved from 12. At 12 this was nearly an eighth of every draw, and a straight is the
+			// one tile with nothing in it: 108 m of held throttle, two seconds of the race where
+			// neither player has a decision to make. It still has to be the commonest tile — it is
+			// what the Track Master reaches for when they want distance rather than a trap — but it
+			// should not be the reason the track goes quiet.
+			Weight = 6.0f,
 		},
 		new()
 		{
 			Hazard = TileHazard.Curve,
 			ExitTurn = -1,
-			CellLength = TurnCells,
+			TurnRadius = CornerRadius,
 			DisplayName = "Curve Left",
 			Description = "A banked quarter turn to the left. Carry speed and the bank holds you "
 						  + "up it; arrive slow and high and you slide back down.",
@@ -151,7 +215,7 @@ public static class TileCatalog
 		{
 			Hazard = TileHazard.Curve,
 			ExitTurn = 1,
-			CellLength = TurnCells,
+			TurnRadius = CornerRadius,
 			DisplayName = "Curve Right",
 			Description = "A banked quarter turn to the right. Carry speed and the bank holds you "
 						  + "up it; arrive slow and high and you slide back down.",
@@ -162,9 +226,9 @@ public static class TileCatalog
 		{
 			Hazard = TileHazard.Curve,
 			ExitTurn = -1,
-			CellLength = SweeperCells,
+			TurnRadius = SweeperRadius,
 			DisplayName = "Sweeper Left",
-			Description = "A long banked left, 150 metres of radius. Flat out on the wall if you "
+			Description = "A long banked left, 135 metres of radius. Flat out on the wall if you "
 						  + "dare, and it eats a lot of board.",
 			Accent = new Color(0.10f, 0.72f, 0.95f),
 			Weight = 3.0f,
@@ -173,9 +237,9 @@ public static class TileCatalog
 		{
 			Hazard = TileHazard.Curve,
 			ExitTurn = 1,
-			CellLength = SweeperCells,
+			TurnRadius = SweeperRadius,
 			DisplayName = "Sweeper Right",
-			Description = "A long banked right, 150 metres of radius. Flat out on the wall if you "
+			Description = "A long banked right, 135 metres of radius. Flat out on the wall if you "
 						  + "dare, and it eats a lot of board.",
 			Accent = new Color(0.10f, 0.72f, 0.95f),
 			Weight = 3.0f,
@@ -186,6 +250,7 @@ public static class TileCatalog
 		{
 			Hazard = TileHazard.HairpinTurn,
 			ExitTurn = 2,
+			TurnRadius = HairpinRadius,
 			DisplayName = "Hairpin Right",
 			Description = "A 180-degree turn to the right. Two quarter turns in one tile — come "
 						  + "in fast and you will not make the apex.",
@@ -196,6 +261,7 @@ public static class TileCatalog
 		{
 			Hazard = TileHazard.HairpinTurn,
 			ExitTurn = -2,
+			TurnRadius = HairpinRadius,
 			DisplayName = "Hairpin Left",
 			Description = "A 180-degree turn to the left. Two quarter turns in one tile — come "
 						  + "in fast and you will not make the apex.",
@@ -209,7 +275,7 @@ public static class TileCatalog
 		{
 			Hazard = TileHazard.RampUp,
 			ExitTurn = 0,
-			CellLength = StraightCells,
+			RunLength = ShortRun,
 			HeightChange = 1,
 			DisplayName = "Ramp Up",
 			Description = "Climbs a cube. The track carries on at the new height until something "
@@ -221,10 +287,10 @@ public static class TileCatalog
 		{
 			Hazard = TileHazard.RampUp,
 			ExitTurn = 0,
-			CellLength = StraightCells,
+			RunLength = ShortRun,
 			HeightChange = 2,
 			DisplayName = "Tall Ramp Up",
-			Description = "Climbs two cubes over the same three cells, with a boost strip at the "
+			Description = "Climbs two cubes over the same two cells, with a boost strip at the "
 						  + "foot of it. Nothing gets up this on its own.",
 			Accent = new Color(0.15f, 0.90f, 0.30f),
 			Weight = 2.0f,
@@ -233,7 +299,7 @@ public static class TileCatalog
 		{
 			Hazard = TileHazard.RampDown,
 			ExitTurn = 0,
-			CellLength = StraightCells,
+			RunLength = ShortRun,
 			HeightChange = -1,
 			DisplayName = "Ramp Down",
 			Description = "Drops a cube. Only playable while the track is up in the air.",
@@ -244,7 +310,7 @@ public static class TileCatalog
 		{
 			Hazard = TileHazard.RampDown,
 			ExitTurn = 0,
-			CellLength = StraightCells,
+			RunLength = ShortRun,
 			HeightChange = -2,
 			DisplayName = "Tall Ramp Down",
 			Description = "Drops two cubes. Needs two cubes of height to drop from.",
@@ -255,7 +321,7 @@ public static class TileCatalog
 		{
 			Hazard = TileHazard.LoopAhead,
 			ExitTurn = 0,
-			CellLength = StraightCells,
+			RunLength = LongRun,
 			DisplayName = "Loop",
 			Description = "A full vertical loop with nothing underneath it. Boost pads feed the "
 						  + "one lane that leads up into it; miss them and you drop through.",
@@ -269,7 +335,7 @@ public static class TileCatalog
 		{
 			Hazard = TileHazard.JumpAhead,
 			ExitTurn = 0,
-			CellLength = StraightCells,
+			RunLength = LongRun,
 			DisplayName = "Jump",
 			Description = "A ramp that launches the racer into the air. Hit it too fast and you "
 						  + "overshoot.",
@@ -280,7 +346,7 @@ public static class TileCatalog
 		{
 			Hazard = TileHazard.Gap,
 			ExitTurn = 0,
-			CellLength = StraightCells,
+			RunLength = ShortRun,
 			DisplayName = "Gap",
 			Description = "A hole in the road. Carry enough speed to clear it or drop through.",
 			Accent = new Color(0.95f, 0.20f, 0.40f),
@@ -290,10 +356,10 @@ public static class TileCatalog
 		{
 			Hazard = TileHazard.SplitTrack,
 			ExitTurn = 0,
-			CellLength = StraightCells,
+			RunLength = LongRun,
 			DisplayName = "Split Track",
-			Description = "The middle of the road falls away. Pick a side and hold it for "
-						  + "seventy metres.",
+			Description = "The middle of the road falls away. Pick a side and hold it for a "
+						  + "hundred and twenty metres.",
 			Accent = new Color(0.32f, 0.38f, 0.52f),
 			Weight = 3.0f,
 		},
@@ -301,7 +367,7 @@ public static class TileCatalog
 		{
 			Hazard = TileHazard.Bottleneck,
 			ExitTurn = 0,
-			CellLength = StraightCells,
+			RunLength = ShortRun,
 			DisplayName = "Bottleneck",
 			Description = "The track pinches in, squeezing the racers together.",
 			Accent = new Color(1.00f, 0.20f, 0.85f),
@@ -311,7 +377,7 @@ public static class TileCatalog
 		{
 			Hazard = TileHazard.Slalom,
 			ExitTurn = 0,
-			CellLength = StraightCells,
+			RunLength = LongRun,
 			DisplayName = "Slalom",
 			Description = "Four gates, alternating sides. Nothing moves and nothing pushes back "
 						  + "— it just asks whether you can drive.",
@@ -320,9 +386,20 @@ public static class TileCatalog
 		},
 		new()
 		{
+			Hazard = TileHazard.Squiggle,
+			ExitTurn = 0,
+			RunLength = LongRun,
+			DisplayName = "Squiggle",
+			Description = "The road itself snakes, and it is dirt either side of it. Three bends "
+						  + "with no walls to lean on — lift, or run wide and lose everything.",
+			Accent = new Color(0.85f, 0.60f, 1.00f),
+			Weight = 5.0f,
+		},
+		new()
+		{
 			Hazard = TileHazard.Whoops,
 			ExitTurn = 0,
-			CellLength = StraightCells,
+			RunLength = LongRun,
 			DisplayName = "Whoops",
 			Description = "A washboard of ridges. Take them at the wrong speed and the car never "
 						  + "settles between them.",
@@ -333,7 +410,7 @@ public static class TileCatalog
 		{
 			Hazard = TileHazard.IcePatch,
 			ExitTurn = 0,
-			CellLength = StraightCells,
+			RunLength = ShortRun,
 			DisplayName = "Ice Patch",
 			Description = "Sheet ice across the middle. Almost no grip — do not be turning.",
 			Accent = new Color(0.45f, 0.92f, 1.00f),
@@ -343,7 +420,7 @@ public static class TileCatalog
 		{
 			Hazard = TileHazard.Gravel,
 			ExitTurn = 0,
-			CellLength = StraightCells,
+			RunLength = ShortRun,
 			DisplayName = "Gravel Bed",
 			Description = "Loose stuff across the middle. Little grip, and it drags the speed "
 						  + "out of you.",
@@ -354,7 +431,7 @@ public static class TileCatalog
 		{
 			Hazard = TileHazard.BoostPad,
 			ExitTurn = 0,
-			CellLength = StraightCells,
+			RunLength = ShortRun,
 			DisplayName = "Boost Pads",
 			Description = "Arrows that slam you down the track. The one tile in the hand that "
 						  + "helps.",
@@ -365,7 +442,7 @@ public static class TileCatalog
 		{
 			Hazard = TileHazard.LaunchPad,
 			ExitTurn = 0,
-			CellLength = StraightCells,
+			RunLength = LongRun,
 			DisplayName = "Launch Pads",
 			Description = "Three sprung pads, staggered. Whatever runs one over goes a very long "
 						  + "way up.",
@@ -376,7 +453,7 @@ public static class TileCatalog
 		{
 			Hazard = TileHazard.LogTrap,
 			ExitTurn = 0,
-			CellLength = StraightCells,
+			RunLength = ShortRun,
 			DisplayName = "Log Trap",
 			Description = "A log sweeping across the road, and no barriers to be shoved into. "
 						  + "Time it or be somewhere else.",
@@ -387,7 +464,7 @@ public static class TileCatalog
 		{
 			Hazard = TileHazard.Crusher,
 			ExitTurn = 0,
-			CellLength = StraightCells,
+			RunLength = ShortRun,
 			DisplayName = "Crushers",
 			Description = "Three pistons hammering the road out of step with each other. The way "
 						  + "through is a moving gap.",
@@ -398,7 +475,7 @@ public static class TileCatalog
 		{
 			Hazard = TileHazard.Spinner,
 			ExitTurn = 0,
-			CellLength = StraightCells,
+			RunLength = ShortRun,
 			DisplayName = "Spinner",
 			Description = "An arm sweeping the middle of the road like a clock hand. Follow it "
 						  + "through or wear it.",
@@ -419,6 +496,83 @@ public static class TileCatalog
 		foreach (TileDefinition definition in All)
 			total += definition.Weight;
 		return total;
+	}
+
+	/// <summary>
+	/// Every entry as placeable data, built once. Declared after <see cref="All"/> for the same
+	/// reason <see cref="TotalWeight"/> is.
+	///
+	/// <c>TrackGrid.Escapes</c> asks "what would still fit here" of the whole catalog every time a
+	/// placement is judged, and <see cref="TileDefinition.ToTileData"/> allocates a
+	/// <see cref="Resource"/> on each call. Twenty-six of those per keystroke is a lot of garbage
+	/// for a question whose answer never changes.
+	///
+	/// <b>Read-only by contract.</b> <see cref="TileData"/> has setters because it is also what
+	/// comes off the wire; nothing may write to one of these.
+	/// </summary>
+	public static readonly IReadOnlyList<TileData> AllAsData = BuildAllAsData();
+
+	private static IReadOnlyList<TileData> BuildAllAsData()
+	{
+		var data = new List<TileData>(All.Count);
+		foreach (TileDefinition definition in All)
+			data.Add(definition.ToTileData());
+		return data;
+	}
+
+	/// <summary>
+	/// The shared data for a catalog index, or null if the index is out of range. The read-only
+	/// counterpart to <see cref="At"/> — see <see cref="AllAsData"/> before holding on to one.
+	/// </summary>
+	public static TileData? DataAt(int index)
+		=> index >= 0 && index < AllAsData.Count ? AllAsData[index] : null;
+
+	/// <summary>
+	/// Pick a tile at random from a subset, respecting the weights <i>inside</i> that subset.
+	///
+	/// This is the anti-lock backstop. When nothing in the Track Master's hand can legally be
+	/// placed, the next deal is drawn from what can be rather than from the whole catalog. The
+	/// weights are renormalised across the survivors, so it stays a weighted draw rather than
+	/// collapsing to one fixed rescue tile — the hand is bailed out without becoming predictable.
+	///
+	/// If nothing at all passes <paramref name="allow"/> it falls back to an unfiltered draw.
+	/// <c>TrackGrid.MinimumEscapes</c> is supposed to make that unreachable, and if it ever is
+	/// reached, a hand holding a tile that explains why it cannot be placed is a better failure
+	/// than a hand with an empty slot and no explanation.
+	/// </summary>
+	public static int DrawIndex(RandomNumberGenerator rng, Func<int, bool> allow)
+	{
+		float total = 0.0f;
+		for (int i = 0; i < All.Count; i++)
+		{
+			if (allow(i))
+				total += All[i].Weight;
+		}
+
+		if (total <= 0.0f)
+			return DrawIndex(rng);
+
+		float subsetRoll = rng.Randf() * total;
+
+		for (int i = 0; i < All.Count; i++)
+		{
+			if (!allow(i))
+				continue;
+
+			subsetRoll -= All[i].Weight;
+			if (subsetRoll <= 0.0f)
+				return i;
+		}
+
+		// Only reachable if the roll lands past the end on floating point slop. Hand back the last
+		// allowed entry rather than the last entry, which might not be one.
+		for (int i = All.Count - 1; i >= 0; i--)
+		{
+			if (allow(i))
+				return i;
+		}
+
+		return All.Count - 1;
 	}
 
 	/// <summary>
@@ -453,19 +607,6 @@ public static class TileCatalog
 	public static Vector2I WorldToCell(Vector3 world)
 		=> new(Mathf.RoundToInt(world.X / TileSize), Mathf.RoundToInt(world.Z / TileSize));
 
-	/// <summary>
-	/// Centre of a tile that enters at <paramref name="entryCell"/> and runs
-	/// <paramref name="cellLength"/> cells on from there. An even-length tile centres between
-	/// two cells, which is fine — the tile is a mesh, not a cell.
-	/// </summary>
-	public static Vector3 SpanCenterToWorld(Vector2I entryCell, TrackDirection direction, int cellLength,
-											int heightCubes = 0)
-	{
-		Vector2I step = direction.Step();
-		float offset = (cellLength - 1) * 0.5f * TileSize;
-		return CellToWorld(entryCell, heightCubes) + new Vector3(step.X * offset, 0.0f, step.Y * offset);
-	}
-
 	/// <summary>Look a definition up by index, or null if the index is out of range.</summary>
 	public static TileDefinition? At(int index)
 		=> index >= 0 && index < All.Count ? All[index] : null;
@@ -485,7 +626,8 @@ public static class TileCatalog
 		{
 			if (definition.Hazard == data.Hazard
 				&& definition.ExitTurn == data.ExitTurn
-				&& definition.CellLength == data.CellLength
+				&& Mathf.IsEqualApprox(definition.RunLength, data.RunLength)
+				&& Mathf.IsEqualApprox(definition.TurnRadius, data.TurnRadius)
 				&& definition.HeightChange == data.HeightChange)
 				return definition;
 		}

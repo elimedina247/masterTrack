@@ -67,6 +67,9 @@ public enum TileHazard
 
     /// <summary>Loose gravel. Little grip and it drags the car down.</summary>
     Gravel,
+
+    /// <summary>A ribbon of road that snakes across the tile, with dirt runoff either side of it.</summary>
+    Squiggle,
 }
 
 public static class TileHazardExtensions
@@ -93,6 +96,7 @@ public static class TileHazardExtensions
         TileHazard.Slalom => "Slalom",
         TileHazard.Whoops => "Whoops",
         TileHazard.Gravel => "Gravel Bed",
+        TileHazard.Squiggle => "Squiggle",
         _ => hazard.ToString(),
     };
 }

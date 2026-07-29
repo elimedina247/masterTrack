@@ -4,6 +4,11 @@ using MasterTrack.Networking;
 using MasterTrack.Racer;
 using MasterTrack.Tiles;
 
+// Godot has a TileData of its own — TileMap's, nothing to do with ours. Inside MasterTrack.Tiles the
+// local declaration wins on its own; out here the two using directives are peers and the name is
+// ambiguous, so say which one this file means.
+using TileData = MasterTrack.Tiles.TileData;
+
 namespace MasterTrack.TrackMaster;
 
 /// <summary>
@@ -101,11 +106,22 @@ public partial class TrackMasterController : Node3D
 	[Export] public int StartingTiles { get; set; } = 3;
 
 	/// <summary>
-	/// Seconds between dealt tiles. This is the tap the whole role runs on: a leading racer
-	/// crosses a 40 m tile in about a second at speed, so anything much above that and the
-	/// track cannot be kept ahead of them from the hand alone.
+	/// Seconds between dealt tiles. This is the tap the whole role runs on, and it is bolted to
+	/// <see cref="TileCatalog.TileSize"/>: the average tile over this interval is the rate the
+	/// track grows at, and that rate has to beat the racer's <c>TopSpeed</c> or a clean driver
+	/// runs off the end of the road the hand can lay.
+	///
+	/// Weighted across the catalog a deal is now worth about 135 m — most tiles are 108, the seven
+	/// that need the room are 162, and corners are worth their arc rather than their footprint — so
+	/// 2.4 s supplies about 56 m/s against a 55.6 m/s top speed.
+	///
+	/// <b>That margin is nearly gone, and this is the number that runs out first.</b> Every metre
+	/// taken off a tile has to come back as a shorter interval, and the interval is bounded by a
+	/// human being reading a hand and clicking — not by anything that can be tuned. If the tiles get
+	/// shorter again, this is the wall, and the way past it is fewer tiles that carry nothing rather
+	/// than more tiles per second.
 	/// </summary>
-	[Export] public float DealInterval { get; set; } = 3.0f;
+	[Export] public float DealInterval { get; set; } = 2.4f;
 
 	/// <summary>Fraction of the current height added or removed per wheel notch.</summary>
 	[Export] public float ZoomStep { get; set; } = 0.12f;
@@ -314,7 +330,7 @@ public partial class TrackMasterController : Node3D
 
 		// Checked here as well as on the server so an illegal tile says why on the spot,
 		// rather than being silently dropped by the authority a round trip later.
-		if (!Track.Grid.CanPlace(Track.Grid.HeadCell, definition.ToTileData(), out string reason))
+		if (!Track.Grid.CanPlace(definition.ToTileData(), out string reason))
 		{
 			EmitSignal(SignalName.PreviewChanged, false, reason);
 			return;
@@ -363,7 +379,7 @@ public partial class TrackMasterController : Node3D
 	{
 		// No deal clock in free build — there is no hand to fill, and ticking one would be a
 		// countdown nobody is waiting on.
-		if (!FreeBuild && Hand.Tick((float)delta))
+		if (!FreeBuild && Hand.Tick((float)delta, IsPlaceable))
 			EmitSignal(SignalName.HandChanged);
 
 		if (CameraMode == BoardCameraMode.Follow)
@@ -691,7 +707,7 @@ public partial class TrackMasterController : Node3D
 
 		if (!Track.AtTileLimit)
 		{
-			valid = Track.Grid.CanPlace(Track.Grid.HeadCell, definition.ToTileData(), out string reason);
+			valid = Track.Grid.CanPlace(definition.ToTileData(), out string reason);
 			message = valid ? $"{definition.DisplayName} — click to place it." : reason;
 		}
 
@@ -699,8 +715,7 @@ public partial class TrackMasterController : Node3D
 
 		_ghost = new TrackTile { Name = "TileGhost" };
 		AddChild(_ghost);
-		_ghost.Initialize(definition.ToTileData(), -1, Track.Grid.HeadCell, Track.Grid.HeadDirection,
-						  Track.Grid.HeadHeight,
+		_ghost.Initialize(definition.ToTileData(), -1, Track.Grid.HeadAnchor,
 						  isGhost: true, ghostTint: valid ? ValidTint : InvalidTint);
 	}
 
@@ -721,10 +736,33 @@ public partial class TrackMasterController : Node3D
 			return;
 
 		_headMarker.Position = Track.HeadWorldPosition;
-		_headMarker.Rotation = new Vector3(0.0f, Track.Grid.HeadDirection.Yaw(), 0.0f);
+		_headMarker.Rotation = new Vector3(0.0f, Track.Grid.HeadAnchor.Yaw, 0.0f);
+
+		// The head moving is the only thing that changes which tiles are playable, so it is the
+		// only moment the hand can go dead. Rescue it here rather than on a timer: waiting out the
+		// deal interval would be a hundred metres of road with nothing being built onto it.
+		if (!FreeBuild && Hand.TopUp(IsPlaceable))
+			EmitSignal(SignalName.HandChanged);
 
 		// The head has moved out from under the ghost; put it back on the new one.
 		RefreshGhost();
+	}
+
+	/// <summary>
+	/// Whether a catalog tile could go on the track right now.
+	///
+	/// Handed to <see cref="TileHand"/> so it can keep at least one playable tile in front of the
+	/// Track Master. The hand deals cards and does not know what a track is; this is the whole of
+	/// what it needs to be told. Reads the shared <see cref="TileCatalog.DataAt"/> rather than
+	/// building a <c>TileData</c>, because the hand asks this of every slot it holds.
+	/// </summary>
+	private bool IsPlaceable(int catalogIndex)
+	{
+		if (Track == null || Track.AtTileLimit)
+			return false;
+
+		TileData? data = TileCatalog.DataAt(catalogIndex);
+		return data != null && Track.Grid.CanPlace(data, out _);
 	}
 
 	/// <summary>

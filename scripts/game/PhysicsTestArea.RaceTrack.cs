@@ -114,7 +114,10 @@ public partial class PhysicsTestArea
 	private void BuildRaceTrack()
 	{
 		var grid = new TrackGrid();
-		grid.Reset(RaceTrackStartCell, RaceTrackStartDirection);
+		grid.Reset(new TrackAnchor(
+			TileCatalog.CellToWorld(RaceTrackStartCell)
+			- RaceTrackStartDirection.Forward() * (TileCatalog.TileSize * 0.5f),
+			RaceTrackStartDirection.Yaw()));
 
 		foreach (string name in RaceTrackTiles)
 		{
@@ -131,7 +134,8 @@ public partial class PhysicsTestArea
 			PlacedTile? placed = grid.Place(definition.ToTileData());
 			if (placed == null)
 			{
-				GD.PushError($"[TestArea] The race track's {name} would not fit at {grid.HeadCell}.");
+				GD.PushError($"[TestArea] The race track's {name} would not fit at "
+							 + $"{grid.HeadAnchor.Position}.");
 				continue;
 			}
 
@@ -142,8 +146,7 @@ public partial class PhysicsTestArea
 			_generated.AddChild(tile);
 
 			// No drop: this track was always here, unlike one the Track Master is dealing out.
-			tile.Initialize(placed.Data, placed.Index, placed.Cell, placed.EntryDirection,
-							placed.EntryHeight);
+			tile.Initialize(placed.Data, placed.Index, placed.EntryAnchor);
 		}
 
 		WarnAboutTilesLeftOff();
@@ -206,7 +209,7 @@ public partial class PhysicsTestArea
 
 		// The head is the open cell past the last tile, at the height the track left off at, so
 		// the sign lands just beyond the end of the road rather than on top of the final tile.
-		AddLabel("Finish", TileCatalog.CellToWorld(grid.HeadCell, grid.HeadHeight)
+		AddLabel("Finish", grid.HeadAnchor.Position
 						   + new Vector3(0.0f, 8.0f, 0.0f), accent);
 	}
 }

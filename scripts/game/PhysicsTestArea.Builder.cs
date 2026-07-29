@@ -81,7 +81,8 @@ public partial class PhysicsTestArea
 		if (_track == null)
 			return;
 
-		_track.StartCell = BuildStartCell;
+		_track.StartPosition = TileCatalog.CellToWorld(BuildStartCell)
+							   - BuildStartDirection.Forward() * (TileCatalog.TileSize * 0.5f);
 		_track.StartDirection = BuildStartDirection;
 		_track.StartingStraightLength = 1;
 		_track.Authority = TrackController.BuildAuthority.Host;

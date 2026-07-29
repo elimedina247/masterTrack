@@ -68,13 +68,13 @@ public partial class FinishLine : Node3D
     }
 
     /// <summary>
-    /// Put the bar down across a cell boundary. <paramref name="facing"/> is the way the racers
+    /// Put the bar down across the end of the track. <paramref name="yaw"/> is the way the racers
     /// are travelling as they cross it, so the bar is laid at right angles to it.
     /// </summary>
-    public void PlaceAt(Vector3 world, TrackDirection facing)
+    public void PlaceAt(Vector3 world, float yaw)
     {
         Position = world;
-        Rotation = new Vector3(0.0f, facing.Yaw(), 0.0f);
+        Rotation = new Vector3(0.0f, yaw, 0.0f);
     }
 
     /// <summary>

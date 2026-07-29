@@ -6,123 +6,113 @@ namespace MasterTrack.Tiles;
 /// <summary>A tile that has been committed to the track.</summary>
 public sealed class PlacedTile
 {
-    /// <summary>The cell the racer enters through — the first of possibly several.</summary>
-    public required Vector2I Cell { get; init; }
-
-    /// <summary>Direction a racer is travelling as they enter this tile.</summary>
-    public required TrackDirection EntryDirection { get; init; }
-
     public required TileData Data { get; init; }
 
     /// <summary>Position along the track from the start line. Drives the "3 tiles ahead" warning.</summary>
     public required int Index { get; init; }
 
-    /// <summary>
-    /// Elevation the racer enters at, in cubes above the ground plane. The tile's geometry is
-    /// built from here, so a ramp starts at this height and ends at <see cref="ExitHeight"/>.
-    /// </summary>
-    public required int EntryHeight { get; init; }
-
-    /// <summary>Elevation the racer leaves at. Same as <see cref="EntryHeight"/> unless a ramp.</summary>
-    public int ExitHeight => EntryHeight + Data.HeightChange;
-
-    /// <summary>Direction a racer is travelling as they leave this tile.</summary>
-    public TrackDirection ExitDirection => EntryDirection.Turn(Data.ExitTurn);
+    /// <summary>The space this tile takes up. See <see cref="FootprintFor"/>.</summary>
+    public IEnumerable<TrackFootprint> Footprint => FootprintFor(EntryAnchor, Data);
 
     /// <summary>
-    /// The last cell the tile covers — the one the racer leaves through. Same as
-    /// <see cref="Cell"/> for a single-cell tile.
+    /// Where the racer crosses into this tile, in world space. The seam the track had reached when
+    /// this tile was placed onto it.
+    ///
+    /// Carried rather than derived from <see cref="Cell"/>, because from stage 2 this is the value
+    /// the track is actually built on and the cell is the approximation of it. See
+    /// <c>docs/track-without-a-grid.md</c>.
     /// </summary>
-    public Vector2I ExitCell => ExitCellFor(Cell, EntryDirection, Data);
+    public required TrackAnchor EntryAnchor { get; init; }
 
-    /// <summary>Every cell the tile covers, from the entry cell onward.</summary>
-    public IEnumerable<Vector2I> Cells => CellsFor(Cell, EntryDirection, Data);
+    /// <summary>Where they leave it — by definition the next tile's <see cref="EntryAnchor"/>.</summary>
+    public TrackAnchor ExitAnchor => ExitAnchorFor(EntryAnchor, Data);
 
     /// <summary>
-    /// The cells a tile would cover, entering <paramref name="entryCell"/> heading
-    /// <paramref name="entryDirection"/>. Two shapes:
+    /// An anchor built from a world position and a compass heading, positioned so the <i>middle</i>
+    /// of the first tile lands on <paramref name="at"/>.
     ///
-    /// A normal tile is a straight run of <see cref="TileData.CellLength"/> cells in the entry
-    /// direction; only its exit is allowed to turn, which is why a curve has to be a single cell.
-    ///
-    /// A hairpin is an L of exactly two cells — the entry cell, plus one to the side it swings
-    /// out to — and leaves through the second. That is the whole reason this is a footprint and
-    /// not a length: the hairpin is the one tile that steps off the line it came in on.
-    ///
-    /// Static so the legality check can ask the question before there is a tile to ask it of,
-    /// and so both answers come from the same place.
+    /// The track itself no longer thinks in headings — this is for the things that lay tiles out by
+    /// hand rather than by building a track: the proving ground's specimen grid, and the start of a
+    /// course. See <c>docs/track-without-a-grid.md</c>.
     /// </summary>
-    public static IEnumerable<Vector2I> CellsFor(Vector2I entryCell, TrackDirection entryDirection,
-                                                 TileData data)
+    public static TrackAnchor AnchorFor(Vector3 at, TrackDirection facing, float backOff)
+        => new(at - facing.Forward() * backOff, facing.Yaw());
+
+    /// <summary>
+    /// Facets an arc's footprint is chopped into per quarter turn. A quarter turn becomes three
+    /// boxes and a hairpin six, which is enough that the boxes hug the arc without the overlap test
+    /// having much to do.
+    ///
+    /// Boxes are rectangles and an arc is not, so each one is widened by the sagitta of the piece of
+    /// arc it stands in for — it over-reserves by about three metres at the default corner rather
+    /// than leaving a sliver of the road unclaimed. Over-reserving costs a placement the Track
+    /// Master might have got away with; under-reserving is track intersecting track.
+    /// </summary>
+    private const int ArcFacets = 3;
+
+    /// <summary>
+    /// The space a tile takes up: one box for anything that runs through, a fan of them round an
+    /// arc for anything that turns.
+    ///
+    /// This is what replaced the cell footprints, and it is a strictly tighter answer. A hairpin
+    /// reserved a three-by-two block of cells — six whole tiles of board — for a road that only ever
+    /// sweeps an annulus through it. Measuring the road itself lets the Track Master build the tight
+    /// serpentines the cells were refusing on a technicality.
+    /// </summary>
+    public static IEnumerable<TrackFootprint> FootprintFor(TrackAnchor entry, TileData data)
     {
-        yield return entryCell;
+        float width = TrackTile.Size;
 
-        if (data.IsHairpin)
+        if (!data.IsTurn)
         {
-            // Three cells across by two deep. The U's radius is one tile, so the road swings two
-            // cells out to bring the racer back down the other side, and bulges one cell past the
-            // entry row on its way round the apex.
-            Vector2I forward = entryDirection.Step();
-            Vector2I sideways = entryDirection.Turn(data.TurnSide).Step();
+            float length = data.RunLength;
+            float rise = data.HeightChange * TileCatalog.HeightStep;
+            Vector3 middle = entry.Position + entry.Forward * (length * 0.5f);
 
-            for (int i = 0; i < 2; i++)
-            {
-                for (int j = 0; j < 3; j++)
-                {
-                    if (i == 0 && j == 0)
-                        continue;
-
-                    yield return entryCell + forward * i + sideways * j;
-                }
-            }
+            yield return new TrackFootprint(
+                new Vector2(middle.X, middle.Z), width * 0.5f, length * 0.5f, entry.Yaw,
+                Mathf.Min(entry.Position.Y, entry.Position.Y + rise),
+                Mathf.Max(entry.Position.Y, entry.Position.Y + rise));
 
             yield break;
         }
 
-        if (data.IsWideTurn)
+        int facets = Mathf.Max(1, Mathf.RoundToInt(ArcFacets * data.TurnSweep / (Mathf.Pi * 0.5f)));
+        float step = data.TurnSweep / facets;
+
+        // Half the chord a facet spans, and how far the arc bulges past that chord. The box is
+        // grown by the bulge so the road never pokes out of its own footprint.
+        float halfChord = data.TurnRadius * Mathf.Sin(step * 0.5f);
+        float bulge = data.TurnRadius * (1.0f - Mathf.Cos(step * 0.5f));
+
+        TrackAnchor at = entry;
+        for (int i = 0; i < facets; i++)
         {
-            Vector2I ahead = entryDirection.Step();
-            Vector2I out_ = entryDirection.Turn(data.TurnSide).Step();
+            TrackAnchor next = at.Swept(data.TurnRadius, step, data.TurnSide);
+            Vector3 middle = (at.Position + next.Position) * 0.5f;
 
-            for (int i = 0; i < data.TurnSpan; i++)
-            {
-                for (int j = 0; j < data.TurnSpan; j++)
-                {
-                    if (i == 0 && j == 0)
-                        continue;
+            yield return new TrackFootprint(
+                new Vector2(middle.X, middle.Z), width * 0.5f + bulge, halfChord,
+                at.Yaw - data.TurnSide * step * 0.5f,
+                middle.Y, middle.Y);
 
-                    yield return entryCell + ahead * i + out_ * j;
-                }
-            }
-
-            yield break;
+            at = next;
         }
-
-        Vector2I step = entryDirection.Step();
-        for (int i = 1; i < data.CellLength; i++)
-            yield return entryCell + step * i;
     }
 
-    /// <summary>The cell such a tile would be left through. See <see cref="CellsFor"/>.</summary>
-    public static Vector2I ExitCellFor(Vector2I entryCell, TrackDirection entryDirection, TileData data)
-    {
-        // Two cells out to the side, back on the row it came in on: a U of one tile's radius is two
-        // tiles across, and it ends facing the way it arrived.
-        if (data.IsHairpin)
-            return entryCell + entryDirection.Turn(data.TurnSide).Step() * 2;
+    /// <summary>
+    /// Where a tile hands the track on, worked out from its entry anchor and its own shape rather
+    /// than by counting cells.
+    ///
+    /// This is the whole of what replaced the cell arithmetic. Two lines against its two
+    /// hand-written special cases, and nothing in here cares how big a cell is — the numbers it
+    /// reads are metres and radians.
+    /// </summary>
+    public static TrackAnchor ExitAnchorFor(TrackAnchor entry, TileData data)
+        => data.IsTurn
+            ? entry.Swept(data.TurnRadius, data.TurnSweep, data.TurnSide)
+            : entry.Advanced(data.RunLength, data.HeightChange * TileCatalog.HeightStep);
 
-        // The far corner of the block, diagonally opposite the entry cell — which is exactly where
-        // a quarter arc of radius (span - 0.5) x TileSize comes out. The block is square, so the
-        // step forward and the step out are the same count.
-        if (data.IsWideTurn)
-        {
-            return entryCell
-                   + (entryDirection.Step() + entryDirection.Turn(data.TurnSide).Step())
-                     * (data.TurnSpan - 1);
-        }
-
-        return entryCell + entryDirection.Step() * (data.CellLength - 1);
-    }
 }
 
 /// <summary>
@@ -134,15 +124,14 @@ public sealed class PlacedTile
 /// cell the leading racer is driving toward — which is what makes "place tiles ahead of the
 /// racers" the whole game rather than free-form building.
 ///
-/// A tile can cover more than one cell — see <see cref="PlacedTile.CellsFor"/> for the shapes.
-/// Every cell it covers maps back to the same <see cref="PlacedTile"/>, so asking which tile a
-/// car is on works the same whether it's standing on the front of a long straight, the middle of
-/// it, or the far side of a hairpin.
+/// Where a tile is, and how much room it takes up, are both answered in metres — see
+/// <see cref="PlacedTile.FootprintFor"/>. Nothing here quantises to anything, which is what lets a
+/// corner be 63 m of radius rather than the nearest legal multiple of a cell.
 ///
-/// The track also has elevation: <see cref="HeadHeight"/> is a running count of cubes climbed,
-/// which ramps move up and down. Cells stay two-dimensional even so, because two tiles are never
-/// allowed to share a cell whatever height they are at — the track may climb over its own
-/// neighbourhood but never over itself, which keeps "which tile is this car on" a flat lookup.
+/// Elevation is part of that answer rather than beside it: a footprint carries the band of height it
+/// sweeps, so the track is allowed to cross over itself given enough clearance. Under the old cell
+/// model it could climb over its own neighbourhood but never over itself, because a cell could only
+/// be taken or free.
 ///
 /// The back of the track crumbles away as the front grows — see <see cref="RetireThrough"/>. A
 /// retired tile stops being road, but it is never taken out of <see cref="_ordered"/>: a tile's
@@ -151,8 +140,44 @@ public sealed class PlacedTile
 /// </summary>
 public sealed class TrackGrid
 {
-    private readonly Dictionary<Vector2I, PlacedTile> _byCell = new();
     private readonly List<PlacedTile> _ordered = new();
+
+    /// <summary>
+    /// Every box of road on the track, in the order it was laid. What "is there room" is now asked
+    /// of, in place of the old dictionary of occupied cells.
+    ///
+    /// A list rather than a set, because the order carries meaning: the last entry is the box the
+    /// next tile butts against, and a joint is not a collision. See <see cref="LiveBoxes"/>.
+    /// </summary>
+    private readonly List<TrackFootprint> _boxes = new();
+
+    /// <summary>Index into <see cref="_boxes"/> of the oldest box still standing.</summary>
+    private int _retiredBoxes;
+
+    /// <summary>
+    /// Boxes belonging to the placement currently being judged. The tile is not committed, but a
+    /// follow-up that doubled back through it is not really an escape, so the lookahead has to see
+    /// it. Cleared by whoever fills it.
+    /// </summary>
+    private readonly List<TrackFootprint> _pendingBoxes = new();
+
+    /// <summary>
+    /// Side of a broadphase bucket, in metres. Comfortably larger than the longest tile so a box
+    /// never spans more than a couple of buckets in each axis.
+    ///
+    /// This exists because the anti-lock check is quadratic in the catalog — <see cref="Escapes"/>
+    /// tries 26 tiles, and the fallback in <see cref="CanPlace"/> can try 26 more — so a linear scan
+    /// of a long track's boxes would be hundreds of thousands of tests every time the Track Master
+    /// moved the mouse. Bucketing turns the inner loop into "the handful of boxes actually near
+    /// here".
+    /// </summary>
+    private const float BucketSize = 128.0f;
+
+    /// <summary>Slack on the "not below ground" test, so a track sitting exactly on the ground plane
+    /// is not refused by a float that landed a millionth under it.</summary>
+    private const float GroundEpsilon = 0.01f;
+
+    private readonly Dictionary<Vector2I, List<int>> _buckets = new();
 
     /// <summary>
     /// How many tiles have crumbled off the back. They stay in <see cref="_ordered"/> to keep the
@@ -160,18 +185,22 @@ public sealed class TrackGrid
     /// </summary>
     private int _retired;
 
-    /// <summary>The open cell the next tile goes in.</summary>
-    public Vector2I HeadCell { get; private set; }
-
-    /// <summary>Direction a racer will be travelling when they enter <see cref="HeadCell"/>.</summary>
-    public TrackDirection HeadDirection { get; private set; } = TrackDirection.North;
+    /// <summary>
+    /// The seam the next tile attaches to, and <b>the authoritative answer to where the track ends</b>.
+    ///
+    /// Carried rather than derived: it is advanced by folding each placed tile's own exit transform
+    /// onto it, so nothing about where the track goes is a multiple of a cell any more. The cells
+    /// are still kept, and still answer "is there room" — but they no longer decide where anything
+    /// is. See <c>docs/track-without-a-grid.md</c>.
+    /// </summary>
+    public TrackAnchor HeadAnchor { get; private set; }
 
     /// <summary>
-    /// Elevation the next tile starts at, in cubes. Runs up and down as ramps are placed, and is
-    /// never allowed below 0 — the ground plane is the floor of the world, and a track that dug
+    /// Height the next tile starts at, in metres. Runs up and down as ramps are placed, and is never
+    /// allowed below zero — the ground plane is the floor of the world, and a track that dug
     /// underneath it would leave the racers driving through the dark.
     /// </summary>
-    public int HeadHeight { get; private set; }
+    public float HeadHeight => HeadAnchor.Position.Y;
 
     /// <summary>
     /// Tiles in track order, from the start line onward — including the ones that have already
@@ -189,14 +218,15 @@ public sealed class TrackGrid
     public int OldestLiveIndex => _retired;
 
     /// <summary>Clear the track and start a new one at the given cell and heading.</summary>
-    public void Reset(Vector2I startCell, TrackDirection startDirection)
+    public void Reset(TrackAnchor start)
     {
-        _byCell.Clear();
         _ordered.Clear();
+        _boxes.Clear();
+        _buckets.Clear();
+        _pendingBoxes.Clear();
         _retired = 0;
-        HeadCell = startCell;
-        HeadDirection = startDirection;
-        HeadHeight = 0;
+        _retiredBoxes = 0;
+        HeadAnchor = start;
     }
 
     /// <summary>
@@ -215,59 +245,70 @@ public sealed class TrackGrid
     {
         while (_retired <= index && _retired < _ordered.Count)
         {
-            foreach (Vector2I cell in _ordered[_retired].Cells)
-                _byCell.Remove(cell);
+            // Boxes are laid in the same order as tiles, so retiring a tile is advancing the
+            // watermark past however many boxes it contributed. They stay in the list to keep the
+            // bucket indices stable, exactly as retired tiles stay in _ordered.
+            foreach (TrackFootprint _ in _ordered[_retired].Footprint)
+                _retiredBoxes++;
+
             _retired++;
         }
     }
 
-    public PlacedTile? TileAt(Vector2I cell)
-        => _byCell.TryGetValue(cell, out PlacedTile? tile) ? tile : null;
-
-    /// <summary>Track index of the tile in a cell, or -1 if that cell is empty.</summary>
-    public int IndexAt(Vector2I cell) => TileAt(cell)?.Index ?? -1;
-
-    public PlacedTile? TileAtIndex(int index)
-        => index >= 0 && index < _ordered.Count ? _ordered[index] : null;
+    /// <summary>
+    /// How many catalog tiles should still be placeable at the head a placement would leave behind.
+    ///
+    /// This steers the Track Master away from building into a corner they cannot get out of, which
+    /// matters because a dead end is the one failure nothing recovers from. A hand full of tiles
+    /// that happen not to fit is fixed by the next deal (see <c>TileHand.TopUp</c>); a head with
+    /// nowhere to go is fixed by nothing — <c>TrackController.AllowUndo</c> is off in a match on
+    /// purpose — and the racers drive off the end of the track.
+    ///
+    /// <b>It is a heuristic, not a proof, and the difference is worth being precise about.</b> One
+    /// step of lookahead can guarantee that this many tiles <i>fit</i> at the next head. It cannot
+    /// guarantee that any of them leaves a head with the same property — safety in this game is
+    /// "an infinite sequence of placements exists", which is a greatest fixpoint and not decidable
+    /// at any fixed depth. Simulated against 120 random 50-tile tracks, the check takes true dead
+    /// ends from 91 to 24. It does not take them to zero, and no amount of raising it will.
+    ///
+    /// Zero needs a tile that fits <i>everywhere</i>, and on a 2-D grid there is no such thing — a
+    /// fully enclosed head has room for nothing. It needs the track to be allowed to climb over
+    /// itself with vertical clearance, which this grid cannot express and the transform model can.
+    /// See <c>docs/track-without-a-grid.md</c>.
+    ///
+    /// Higher steers away from pockets earlier at the cost of pruning more; the measured difference
+    /// between 1, 3 and 6 is small, and 3 prunes about 3% of otherwise-legal placements. It is a
+    /// feel setting — tune it by trying to build a spiral on purpose.
+    /// </summary>
+    public const int MinimumEscapes = 3;
 
     /// <summary>
-    /// Whether a tile could legally go in a cell. The only legal cell is the head, every cell of
-    /// the tile's footprint has to be clear — a long straight needs the room to lie down in, and
-    /// a hairpin needs the room to swing out into — and the tile also has to lead somewhere, so
-    /// a piece that would send the track straight back into itself is rejected rather than
-    /// creating a dead end.
+    /// Whether a tile would physically go here: nothing already on the track is in the way, and it
+    /// does not dig underground.
+    ///
+    /// Deliberately does <b>not</b> ask whether anything could follow it. That is
+    /// <see cref="CanPlace"/>'s job and it calls this to answer it, so keeping the two apart is
+    /// what stops the lookahead recursing.
+    ///
+    /// Takes the anchor rather than reading the head off the grid, because <see cref="Escapes"/>
+    /// asks this question about a head that does not exist yet.
     /// </summary>
-    public bool CanPlace(Vector2I cell, TileData data, out string reason)
+    public bool Fits(TrackAnchor anchor, TileData data, out string reason)
     {
-        if (cell != HeadCell)
+        if (anchor.Position.Y + data.HeightChange * TileCatalog.HeightStep < -GroundEpsilon)
         {
-            reason = "Tiles can only be added to the end of the track.";
+            reason = "The track is already on the ground — it can't go down from here.";
             return false;
         }
 
-        foreach (Vector2I occupied in PlacedTile.CellsFor(cell, HeadDirection, data))
+        foreach (TrackFootprint box in PlacedTile.FootprintFor(anchor, data))
         {
-            if (!_byCell.ContainsKey(occupied))
+            if (!Blocked(box))
                 continue;
 
             reason = data.IsHairpin ? "There isn't room to swing the hairpin round."
-                   : data.IsWideTurn ? "There isn't room to sweep the corner round."
-                   : data.CellLength > 1 ? "There isn't room for a tile that long."
-                   : "That cell already has a tile.";
-            return false;
-        }
-
-        Vector2I exitCell = PlacedTile.ExitCellFor(cell, HeadDirection, data)
-                            + HeadDirection.Turn(data.ExitTurn).Step();
-        if (_byCell.ContainsKey(exitCell))
-        {
-            reason = "That would run the track back into itself.";
-            return false;
-        }
-
-        if (HeadHeight + data.HeightChange < 0)
-        {
-            reason = "The track is already on the ground — it can't go down from here.";
+                   : data.IsTurn ? "There isn't room to sweep the corner round."
+                   : "There isn't room for a tile that long.";
             return false;
         }
 
@@ -276,34 +317,218 @@ public sealed class TrackGrid
     }
 
     /// <summary>
+    /// How many boxes at the end of the track a candidate is allowed to sit on top of.
+    ///
+    /// A joint is not a collision, and it costs more than one box to say so. A corner's first facet
+    /// is yawed relative to the seam it leaves, so its rear corners genuinely swing back past the
+    /// joint — measured against every pair in the catalog, the deepest reach is a hairpin's, whose
+    /// 30-degree facets are short enough that the next tile's first box overlaps <i>two</i> of them.
+    ///
+    /// <b>Two is the measured floor, and it is also the ceiling.</b> At one, geometry refuses four
+    /// pairs the cells allowed — hairpin into a same-side corner, which is legal and looks it. At
+    /// three it catches nothing extra. And it is safely short of hiding a real collision: two
+    /// hairpins in a row genuinely do loop back through each other, and are still caught here,
+    /// because the intrusion reaches facets nowhere near the seam.
+    /// </summary>
+    private const int JointBoxes = 2;
+
+    /// <summary>
+    /// Whether a box of road runs into track that is already there.
+    ///
+    /// The last <see cref="JointBoxes"/> boxes of the track are exempt — counting the pending
+    /// placement as part of the track, so the exemption lands in the same place whether this is a
+    /// real placement being judged or a hypothetical one inside <see cref="Escapes"/>.
+    /// </summary>
+    private bool Blocked(TrackFootprint box)
+    {
+        int exemptLive = Mathf.Max(0, JointBoxes - _pendingBoxes.Count);
+        int liveLimit = _boxes.Count - exemptLive;
+
+        foreach (int i in Nearby(box))
+        {
+            if (i < liveLimit && box.Overlaps(_boxes[i]))
+                return true;
+        }
+
+        for (int i = 0; i < _pendingBoxes.Count - JointBoxes; i++)
+        {
+            if (box.Overlaps(_pendingBoxes[i]))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Indices of the live boxes whose bucket a box reaches into. A superset of what it can touch,
+    /// which is all a broadphase owes the test that follows it.
+    /// </summary>
+    private IEnumerable<int> Nearby(TrackFootprint box)
+    {
+        float reach = box.BoundingRadius;
+        var low = new Vector2I(Mathf.FloorToInt((box.Center.X - reach) / BucketSize),
+                               Mathf.FloorToInt((box.Center.Y - reach) / BucketSize));
+        var high = new Vector2I(Mathf.FloorToInt((box.Center.X + reach) / BucketSize),
+                                Mathf.FloorToInt((box.Center.Y + reach) / BucketSize));
+
+        for (int x = low.X; x <= high.X; x++)
+        {
+            for (int y = low.Y; y <= high.Y; y++)
+            {
+                if (!_buckets.TryGetValue(new Vector2I(x, y), out List<int>? bucket))
+                    continue;
+
+                foreach (int i in bucket)
+                {
+                    if (i >= _retiredBoxes)
+                        yield return i;
+                }
+            }
+        }
+    }
+
+    /// <summary>Throw the broadphase away and file every box again. See <see cref="RemoveLast"/>.</summary>
+    private void RebuildBuckets()
+    {
+        _buckets.Clear();
+        for (int i = 0; i < _boxes.Count; i++)
+            Bucket(_boxes[i], i);
+    }
+
+    /// <summary>File a box into every bucket it reaches into, so <see cref="Nearby"/> can find it.</summary>
+    private void Bucket(TrackFootprint box, int index)
+    {
+        float reach = box.BoundingRadius;
+        int lowX = Mathf.FloorToInt((box.Center.X - reach) / BucketSize);
+        int highX = Mathf.FloorToInt((box.Center.X + reach) / BucketSize);
+        int lowY = Mathf.FloorToInt((box.Center.Y - reach) / BucketSize);
+        int highY = Mathf.FloorToInt((box.Center.Y + reach) / BucketSize);
+
+        for (int x = lowX; x <= highX; x++)
+        {
+            for (int y = lowY; y <= highY; y++)
+            {
+                var key = new Vector2I(x, y);
+                if (!_buckets.TryGetValue(key, out List<int>? bucket))
+                    _buckets[key] = bucket = new List<int>();
+
+                bucket.Add(index);
+            }
+        }
+    }
+
+    /// <summary>
+    /// How many catalog tiles would fit at a head. What <see cref="MinimumEscapes"/> is read
+    /// against, and the measurement that makes a dead end rare rather than routine.
+    /// </summary>
+    public int Escapes(TrackAnchor anchor)
+    {
+        int count = 0;
+        foreach (TileData data in TileCatalog.AllAsData)
+        {
+            if (Fits(anchor, data, out _))
+                count++;
+        }
+
+        return count;
+    }
+
+    /// <summary>Catalog tiles that would fit at the head as it stands right now.</summary>
+    public int EscapesAtHead => Escapes(HeadAnchor);
+
+    /// <summary>
+    /// Whether a tile could legally go on the end of the track: it has to fit there, and — the part
+    /// that is not obvious — the head it would leave behind should still have somewhere to go. See
+    /// <see cref="MinimumEscapes"/>.
+    ///
+    /// That last check generalises one the grid used to have. "Would run the track back into itself"
+    /// looked at the single cell past the exit and rejected the placement if it was taken, which is
+    /// this same idea at a depth of one cell. It was never enough, because tiles are longer than one
+    /// cell: a free cell ahead says nothing about whether any tile fits in front of it.
+    ///
+    /// <b>The threshold is advisory, and that is deliberate.</b> It prunes a placement only while
+    /// some other tile in the catalog would clear the bar. Enforced strictly it becomes the thing it
+    /// was written to prevent: refusing the last option left is a lock, and one the player cannot
+    /// even see the cause of. So when nothing clears it, the rule stands down and the move goes
+    /// through.
+    /// </summary>
+    public bool CanPlace(TileData data, out string reason)
+    {
+        if (!Fits(HeadAnchor, data, out reason))
+            return false;
+
+        if (EscapesAfter(data) >= MinimumEscapes)
+        {
+            reason = "";
+            return true;
+        }
+
+        foreach (TileData alternative in TileCatalog.AllAsData)
+        {
+            if (ReferenceEquals(alternative, data)
+                || !Fits(HeadAnchor, alternative, out _)
+                || EscapesAfter(alternative) < MinimumEscapes)
+                continue;
+
+            // There is a better move on the board, so this one can be turned down.
+            reason = "That would leave the track nowhere to go.";
+            return false;
+        }
+
+        // Nothing clears the bar. Let it through rather than blocking the builder outright.
+        reason = "";
+        return true;
+    }
+
+    /// <summary>
+    /// <see cref="Escapes"/> at the head a tile would leave behind.
+    ///
+    /// The tile being judged is not on the track yet, so its boxes are staged in
+    /// <see cref="_pendingBoxes"/> for the length of the question — otherwise a follow-up that
+    /// doubled back through it would be counted as an escape that does not exist.
+    /// </summary>
+    private int EscapesAfter(TileData data)
+    {
+        _pendingBoxes.Clear();
+        _pendingBoxes.AddRange(PlacedTile.FootprintFor(HeadAnchor, data));
+
+        int escapes = Escapes(PlacedTile.ExitAnchorFor(HeadAnchor, data));
+
+        _pendingBoxes.Clear();
+        return escapes;
+    }
+
+    /// <summary>
     /// Commit a tile at the head and advance the head to the cell it leads into — which for a
     /// long tile is several cells on, not one. Returns null if the placement wasn't legal.
     /// </summary>
     public PlacedTile? Place(TileData data)
     {
-        if (!CanPlace(HeadCell, data, out string reason))
+        if (!CanPlace(data, out string reason))
         {
-            GD.PushWarning($"[TrackGrid] Rejected placement at {HeadCell}: {reason}");
+            GD.PushWarning($"[TrackGrid] Rejected placement at {HeadAnchor.Position}: {reason}");
             return null;
         }
 
         var tile = new PlacedTile
         {
-            Cell = HeadCell,
-            EntryDirection = HeadDirection,
             Data = data,
             Index = _ordered.Count,
-            EntryHeight = HeadHeight,
+            EntryAnchor = HeadAnchor,
         };
 
-        foreach (Vector2I occupied in tile.Cells)
-            _byCell[occupied] = tile;
+        foreach (TrackFootprint box in tile.Footprint)
+        {
+            Bucket(box, _boxes.Count);
+            _boxes.Add(box);
+        }
+
         _ordered.Add(tile);
 
-        HeadDirection = tile.ExitDirection;
-        HeadCell = tile.ExitCell + HeadDirection.Step();
-        HeadHeight = tile.ExitHeight;
-
+        // The head moves by folding the tile's own exit transform onto the seam it was placed at.
+        // This is the line the whole migration was for: it reads the tile's length and radius in
+        // metres, and there is nothing left for it to disagree with.
+        HeadAnchor = tile.ExitAnchor;
         return tile;
     }
 
@@ -331,12 +556,16 @@ public sealed class TrackGrid
         PlacedTile last = _ordered[^1];
         _ordered.RemoveAt(_ordered.Count - 1);
 
-        foreach (Vector2I cell in last.Cells)
-            _byCell.Remove(cell);
+        // Undo is the only thing that shortens the box list, and it can only ever take from the
+        // end, so the bucket indices below the watermark stay valid. The buckets are rebuilt rather
+        // than picked through: undo is a lobby action on a track of a few dozen tiles, and a correct
+        // rebuild is worth more than a clever removal.
+        foreach (TrackFootprint _ in last.Footprint)
+            _boxes.RemoveAt(_boxes.Count - 1);
 
-        HeadCell = last.Cell;
-        HeadDirection = last.EntryDirection;
-        HeadHeight = last.EntryHeight;
+        RebuildBuckets();
+
+        HeadAnchor = last.EntryAnchor;
 
         return last;
     }
@@ -344,15 +573,13 @@ public sealed class TrackGrid
     /// <summary>
     /// Lay down a starting straight so racers have something to launch from, and leave the
     /// head at the far end of it. <paramref name="length"/> counts tiles, not cells — each one
-    /// is a catalog straight, so it covers <see cref="TileCatalog.StraightCells"/> cells.
+    /// is a catalog straight, so it runs <see cref="TileCatalog.ShortRun"/> metres.
     /// </summary>
-    public void BuildStartingStraight(Vector2I startCell, TrackDirection direction, int length)
+    public void BuildStartingStraight(TrackAnchor start, int length)
     {
-        Reset(startCell, direction);
+        Reset(start);
         for (int i = 0; i < length; i++)
-            Place(new TileData(TileHazard.Straight, cellLength: TileCatalog.StraightCells));
+            Place(new TileData(TileHazard.Straight, runLength: TileCatalog.ShortRun));
     }
 
-    /// <summary>Which tile a world position sits on, or null if it's off the track.</summary>
-    public PlacedTile? TileAtWorld(Vector3 world) => TileAt(TileCatalog.WorldToCell(world));
 }

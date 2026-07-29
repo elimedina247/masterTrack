@@ -117,8 +117,33 @@ public partial class RacerController : Vehicle
 
 	private float _recoveryCountdown;
 
-	/// <summary>Track index the racer is currently on, tracked by the server.</summary>
-	public int CurrentTrackIndex { get; private set; }
+	/// <summary>
+	/// Which tile the car is standing on, or -1 in the air.
+	///
+	/// Read off the wheels rather than looked up in a grid. It used to be
+	/// <c>TrackGrid.TileAtWorld</c> — a cell lookup — and when the track came off the grid there was
+	/// no lattice left to look anything up in. That turned out to be an improvement: the car already
+	/// collides with exactly one <see cref="TrackTile"/> body, so the wheel that is touching it knows
+	/// the answer exactly, including on the tiles a cell was always going to be vague about — a
+	/// hairpin doubling back under itself, or a bridge over another part of the track.
+	///
+	/// Takes the first wheel with an answer. Straddling a seam, that is whichever corner is on the
+	/// older tile, which is the conservative way round for a hazard warning: it is better to be told
+	/// about the tile ahead a moment early than a moment late.
+	/// </summary>
+	public int CurrentTrackIndex
+	{
+		get
+		{
+			foreach (GroundRay wheel in WheelArray)
+			{
+				if (wheel.IsGrounded && wheel.LastCollider is TrackTile tile)
+					return tile.TrackIndex;
+			}
+
+			return -1;
+		}
+	}
 
 	[Signal] public delegate void HazardWarnedEventHandler(int trackIndex, int hazard, string hazardName);
 

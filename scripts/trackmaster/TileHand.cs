@@ -1,3 +1,4 @@
+using System;
 using Godot;
 using MasterTrack.Tiles;
 
@@ -47,7 +48,7 @@ public sealed class TileHand
 		// Drawn the same weighted way as everything after them, so an opening hand is a fair
 		// sample of the deal rather than a scripted set.
 		for (int i = 0; i < startingTiles && !IsFull; i++)
-			Deal();
+			Deal(null);
 	}
 
 	/// <summary>Seconds between one dealt tile and the next.</summary>
@@ -80,7 +81,7 @@ public sealed class TileHand
 	/// Advance the deal clock, dealing a tile if one is due. Returns true when the contents of
 	/// the hand actually changed, so the caller only refreshes the tray when there's a reason.
 	/// </summary>
-	public bool Tick(float delta)
+	public bool Tick(float delta, Func<int, bool>? placeable = null)
 	{
 		// Nowhere to put it: the clock stops rather than running on and losing the progress.
 		if (IsFull)
@@ -92,12 +93,59 @@ public sealed class TileHand
 
 		// Carried rather than zeroed, so a long frame doesn't quietly stretch the interval.
 		_elapsed -= DealInterval;
-		Deal();
+		Deal(placeable);
 		return true;
 	}
 
-	/// <summary>Put one weighted-random tile in the next free slot. Callers check for room.</summary>
-	private void Deal() => _slots[Count++] = TileCatalog.DrawIndex(_rng);
+	/// <summary>
+	/// Put one weighted-random tile in the next free slot. Callers check for room.
+	///
+	/// Normally that is a draw across the whole catalog. If <paramref name="placeable"/> is given
+	/// and the hand currently holds nothing that can go on the track, it is drawn from what can go
+	/// on the track instead — the backstop that stops a Track Master sitting on a full hand of
+	/// tiles they are not allowed to play while the racers eat the road in front of them.
+	///
+	/// The filter is only reached for when the hand is already stuck, so a healthy hand is dealt
+	/// exactly as it always was and the rescue never shows up as a bias in what gets dealt.
+	/// </summary>
+	private void Deal(Func<int, bool>? placeable)
+	{
+		_slots[Count++] = placeable != null && !HasPlaceable(placeable)
+			? TileCatalog.DrawIndex(_rng, placeable)
+			: TileCatalog.DrawIndex(_rng);
+	}
+
+	/// <summary>Whether any tile in hand could go on the track as it stands.</summary>
+	public bool HasPlaceable(Func<int, bool> placeable)
+	{
+		for (int i = 0; i < Count; i++)
+		{
+			if (placeable(_slots[i]))
+				return true;
+		}
+
+		return false;
+	}
+
+	/// <summary>
+	/// Deal a placeable tile straight away if the hand has none and there is room for one. Returns
+	/// true when it did, so the caller knows to refresh the tray.
+	///
+	/// The filtered deal in <see cref="Deal"/> already guarantees the hand recovers, but only at the
+	/// next interval — and at a 2.4 second deal that is over a hundred metres of road the racers are
+	/// already driving into. This is what makes the recovery immediate.
+	///
+	/// It leaves the deal clock alone. The tile is a rescue, not an advance on the next one, so the
+	/// countdown the Track Master is watching does not jump.
+	/// </summary>
+	public bool TopUp(Func<int, bool> placeable)
+	{
+		if (IsFull || HasPlaceable(placeable))
+			return false;
+
+		Deal(placeable);
+		return true;
+	}
 
 	/// <summary>
 	/// Spend the tile in a slot and close the hand up behind it. Returns the catalog index that

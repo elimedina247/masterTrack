@@ -49,10 +49,11 @@ public partial class TrackTile
 	/// <summary>
 	/// Forward impulse on the pad built into a tall ramp, in the same units.
 	///
-	/// Bigger than a boost tile's, because it is doing a specific job: eighty metres of climb costs
-	/// 40 m/s of speed in potential energy alone, so a car arriving at anything less than about
-	/// 150 km/h simply stops partway up a hill it cannot then turn around on. This is what makes
-	/// the tall ramp a tile rather than a wall.
+	/// Bigger than a boost tile's, because it is doing a specific job. Two cubes is 72 m of climb,
+	/// and at the 2 g the racer runs under that costs 53 m/s of speed in potential energy alone —
+	/// which is essentially <c>TopSpeed</c>. A car that arrives at anything less than flat out does
+	/// not coast up this hill, it stops partway up one it cannot then turn around on. This is what
+	/// makes the tall ramp a tile rather than a wall.
 	/// </summary>
 	private const float ClimbBoostImpulse = 26.0f;
 
@@ -74,20 +75,28 @@ public partial class TrackTile
 	/// How much of the tile an <see cref="TileHazard.IcePatch"/> covers. Scales with the tile
 	/// rather than the car: ice is a surface, so on a longer tile it should be a longer sheet,
 	/// not the same short patch adrift in the middle of a straight.
+	///
+	/// These three fractions are what is left of the tile once the hazard has had its say, and the
+	/// leftover is the game's dead air. At half a tile the ice was 40 m of sheet with 60 m of plain
+	/// road wrapped round it — the racer was off the hazard and coasting for most of the time they
+	/// spent on the tile. The aprons still have to exist, because a hazard you meet on the tile
+	/// boundary is one you were never given the chance to set up for, but they only have to be long
+	/// enough to see the thing coming: at 60 m/s a fifth of a 162 m tile is half a second, which is
+	/// about a reaction. Everything past that was the tile waiting for you.
 	/// </summary>
-	private float IceLength => Length * 0.5f;
+	private float IceLength => Length * 0.72f;
 
 	/// <summary>How much of the tile a <see cref="TileHazard.Gravel"/> bed covers.</summary>
-	private float GravelLength => Length * 0.6f;
+	private float GravelLength => Length * 0.75f;
 
 	/// <summary>How much of the tile the <see cref="TileHazard.SplitTrack"/> chasm covers.</summary>
-	private float ChasmLength => Length * 0.62f;
+	private float ChasmLength => Length * 0.75f;
 
 	/// <summary>
 	/// Width of each ledge left along the walls by a split. Car-scale and unapologetically tight:
-	/// the tile is asking whether you can hold a line for seventy metres, so the answer has to be
-	/// in doubt. Two of these plus the chasm is narrower than the road, which is why the ledges sit
-	/// against the walls rather than floating.
+	/// the tile is asking whether you can hold a line for a hundred and twenty metres, so the
+	/// answer has to be in doubt. Two of these plus the chasm is narrower than the road, which is
+	/// why the ledges sit against the walls rather than floating.
 	/// </summary>
 	private const float LedgeWidth = 9.0f;
 
@@ -113,6 +122,10 @@ public partial class TrackTile
 
 			case TileHazard.SplitTrack:
 				BuildSplitFloor();
+				break;
+
+			case TileHazard.Squiggle:
+				BuildSquiggleRunoff();
 				break;
 
 			default:
@@ -187,6 +200,10 @@ public partial class TrackTile
 
 			case TileHazard.Slalom:
 				BuildSlalom(definition);
+				break;
+
+			case TileHazard.Squiggle:
+				BuildSquiggle(definition);
 				break;
 
 			case TileHazard.Whoops:
@@ -452,6 +469,206 @@ public partial class TrackTile
 		{
 			AddBox(new Vector3(Size, ridgeHeight, ridgeDepth),
 				   new Vector3(0.0f, ridgeHeight * 0.5f, first + i * spacing), material);
+		}
+	}
+
+	// ---- Squiggle ----
+
+	/// <summary>
+	/// Width of the squiggle's tarmac ribbon, as a fraction of the tile.
+	///
+	/// This and <see cref="SquiggleWaves"/> are the tile, and they pull against each other in a way
+	/// that is not obvious: a <i>wider</i> ribbon is an easier tile twice over. It leaves less room
+	/// for the road to swing, and it gives the driver more room to straighten the swing that is
+	/// left. Past about 0.45 the second effect wins outright and the tile can be driven in a
+	/// straight line — it stops being a hazard and becomes a decoration.
+	///
+	/// At 0.35 the ribbon is 18.9 m, which is still nine car widths. Nothing here is tight; what is
+	/// asked is that the car change direction, three times, at speed.
+	/// </summary>
+	private const float SquiggleWidth = 0.35f;
+
+	/// <summary>
+	/// Sine waves the ribbon makes between entry and exit. 1.5 puts three bends on the tile — a
+	/// small one in, a committed one through the middle, a small one out — which is a rhythm rather
+	/// than a single lane change, and leaves the hard part where the racer has had the length of
+	/// the tile to see it coming.
+	///
+	/// It does not go up. Two waves shortens the wavelength by a quarter and cornering load goes as
+	/// its square, which would take the same ribbon from 6 g to 10.7 against a car that has 8.5.
+	/// </summary>
+	private const float SquiggleWaves = 1.5f;
+
+	/// <summary>
+	/// Fraction of the tile spent opening the mouth out to the full width between the walls at
+	/// each end. Without it the racer meets a 19 m ribbon head-on off a 49 m road, which is a wall
+	/// with a hole in it rather than a road that narrows.
+	/// </summary>
+	private const float SquiggleFlare = 0.15f;
+
+	/// <summary>Slabs the ribbon is built from.</summary>
+	private const int SquiggleSegments = 32;
+
+	/// <summary>
+	/// How much each slab is grown past the chord it spans, and it has to be far more generous
+	/// than the corners' <c>FacetOverlap</c>.
+	///
+	/// Same problem, much worse case. Consecutive slabs share their corners but are rectangles
+	/// about their own midpoints, so a yawed joint leaves a wedge open at the outside of it — and
+	/// the wedge is proportional to the <i>width</i> of the slab. A banked turn is sliced into nine
+	/// narrow strips across the road, so its wedges are small and 6% swallows them. A squiggle is
+	/// one slab the full width of the ribbon, at joints yawing three times as hard, which opens a
+	/// 2.5 m wedge that 6% does not come close to closing.
+	///
+	/// 70% closes it with room to spare. It is affordable here only because of what is underneath:
+	/// the ribbon is laid <i>on</i> the runoff rather than being the floor itself, so a slab that
+	/// overshoots is tarmac over dirt and a slab that fell short would be dirt showing through.
+	/// Neither is a hole. The overlapping tops are the same colour, the same material and the same
+	/// flat normal, so there is nothing there to z-fight visibly either.
+	/// </summary>
+	private const float SquiggleOverlap = 1.7f;
+
+	/// <summary>
+	/// Metres of daylight left between the ribbon's widest point and the wall. Covers the corner of
+	/// an over-long slab swinging out past the ribbon's nominal edge at a hard joint, which is
+	/// about 10 cm — the rest is margin, because a slab that intersected the barrier would leave a
+	/// stripe of road inside a wall.
+	/// </summary>
+	private const float SquiggleClearance = 1.0f;
+
+	/// <summary>
+	/// How far the runoff sits below the tarmac. Small on purpose: the ribbon has to stay level with
+	/// the tiles either side of it, so the drop goes into the runoff rather than the road being
+	/// raised, and at 6 cm it is a kerb the car notices without being one it trips over. It also
+	/// keeps the two surfaces off the same plane, which is what stops the dirt z-fighting through
+	/// the road it is underneath.
+	/// </summary>
+	private const float SquiggleRunoffDrop = 0.06f;
+
+	/// <summary>
+	/// The floor of a squiggle: the whole cell in dirt, with the road laid on top of it by
+	/// <see cref="BuildSquiggle"/>.
+	///
+	/// Built the wrong way round on purpose. The obvious construction is a ribbon of road over
+	/// nothing, and it cannot be made to work: the slab joints leave wedges the overlap cannot
+	/// close without a lateral subdivision that costs more collision shapes than a hairpin, and
+	/// every one of those wedges would be a hole in the road at the exact place the car is closest
+	/// to leaving it. Flooring the cell first turns every one of those failures from a hole into a
+	/// patch of dirt.
+	/// </summary>
+	private void BuildSquiggleRunoff()
+	{
+		var body = new StaticBody3D { Name = "SquiggleRunoff" };
+		if (!_isGhost)
+			body.AddToGroup(SurfaceGroups.Dirt);
+		AddChild(body);
+
+		AddBox(new Vector3(Size, FloorThickness, Length),
+			   new Vector3(0.0f, -FloorThickness * 0.5f - SquiggleRunoffDrop, 0.0f),
+			   GravelMaterial(), parent: body);
+	}
+
+	/// <summary>
+	/// A road that snakes, with dirt either side of it instead of a barrier.
+	///
+	/// The slalom asks the same question with blocks on a full-width straight; this one asks it of
+	/// the road itself, so there is no gate to aim at and no line through it that is not a curve.
+	/// What it costs to drive, in numbers: nobody drives the centreline — it peaks at 37 degrees
+	/// off the tile's axis and would ask 20 g — because the ribbon is wide enough to cut across.
+	/// Straightening it as far as the width allows leaves an effective amplitude of 5.7 m on a
+	/// 108 m wavelength, and that is the real tile:
+	///
+	/// - 3.1 g at 145 km/h, which is a lift-and-flow;
+	/// - <b>6.0 g at <c>TopSpeed</c></b>, against an 8.5 g <c>MaxGripForce</c> cap — flat out and
+	///   unboosted it goes, with just enough left over to get it wrong;
+	/// - 9.6 g on a drift boost and 19.6 g on a chained one, both over the cap and therefore not a
+	///   matter of skill. Arrive boosted and the tile has already decided.
+	///
+	/// That last line is the point of it. Every other hazard punishes a racer for being slow or
+	/// clumsy; this is the one that punishes them for the boost they just earned, unless they spend
+	/// it before they get here. And the punishment is dirt rather than a fall — you keep the car,
+	/// you lose the corner and the speed you were carrying, and you are still in the race. It costs
+	/// something even clean: 176 m of ribbon across a 162 m tile.
+	/// </summary>
+	private void BuildSquiggle(TileDefinition definition)
+	{
+		float ribbon = Size * SquiggleWidth;
+
+		// The most swing the cell can hold, once the barriers and a slab's overshoot have been
+		// paid for.
+		float swing = Half - WallThickness - ribbon * 0.5f - SquiggleClearance;
+
+		// The mouths open out to the full width between the walls, which is what the tile either
+		// side of this one actually offers.
+		float mouth = Size - WallThickness * 2.0f;
+		float flareFloor = Mathf.Sin(Mathf.Pi * SquiggleFlare);
+
+		// Lateral offset of the ribbon's centreline a fraction t from entry to exit.
+		//
+		// The sin(pi t) envelope is the load-bearing part, and it is the same trick BankScale plays
+		// on the corners: it takes the offset *and its slope* to zero at both ends, so the ribbon
+		// leaves and rejoins the straights either side dead centre and pointing dead straight. A
+		// bare sine would arrive centred but at an angle, which is a kink in the road at the one
+		// place the racer cannot see it coming.
+		float Offset(float t)
+			=> swing * Mathf.Sin(Mathf.Pi * t) * Mathf.Sin(Mathf.Tau * SquiggleWaves * t);
+
+		float WidthAt(float t)
+			=> Mathf.Lerp(mouth, ribbon,
+						  Mathf.Min(1.0f, Mathf.Sin(Mathf.Pi * t) / flareFloor));
+
+		// Its own body so it can carry its own surface group: the wheel ray reads the group off
+		// whatever it actually hit, so this is what makes the ribbon grip and the rest of the cell
+		// not. See BuildSurfacePatch, which does the same thing for a straight patch.
+		var road = new StaticBody3D { Name = "SquiggleRoad" };
+		if (!_isGhost)
+			road.AddToGroup(SurfaceGroups.Road);
+		AddChild(road);
+
+		StandardMaterial3D tarmac = RoadMaterial();
+		StandardMaterial3D edge = WallMaterial(definition.Accent);
+
+		for (int k = 0; k < SquiggleSegments; k++)
+		{
+			float t0 = (float)k / SquiggleSegments;
+			float t1 = (float)(k + 1) / SquiggleSegments;
+
+			float x0 = Offset(t0);
+			float x1 = Offset(t1);
+			float z0 = HalfLength - t0 * Length;
+			float z1 = HalfLength - t1 * Length;
+
+			// Yaw that turns the slab's own +Z onto the chord. Measured back toward the entry so
+			// the angle stays near zero — a box is symmetric end to end, so which way along the
+			// chord it is measured makes no difference to the shape.
+			float yaw = Mathf.Atan2(x0 - x1, z0 - z1);
+			var rotation = new Vector3(0.0f, Mathf.RadToDeg(yaw), 0.0f);
+
+			float chord = new Vector2(x1 - x0, z1 - z0).Length() * SquiggleOverlap;
+			float width = WidthAt((t0 + t1) * 0.5f);
+			var centre = new Vector3((x0 + x1) * 0.5f, 0.0f, (z0 + z1) * 0.5f);
+
+			AddBox(new Vector3(width, FloorThickness, chord),
+				   new Vector3(centre.X, -FloorThickness * 0.5f, centre.Z), tarmac,
+				   rotationDegrees: rotation, parent: road);
+
+			// Painted edges rather than barriers. There is deliberately nothing to lean on — a rail
+			// down each side would turn the whole thing into a gutter to be bounced along and the
+			// tile would stop asking anything — so the edge gets the only other thing that can mark
+			// it. Accent-coloured rather than white because at this width the line between road and
+			// runoff is the most important thing on the tile.
+			//
+			// The slab's own across-axis, which is where local +X ends up under that yaw. Inset by
+			// half a stripe so the paint lands on the tarmac instead of straddling its edge.
+			var across = new Vector3(Mathf.Cos(yaw), 0.0f, -Mathf.Sin(yaw));
+			float reach = width * 0.5f - SeamWidth * 0.5f;
+
+			for (int side = -1; side <= 1; side += 2)
+			{
+				AddBox(new Vector3(SeamWidth, 0.02f, chord),
+					   centre + across * (side * reach) + new Vector3(0.0f, 0.011f, 0.0f),
+					   edge, rotationDegrees: rotation, collision: false);
+			}
 		}
 	}
 }

@@ -19,24 +19,25 @@ public partial class TileData : Resource
     [Export] public int ExitTurn { get; set; }
 
     /// <summary>
-    /// How many grid cells the tile runs for along the direction of travel. A turning tile is
-    /// always 1 — the turn happens inside a single cell — but a tile that runs straight through
-    /// can be as long as it likes, and every straight in <see cref="TileCatalog"/> is three.
+    /// How far the tile runs, in metres, along the direction of travel. Meaningless on a tile that
+    /// turns — a corner's length is its arc, and that comes from <see cref="TurnRadius"/>.
     ///
-    /// A hairpin ignores this: it is always one cell per leg, whatever is set here. See
-    /// <see cref="IsHairpin"/>.
+    /// <b>Metres, not cells.</b> This used to be a count of grid squares, which meant a tile's
+    /// length only came in 54 m jumps and "make it 40% shorter" could only ever deliver 33%. In
+    /// <see cref="TileCatalog"/> it is now <see cref="TileCatalog.ShortRun"/> or
+    /// <see cref="TileCatalog.LongRun"/>, and either can be any number that reads well.
     ///
-    /// Clamped to at least 1: a tile of no length would occupy nothing and leave the head where
-    /// it already was, so the track would quietly stop growing.
+    /// Clamped positive: a tile of no length would occupy nothing and leave the head where it
+    /// already was, so the track would quietly stop growing.
     /// </summary>
     [Export]
-    public int CellLength
+    public float RunLength
     {
-        get => _cellLength;
-        set => _cellLength = Mathf.Max(1, value);
+        get => _runLength;
+        set => _runLength = Mathf.Max(1.0f, value);
     }
 
-    private int _cellLength = 1;
+    private float _runLength = TileCatalog.ShortRun;
 
     /// <summary>
     /// How much higher the track is when the racer leaves this tile than when they entered it, in
@@ -57,28 +58,38 @@ public partial class TileData : Resource
     public bool IsHairpin => Mathf.Abs(ExitTurn) == 2;
 
     /// <summary>
-    /// Whether this is a quarter turn swept over a square block of cells rather than pivoted inside
-    /// a single one.
+    /// Whether this tile turns at all. A quarter turn either way, or a hairpin.
     ///
-    /// A one-cell turn enters at the middle of one cell face and leaves at the middle of an
-    /// adjacent one, which pins its radius to half the tile's <i>width</i> — no amount of length
-    /// changes that. Half a tile is nowhere near what the car needs: holding a corner at
-    /// <c>TopSpeed</c> takes 37 m and holding one on a chained boost takes 68, against the 30 m a
-    /// single cell offers. Every corner was therefore a wall you slid into rather than a corner you
-    /// drove, which is the single biggest reason the track was not fun.
-    ///
-    /// Swept over an n x n block instead, the radius is <c>(n - 0.5) x TileSize</c> — 90 m at the
-    /// default span, which is holdable well past top speed and, more to the point, driftable.
+    /// It used to also have to ask whether the turn spanned more than one cell, because a one-cell
+    /// turn pinned its radius to half the road's width — 27 m against the 37 m the car needs to hold
+    /// <c>TopSpeed</c> at all, which made every corner a wall you slid into rather than a corner you
+    /// drove. That was the single biggest reason the track was not fun, and it is not a question any
+    /// more: a corner's radius is <see cref="TurnRadius"/> and owes nothing to a cell.
     /// </summary>
-    public bool IsWideTurn => Mathf.Abs(ExitTurn) == 1 && CellLength > 1;
+    public bool IsTurn => ExitTurn != 0;
 
     /// <summary>
-    /// How many cells on a side the block a wide turn sweeps through. Carried on
-    /// <see cref="CellLength"/> rather than a field of its own: a turning tile has never had a
-    /// length — the turn is what the cell is for — so the field was there and meaningless, and
-    /// reusing it keeps the span off the wire for free.
+    /// Radius of the arc this tile sweeps, in metres. Zero for anything that runs straight through.
+    ///
+    /// <b>Free, at last.</b> While the track was on a grid this was pinned to
+    /// <c>(span - 0.5) x TileSize</c>: the road is a tile wide and centred on the arc, so its edges
+    /// came out at <c>radius +/- half a tile</c> and both had to land on a cell face or the corner
+    /// met its neighbours with a step in the road. That left exactly three legal radii — 27 m, past
+    /// what the car can hold; 81 m; and 135 m — with nothing in between. It is why "tighten the
+    /// corners a little" was impossible for as long as the cells existed. See
+    /// <c>docs/track-without-a-grid.md</c>.
+    ///
+    /// Now it is a number. What it should be is a question about the car and the bank rather than
+    /// about arithmetic — see <see cref="TileCatalog.CornerRadius"/>.
+    ///
+    /// Lives here because two things read it and they must not drift: the geometry builds the arc
+    /// from it, and <see cref="PlacedTile.ExitAnchorFor"/> works out where the tile hands the track
+    /// on from it.
     /// </summary>
-    public int TurnSpan => CellLength;
+    [Export] public float TurnRadius { get; set; }
+
+    /// <summary>How far round that arc the tile goes, in radians. Zero if it runs straight.</summary>
+    public float TurnSweep => Mathf.Pi * 0.5f * Mathf.Abs(ExitTurn);
 
     /// <summary>
     /// Which way the tile swings out: 1 to the right of the entry direction, -1 to the left.
@@ -95,12 +106,13 @@ public partial class TileData : Resource
 
     public TileData() { }
 
-    public TileData(TileHazard hazard, int exitTurn = 0, int cellLength = 1, int heightChange = 0,
-                    string scenePath = "")
+    public TileData(TileHazard hazard, int exitTurn = 0, float runLength = 0.0f,
+                    float turnRadius = 0.0f, int heightChange = 0, string scenePath = "")
     {
         Hazard = hazard;
         ExitTurn = exitTurn;
-        CellLength = cellLength;
+        RunLength = runLength > 0.0f ? runLength : TileCatalog.ShortRun;
+        TurnRadius = turnRadius;
         HeightChange = heightChange;
         ScenePath = scenePath;
     }
@@ -114,7 +126,8 @@ public partial class TileData : Resource
     {
         ["hazard"] = (int)Hazard,
         ["exit_turn"] = ExitTurn,
-        ["cell_length"] = CellLength,
+        ["run_length"] = RunLength,
+        ["turn_radius"] = TurnRadius,
         ["height_change"] = HeightChange,
         ["scene_path"] = ScenePath,
     };
@@ -122,7 +135,8 @@ public partial class TileData : Resource
     public static TileData FromDict(Godot.Collections.Dictionary dict) => new(
         (TileHazard)(int)dict["hazard"],
         (int)dict["exit_turn"],
-        (int)dict["cell_length"],
+        (float)dict["run_length"],
+        (float)dict["turn_radius"],
         (int)dict["height_change"],
         (string)dict["scene_path"]);
 }
