@@ -265,8 +265,10 @@ public partial class TrackPiece : StaticBody3D
 	{
 		get
 		{
-			Vector2[]? polygon = RoadPolygon?.Polygon;
-			if (polygon is not { Length: >= 2 })
+			CsgPolygon3D? road = RoadPolygon;
+			Vector2[]? polygon = road?.Polygon;
+
+			if (road == null || polygon is not { Length: >= 2 })
 				return 0.0f;
 
 			float low = polygon[0].X;
@@ -278,8 +280,29 @@ public partial class TrackPiece : StaticBody3D
 				high = Mathf.Max(high, point.X);
 			}
 
-			return high - low;
+			// Scaled by whatever sits between the polygon and the piece, because a section drawn 54 m
+			// wide under a node scaled by a half is a 27 m road and reporting it as 54 was how
+			// SnapToRoadWidth came to decide there was nothing to do.
+			return (high - low) * SectionScale();
 		}
+	}
+
+	/// <summary>
+	/// How much the transform chain from the cross-section up to the piece stretches it across.
+	///
+	/// Stops at the piece rather than going to the scene root on purpose: the piece's own transform
+	/// is <i>overwritten</i> when it is placed — by the chain, and by the proving ground — so
+	/// anything scaled onto it there is discarded before the game ever sees it. Only what is inside
+	/// the piece survives, and only that is worth measuring.
+	/// </summary>
+	private float SectionScale()
+	{
+		var scale = 1.0f;
+
+		for (Node3D? node = RoadPolygon; node != null && node != this; node = node.GetParentOrNull<Node3D>())
+			scale *= node.Transform.Basis.X.Length();
+
+		return scale;
 	}
 
 	/// <summary>
@@ -314,7 +337,11 @@ public partial class TrackPiece : StaticBody3D
 
 		float scale = TileCatalog.TileSize / width;
 		if (Mathf.IsEqualApprox(scale, 1.0f))
+		{
+			GD.Print($"[TrackPiece] {Name}'s road already measures "
+					 + $"{TileCatalog.TileSize:0.##} m. Nothing to snap.");
 			return;
+		}
 
 		Vector2[] polygon = road.Polygon;
 
@@ -680,6 +707,18 @@ public partial class TrackPiece : StaticBody3D
 
 		if (Build == null && !IsBaked)
 			warnings.Add($"No {BuildName} node and nothing baked, so this piece has no shape yet.");
+
+		// A piece is positioned by its Entry when it is placed, which overwrites this node's whole
+		// transform — scale included. So a scaled root shows you one size in the editor and builds
+		// another in the game, which is the most misleading thing a piece can do.
+		Vector3 rootScale = Transform.Basis.Scale;
+		if (!rootScale.IsEqualApprox(Vector3.One))
+		{
+			warnings.Add($"The piece's own scale is {rootScale.X:0.##}, {rootScale.Y:0.##}, "
+						 + $"{rootScale.Z:0.##}. That is thrown away when the piece is placed, so it "
+						 + "only changes how it looks here. Scale the Build subtree instead, or move "
+						 + "the markers.");
+		}
 
 		// A seam carries a position and a heading and says nothing about width, so two pieces of
 		// different widths meet with a step down each side — at the exact place a car crosses

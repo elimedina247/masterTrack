@@ -61,8 +61,8 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.0465078, 16.452604, -30.207
 [node name="@Marker3D@25594" type="Marker3D" parent="." unique_id=1807527585]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.5697618, 25.08831, -40.47373)
 
-[node name="BakedMesh" type="MeshInstance3D" parent="." unique_id=1835531478]
+[node name="BakedMesh" type="MeshInstance3D" parent="." unique_id=1732027565]
 mesh = SubResource("ArrayMesh_lj4o2")
 
-[node name="BakedCollision" type="CollisionShape3D" parent="." unique_id=1311808489]
+[node name="BakedCollision" type="CollisionShape3D" parent="." unique_id=736642120]
 shape = SubResource("ConcavePolygonShape3D_8r1ue")
