@@ -146,7 +146,8 @@ public partial class PhysicsTestArea
 			_generated.AddChild(tile);
 
 			// No drop: this track was always here, unlike one the Track Master is dealing out.
-			tile.Initialize(placed.Data, placed.Index, placed.EntryAnchor);
+			tile.Initialize(placed.Data, placed.Index, placed.EntryAnchor,
+							entryFrame: placed.EntryFrame);
 		}
 
 		WarnAboutTilesLeftOff();
@@ -178,6 +179,11 @@ public partial class PhysicsTestArea
 		foreach (TileDefinition definition in TileCatalog.All)
 		{
 			if (definition.Hazard == TileHazard.LoopAhead)
+				continue;
+
+			// Authored pieces join the catalog by being saved to a folder, and the fixed course is
+			// a curated line-up of the built-ins — one is not a defect in the other.
+			if (definition.IsScenePiece)
 				continue;
 
 			if (System.Array.IndexOf(RaceTrackTiles, definition.DisplayName) >= 0)

@@ -659,7 +659,8 @@ public partial class TrackController : Node3D
         AddChild(node);
         node.Initialize(tile.Data, tile.Index, tile.EntryAnchor,
                         fallHeight: drop ? TileFallHeight : 0.0f,
-                        fallSpeed: TileFallSpeed);
+                        fallSpeed: TileFallSpeed,
+                        entryFrame: tile.EntryFrame);
     }
 
     /// <summary>

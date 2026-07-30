@@ -240,6 +240,7 @@ public partial class PhysicsTestArea : Node3D
 		BuildRaceTrack();
 		BuildStartLine();
 		BuildPieceSpecimens();
+		BuildPieceRun();
 	}
 
 	/// <summary>Rows the tile layout needs to hold the whole catalog.</summary>
@@ -331,6 +332,11 @@ public partial class PhysicsTestArea : Node3D
 		for (int i = 0; i < TileCatalog.All.Count; i++)
 		{
 			TileDefinition definition = TileCatalog.All[i];
+
+			// Scene pieces are already on display, one per pedestal, in the authored pieces row —
+			// a second copy in the tile grid would just say the catalog picked them up.
+			if (definition.IsScenePiece)
+				continue;
 
 			var cell = new Vector2I(
 				FirstColumnCell + i % TileColumns * TileCellStride,

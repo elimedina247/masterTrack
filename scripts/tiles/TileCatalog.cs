@@ -47,7 +47,20 @@ public sealed class TileDefinition
 	/// </summary>
 	public required float Weight { get; init; }
 
-	public TileData ToTileData() => new(Hazard, ExitTurn, RunLength, TurnRadius, HeightChange);
+	/// <summary>
+	/// The authored piece scene this tile is, or empty for a tile whose geometry is generated.
+	///
+	/// When set, the scene is the whole of the tile: <see cref="TrackTile"/> instances it instead
+	/// of building boxes, and the chain reads the exit and footprint off the piece's seams and
+	/// spine (<see cref="PlacedTile.ExitAnchorFor"/>) instead of off <see cref="RunLength"/> and
+	/// <see cref="TurnRadius"/> — those become the board's approximations, not the truth.
+	/// </summary>
+	public string ScenePath { get; init; } = "";
+
+	/// <summary>Whether this tile's geometry is an authored scene rather than generated boxes.</summary>
+	public bool IsScenePiece => ScenePath.Length > 0;
+
+	public TileData ToTileData() => new(Hazard, ExitTurn, RunLength, TurnRadius, HeightChange, ScenePath);
 }
 
 /// <summary>
@@ -181,7 +194,9 @@ public static class TileCatalog
 	/// </summary>
 	public const float HeightStep = 36.0f;
 
-	public static readonly IReadOnlyList<TileDefinition> All = new List<TileDefinition>
+	/// <summary>The hand-tuned tiles whose geometry is generated. Declared before <see cref="All"/>
+	/// because static field initialisers run in source order.</summary>
+	private static readonly List<TileDefinition> BuiltIn = new()
 	{
 		// ---- Shape: what the track does, rather than what it does to you ----
 
@@ -485,6 +500,66 @@ public static class TileCatalog
 	};
 
 	/// <summary>
+	/// Every tile type in the game: the built-in list, then every authored piece the anchor chain
+	/// can carry, appended straight from <see cref="Tool.PieceCatalog"/> — so saving a level-seamed
+	/// piece scene puts it in the Track Master's deck with no registration step.
+	///
+	/// Pieces whose exits are banked or pitched are left out <i>of the deck only</i>: the grid
+	/// chain is still a position and a yaw, and a seam it cannot carry would build the next tile
+	/// wrong. They remain fully usable in assemblies.
+	/// </summary>
+	public static readonly IReadOnlyList<TileDefinition> All = BuildAll();
+
+	private static IReadOnlyList<TileDefinition> BuildAll()
+	{
+		var all = new List<TileDefinition>(BuiltIn);
+
+		// The same gold the proving ground labels authored pieces with. A local rather than a
+		// static field, because this method runs during All's own initialisation — a field
+		// declared later in the file would still be default here.
+		var pieceAccent = new Color(1.00f, 0.82f, 0.05f);
+
+		foreach (Tool.PieceEntry piece in Tool.PieceCatalog.Entries)
+		{
+			// The piece's own say, set on its root node: 0 is "not a card" — mid-authoring, or
+			// assembly-only by design. Nothing else gates the deck any more: the chain carries
+			// full frames, so a banked exit is a card like any other — the head simply stays
+			// banked until a piece that levels out follows it.
+			if (piece.DeckWeight <= 0.0f)
+				continue;
+
+			// In the deck but never baked: every deal of this card rebuilds its CSG on every
+			// peer, mid-race, which reads as the game hitching whenever the Track Master plays
+			// it. Dealt anyway — a warning names a cost, it does not confiscate the card.
+			if (!piece.IsBaked)
+			{
+				GD.PushWarning($"[TileCatalog] {piece.Name} is in the deck (weight "
+							   + $"{piece.DeckWeight:0.#}) but not baked. Open the piece and "
+							   + "tick Bake, or every placement pays its CSG rebuild.");
+			}
+
+			all.Add(new TileDefinition
+			{
+				// The hazard enum means "which geometry to generate", and a scene piece generates
+				// nothing — Straight is the neutral value, never read while ScenePath is set.
+				Hazard = TileHazard.Straight,
+				ScenePath = piece.ScenePath,
+				// The board's approximations of the piece: the chain itself reads the seams.
+				RunLength = Mathf.Max(1.0f, piece.ChordMeters),
+				HeightChange = Mathf.RoundToInt(piece.RiseMeters / HeightStep),
+				DisplayName = piece.Name,
+				Description = piece.DeckDescription.Length > 0
+					? piece.DeckDescription
+					: $"An authored piece: {piece.ScenePath}.",
+				Accent = pieceAccent,
+				Weight = piece.DeckWeight,
+			});
+		}
+
+		return all;
+	}
+
+	/// <summary>
 	/// Declared after <see cref="All"/> on purpose: static field initialisers run in source
 	/// order, so the list has to exist before anything can add its weights up.
 	/// </summary>
@@ -628,7 +703,10 @@ public static class TileCatalog
 				&& definition.ExitTurn == data.ExitTurn
 				&& Mathf.IsEqualApprox(definition.RunLength, data.RunLength)
 				&& Mathf.IsEqualApprox(definition.TurnRadius, data.TurnRadius)
-				&& definition.HeightChange == data.HeightChange)
+				&& definition.HeightChange == data.HeightChange
+				// Scene pieces share a hazard, so the path is what tells two of them apart —
+				// and what tells any of them apart from the plain straight they ride in on.
+				&& definition.ScenePath == data.ScenePath)
 				return definition;
 		}
 		return All[0];

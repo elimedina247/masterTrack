@@ -360,32 +360,8 @@ public partial class PhysicsTestArea
 	}
 
 	/// <summary>
-	/// Every authored piece, in name order.
-	///
-	/// Sorted rather than left in whatever order the filesystem hands them over, so the row is the
-	/// same on every machine and a screenshot of it means something.
+	/// Every authored piece, in name order — <see cref="PieceCatalog"/>'s order, so the row of
+	/// specimens, the palette dock and the chained course all agree about what exists.
 	/// </summary>
-	private static string[] PieceScenePaths()
-	{
-		using DirAccess? dir = DirAccess.Open(PieceFolder);
-		if (dir == null)
-			return Array.Empty<string>();
-
-		var paths = new List<string>();
-
-		foreach (string file in dir.GetFiles())
-		{
-			// Exported projects hand back the imported name, so a scene arrives as .tscn.remap and
-			// has to be asked for under its original name.
-			string name = file.EndsWith(".remap", StringComparison.Ordinal)
-				? file[..^".remap".Length]
-				: file;
-
-			if (name.EndsWith(".tscn", StringComparison.Ordinal))
-				paths.Add($"{PieceFolder}/{name}");
-		}
-
-		paths.Sort(StringComparer.Ordinal);
-		return paths.ToArray();
-	}
+	private static string[] PieceScenePaths() => PieceCatalog.ScenePaths();
 }

@@ -12,20 +12,45 @@ public sealed class PlacedTile
     public required int Index { get; init; }
 
     /// <summary>The space this tile takes up. See <see cref="FootprintFor"/>.</summary>
-    public IEnumerable<TrackFootprint> Footprint => FootprintFor(EntryAnchor, Data);
+    public IEnumerable<TrackFootprint> Footprint => FootprintFor(EntryFrame, Data);
 
     /// <summary>
-    /// Where the racer crosses into this tile, in world space. The seam the track had reached when
-    /// this tile was placed onto it.
-    ///
-    /// Carried rather than derived from <see cref="Cell"/>, because from stage 2 this is the value
-    /// the track is actually built on and the cell is the approximation of it. See
-    /// <c>docs/track-without-a-grid.md</c>.
+    /// The seam the track had reached when this tile was placed onto it, as a <b>full frame</b>:
+    /// position, heading, pitch and roll. This is the value the track is actually built on — a
+    /// banked piece hands the next tile its bank through here, which the position-and-yaw
+    /// <see cref="EntryAnchor"/> cannot carry.
+    /// </summary>
+    public required Transform3D EntryFrame { get; init; }
+
+    /// <summary>
+    /// Where the racer crosses into this tile, flattened to a position and a yaw — the level
+    /// approximation of <see cref="EntryFrame"/>, for the things that lay tiles out by hand and
+    /// the readouts that think in headings.
     /// </summary>
     public required TrackAnchor EntryAnchor { get; init; }
 
-    /// <summary>Where they leave it — by definition the next tile's <see cref="EntryAnchor"/>.</summary>
-    public TrackAnchor ExitAnchor => ExitAnchorFor(EntryAnchor, Data);
+    /// <summary>Where they hand the track on — by definition the next tile's <see cref="EntryFrame"/>.</summary>
+    public Transform3D ExitFrame => ExitFrameFor(EntryFrame, Data);
+
+    /// <summary>The exit, flattened the same way <see cref="EntryAnchor"/> is.</summary>
+    public TrackAnchor ExitAnchor => AnchorOf(ExitFrame);
+
+    /// <summary>A full frame from a flat anchor: the anchor's position and yaw, level by
+    /// construction.</summary>
+    public static Transform3D FrameOf(TrackAnchor anchor)
+        => new(new Basis(Vector3.Up, anchor.Yaw), anchor.Position);
+
+    /// <summary>A flat anchor from a frame: its position, and the heading its forward flattens
+    /// to. Pitch and roll do not survive — that is the definition of an anchor.</summary>
+    public static TrackAnchor AnchorOf(Transform3D frame)
+    {
+        Vector3 forward = -frame.Basis.Z;
+        return new TrackAnchor(frame.Origin, Mathf.Atan2(-forward.X, -forward.Z));
+    }
+
+    /// <summary>Whether a frame is level enough for a tile built flat to sit on it: up is
+    /// vertical to within about a degree and a half.</summary>
+    public static bool IsLevel(Transform3D frame) => frame.Basis.Y.Y > 0.9997f;
 
     /// <summary>
     /// An anchor built from a world position and a compass heading, positioned so the <i>middle</i>
@@ -59,9 +84,25 @@ public sealed class PlacedTile
     /// sweeps an annulus through it. Measuring the road itself lets the Track Master build the tight
     /// serpentines the cells were refusing on a technicality.
     /// </summary>
-    public static IEnumerable<TrackFootprint> FootprintFor(TrackAnchor entry, TileData data)
+    public static IEnumerable<TrackFootprint> FootprintFor(Transform3D frame, TileData data)
     {
         float width = TrackTile.Size;
+
+        // An authored piece's room is whatever its spine sweeps — read from the piece itself, so
+        // a corkscrew reserves its coil and not just the chord between its seams. The full frame
+        // matters here: a piece placed on a banked seam sweeps a rolled coil, and its boxes
+        // follow the route through the actual frame.
+        if (data.ScenePath.Length > 0 && Tool.PieceCatalog.AtPath(data.ScenePath) is { } piece)
+        {
+            foreach (TrackFootprint box in PieceFootprint(frame, piece, width))
+                yield return box;
+
+            yield break;
+        }
+
+        // Generated tiles are flat by construction and only ever placed on level frames, so the
+        // anchor is the whole of what their arithmetic needs.
+        TrackAnchor entry = AnchorOf(frame);
 
         if (!data.IsTurn)
         {
@@ -106,13 +147,93 @@ public sealed class PlacedTile
     ///
     /// This is the whole of what replaced the cell arithmetic. Two lines against its two
     /// hand-written special cases, and nothing in here cares how big a cell is — the numbers it
-    /// reads are metres and radians.
+    /// reads are metres and radians. An authored piece answers from its own seams: the exit
+    /// expressed in the entry's frame, folded onto the anchor. The catalog only deals pieces whose
+    /// exits are level (<see cref="Tool.PieceEntry.IsAnchorChainable"/>), so flattening the result
+    /// back to a position and a yaw loses nothing.
     /// </summary>
     public static TrackAnchor ExitAnchorFor(TrackAnchor entry, TileData data)
-        => data.IsTurn
-            ? entry.Swept(data.TurnRadius, data.TurnSweep, data.TurnSide)
-            : entry.Advanced(data.RunLength, data.HeightChange * TileCatalog.HeightStep);
+        => AnchorOf(ExitFrameFor(FrameOf(entry), data));
 
+    /// <summary>
+    /// Where a tile hands the track on, as a full frame. An authored piece folds its whole
+    /// exit-in-entry transform onto the frame it was placed at — bank, pitch, everything — which
+    /// is what lets a banked corner hand its bank to the corner after it. A generated tile is
+    /// flat, so it advances the flat anchor and lifts the result back into a level frame.
+    /// </summary>
+    public static Transform3D ExitFrameFor(Transform3D frame, TileData data)
+    {
+        if (data.ScenePath.Length > 0 && Tool.PieceCatalog.AtPath(data.ScenePath) is { } piece)
+            return (frame * piece.ExitInEntry).Orthonormalized();
+
+        TrackAnchor entry = AnchorOf(frame);
+
+        return FrameOf(data.IsTurn
+            ? entry.Swept(data.TurnRadius, data.TurnSweep, data.TurnSide)
+            : entry.Advanced(data.RunLength, data.HeightChange * TileCatalog.HeightStep));
+    }
+
+    /// <summary>
+    /// Boxes along an authored piece's route, from a world frame — the same fan-of-boxes
+    /// treatment an arc gets, but following whatever course the spine takes, elevation included.
+    /// Public because the editor's assembly tool asks the same "how much room does this piece
+    /// take" question the grid does, and two answers would drift.
+    /// </summary>
+    public static IEnumerable<TrackFootprint> PieceFootprint(
+        Transform3D frame, Tool.PieceEntry piece, float width)
+    {
+        // The margin an arc gets from its sagitta, a piece gets as a constant: the route is
+        // sampled finely enough that each box's chord hugs the road, and three metres covers the
+        // bulge of anything the catalog turns at.
+        const float bulge = 3.0f;
+
+        // How much road one box stands in for. Short enough to hug a 63 m corner, long enough
+        // that a corkscrew is dozens of boxes rather than thousands.
+        const float stride = 30.0f;
+
+        TrackAnchor entry = AnchorOf(frame);
+
+        IReadOnlyList<Vector3> route = piece.Route;
+        if (route.Count < 2)
+        {
+            // A degenerate route still occupies its own seam.
+            yield return new TrackFootprint(
+                new Vector2(entry.Position.X, entry.Position.Z), width * 0.5f, width * 0.5f,
+                entry.Yaw, entry.Position.Y, entry.Position.Y);
+            yield break;
+        }
+
+        Vector3 from = frame * route[0];
+        float covered = 0.0f;
+        float lastYaw = entry.Yaw;
+
+        for (var i = 1; i < route.Count; i++)
+        {
+            Vector3 to = frame * route[i];
+            covered += (to - from).Length();
+
+            if (covered < stride && i < route.Count - 1)
+                continue;
+
+            Vector3 run = to - from;
+            var flat = new Vector2(run.X, run.Z);
+
+            // A stretch that climbs near vertically has no heading of its own; the previous box's
+            // serves, and the widened box still covers the road.
+            float yaw = flat.LengthSquared() > 1.0f ? Mathf.Atan2(-run.X, -run.Z) : lastYaw;
+            lastYaw = yaw;
+
+            Vector3 middle = (from + to) * 0.5f;
+
+            yield return new TrackFootprint(
+                new Vector2(middle.X, middle.Z), width * 0.5f + bulge,
+                Mathf.Max(width * 0.25f, run.Length() * 0.5f), yaw,
+                Mathf.Min(from.Y, to.Y), Mathf.Max(from.Y, to.Y));
+
+            from = to;
+            covered = 0.0f;
+        }
+    }
 }
 
 /// <summary>
@@ -196,6 +317,15 @@ public sealed class TrackGrid
     public TrackAnchor HeadAnchor { get; private set; }
 
     /// <summary>
+    /// The head as a full frame — what placements actually fold onto. When the last piece exited
+    /// level this is <see cref="HeadAnchor"/> lifted back into a transform and nothing more; when
+    /// it exited banked, this carries the bank and the anchor is the flat approximation for
+    /// readouts. Generated tiles refuse to sit on a non-level frame (<see cref="Fits"/>), so the
+    /// two never quietly disagree about where a flat tile goes.
+    /// </summary>
+    public Transform3D HeadFrame { get; private set; } = Transform3D.Identity;
+
+    /// <summary>
     /// Height the next tile starts at, in metres. Runs up and down as ramps are placed, and is never
     /// allowed below zero — the ground plane is the floor of the world, and a track that dug
     /// underneath it would leave the racers driving through the dark.
@@ -227,6 +357,7 @@ public sealed class TrackGrid
         _retired = 0;
         _retiredBoxes = 0;
         HeadAnchor = start;
+        HeadFrame = PlacedTile.FrameOf(start);
     }
 
     /// <summary>
@@ -290,18 +421,28 @@ public sealed class TrackGrid
     /// <see cref="CanPlace"/>'s job and it calls this to answer it, so keeping the two apart is
     /// what stops the lookahead recursing.
     ///
-    /// Takes the anchor rather than reading the head off the grid, because <see cref="Escapes"/>
+    /// Takes the frame rather than reading the head off the grid, because <see cref="Escapes"/>
     /// asks this question about a head that does not exist yet.
     /// </summary>
-    public bool Fits(TrackAnchor anchor, TileData data, out string reason)
+    public bool Fits(Transform3D frame, TileData data, out string reason)
     {
-        if (anchor.Position.Y + data.HeightChange * TileCatalog.HeightStep < -GroundEpsilon)
+        // A generated tile is built flat, so a banked or climbing seam is a frame it cannot sit
+        // on — the joint would be a step at exactly the place a car crosses it. Authored pieces
+        // are exempt: they are placed by the whole frame and inherit its bank.
+        if (data.ScenePath.Length == 0 && !PlacedTile.IsLevel(frame))
+        {
+            reason = "The track is banked here — only an authored piece can follow until it "
+                     + "levels out.";
+            return false;
+        }
+
+        if (PlacedTile.ExitFrameFor(frame, data).Origin.Y < -GroundEpsilon)
         {
             reason = "The track is already on the ground — it can't go down from here.";
             return false;
         }
 
-        foreach (TrackFootprint box in PlacedTile.FootprintFor(anchor, data))
+        foreach (TrackFootprint box in PlacedTile.FootprintFor(frame, data))
         {
             if (!Blocked(box))
                 continue;
@@ -421,12 +562,12 @@ public sealed class TrackGrid
     /// How many catalog tiles would fit at a head. What <see cref="MinimumEscapes"/> is read
     /// against, and the measurement that makes a dead end rare rather than routine.
     /// </summary>
-    public int Escapes(TrackAnchor anchor)
+    public int Escapes(Transform3D frame)
     {
         int count = 0;
         foreach (TileData data in TileCatalog.AllAsData)
         {
-            if (Fits(anchor, data, out _))
+            if (Fits(frame, data, out _))
                 count++;
         }
 
@@ -434,7 +575,7 @@ public sealed class TrackGrid
     }
 
     /// <summary>Catalog tiles that would fit at the head as it stands right now.</summary>
-    public int EscapesAtHead => Escapes(HeadAnchor);
+    public int EscapesAtHead => Escapes(HeadFrame);
 
     /// <summary>
     /// Whether a tile could legally go on the end of the track: it has to fit there, and — the part
@@ -454,7 +595,7 @@ public sealed class TrackGrid
     /// </summary>
     public bool CanPlace(TileData data, out string reason)
     {
-        if (!Fits(HeadAnchor, data, out reason))
+        if (!Fits(HeadFrame, data, out reason))
             return false;
 
         if (EscapesAfter(data) >= MinimumEscapes)
@@ -466,7 +607,7 @@ public sealed class TrackGrid
         foreach (TileData alternative in TileCatalog.AllAsData)
         {
             if (ReferenceEquals(alternative, data)
-                || !Fits(HeadAnchor, alternative, out _)
+                || !Fits(HeadFrame, alternative, out _)
                 || EscapesAfter(alternative) < MinimumEscapes)
                 continue;
 
@@ -490,9 +631,9 @@ public sealed class TrackGrid
     private int EscapesAfter(TileData data)
     {
         _pendingBoxes.Clear();
-        _pendingBoxes.AddRange(PlacedTile.FootprintFor(HeadAnchor, data));
+        _pendingBoxes.AddRange(PlacedTile.FootprintFor(HeadFrame, data));
 
-        int escapes = Escapes(PlacedTile.ExitAnchorFor(HeadAnchor, data));
+        int escapes = Escapes(PlacedTile.ExitFrameFor(HeadFrame, data));
 
         _pendingBoxes.Clear();
         return escapes;
@@ -514,6 +655,7 @@ public sealed class TrackGrid
         {
             Data = data,
             Index = _ordered.Count,
+            EntryFrame = HeadFrame,
             EntryAnchor = HeadAnchor,
         };
 
@@ -526,9 +668,10 @@ public sealed class TrackGrid
         _ordered.Add(tile);
 
         // The head moves by folding the tile's own exit transform onto the seam it was placed at.
-        // This is the line the whole migration was for: it reads the tile's length and radius in
-        // metres, and there is nothing left for it to disagree with.
-        HeadAnchor = tile.ExitAnchor;
+        // This is the line the whole migration was for: the frame carries everything — including
+        // a bank, when an authored piece leaves one — and the anchor is its flat shadow.
+        HeadFrame = tile.ExitFrame;
+        HeadAnchor = PlacedTile.AnchorOf(HeadFrame);
         return tile;
     }
 
@@ -565,6 +708,7 @@ public sealed class TrackGrid
 
         RebuildBuckets();
 
+        HeadFrame = last.EntryFrame;
         HeadAnchor = last.EntryAnchor;
 
         return last;

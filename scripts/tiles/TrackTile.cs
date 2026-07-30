@@ -152,7 +152,8 @@ public partial class TrackTile : StaticBody3D
 	/// them at zero and it simply exists, which is what the starting straight wants.
 	/// </summary>
 	public void Initialize(TileData data, int trackIndex, TrackAnchor anchor, bool isGhost = false,
-						   Color? ghostTint = null, float fallHeight = 0.0f, float fallSpeed = 0.0f)
+						   Color? ghostTint = null, float fallHeight = 0.0f, float fallSpeed = 0.0f,
+						   Transform3D? entryFrame = null)
 	{
 		Data = data;
 		TrackIndex = trackIndex;
@@ -172,8 +173,22 @@ public partial class TrackTile : StaticBody3D
 		// centre, so the mesh sits half its own length down the road from the seam. One line, and
 		// the same line for every tile in the catalog: a turn reports a single cell of Length, which
 		// puts its centre exactly where the grid used to put it.
-		Position = anchor.Position + anchor.Forward * (Length * 0.5f);
-		Rotation = new Vector3(0.0f, anchor.Yaw, 0.0f);
+		//
+		// A scene piece is the exception twice over: it is placed by its own entry seam, so the
+		// tile's origin sits on the anchor itself — and when the chain hands over a full entry
+		// frame, the tile takes the whole basis, which is how a piece placed on a banked seam
+		// arrives banked instead of flat.
+		if (data.ScenePath.Length > 0)
+		{
+			Transform = entryFrame is { } frame
+				? new Transform3D(frame.Basis, frame.Origin)
+				: new Transform3D(new Basis(Vector3.Up, anchor.Yaw), anchor.Position);
+		}
+		else
+		{
+			Position = anchor.Position + anchor.Forward * (Length * 0.5f);
+			Rotation = new Vector3(0.0f, anchor.Yaw, 0.0f);
+		}
 
 		BuildGeometry();
 
@@ -267,6 +282,15 @@ public partial class TrackTile : StaticBody3D
 
 	private void BuildGeometry()
 	{
+		// An authored piece is its own geometry: instance it and step aside. None of the
+		// generated assembly below — floor, walls, stripes, hazard — has anything to add to a
+		// shape somebody built by hand.
+		if (Data.ScenePath.Length > 0)
+		{
+			BuildFromScene();
+			return;
+		}
+
 		TileDefinition definition = TileCatalog.Match(Data);
 
 		// Some tiles are built whole, because the assembly below cannot describe them: it walls
@@ -310,6 +334,59 @@ public partial class TrackTile : StaticBody3D
 			BuildRacingLine(exitLocal);
 
 		BuildHazard(definition);
+	}
+
+	/// <summary>
+	/// Instance the authored piece this tile is, seated so its entry seam lands exactly on the
+	/// tile's origin — which <see cref="Initialize"/> put on the entry anchor. The piece keeps all
+	/// of its own behaviour: surface group, baked mesh or live CSG, props and hazards.
+	/// </summary>
+	private void BuildFromScene()
+	{
+		if (GD.Load<PackedScene>(Data.ScenePath) is not { } scene
+			|| scene.Instantiate() is not Tool.TrackPiece piece)
+		{
+			GD.PushError($"[TrackTile] {Data.ScenePath} would not instance as a TrackPiece, so "
+						 + "this tile has no geometry.");
+			return;
+		}
+
+		AddChild(piece);
+
+		// The inverse of the entry seam: whatever corner of its own scene the piece was built in,
+		// its entry lands on this tile's origin facing down -Z, which is what the anchor means.
+		piece.Transform = piece.EntrySeam is { } entry
+			? entry.Transform.Orthonormalized().AffineInverse()
+			: Transform3D.Identity;
+
+		if (_isGhost)
+			GhostifyPiece(piece);
+	}
+
+	/// <summary>
+	/// A scene piece shown as a placement preview: see-through, tinted the verdict's colour, and
+	/// solid to nothing — the same rules every generated ghost already follows.
+	/// </summary>
+	private void GhostifyPiece(Node node)
+	{
+		switch (node)
+		{
+			case CollisionObject3D body:
+				body.CollisionLayer = 0;
+				body.CollisionMask = 0;
+				break;
+
+			case CollisionShape3D shape:
+				shape.Disabled = true;
+				break;
+
+			case GeometryInstance3D geometry:
+				geometry.Transparency = 0.55f;
+				break;
+		}
+
+		foreach (Node child in node.GetChildren())
+			GhostifyPiece(child);
 	}
 
 	/// <summary>

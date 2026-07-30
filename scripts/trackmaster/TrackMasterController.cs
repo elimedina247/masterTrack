@@ -716,7 +716,8 @@ public partial class TrackMasterController : Node3D
 		_ghost = new TrackTile { Name = "TileGhost" };
 		AddChild(_ghost);
 		_ghost.Initialize(definition.ToTileData(), -1, Track.Grid.HeadAnchor,
-						  isGhost: true, ghostTint: valid ? ValidTint : InvalidTint);
+						  isGhost: true, ghostTint: valid ? ValidTint : InvalidTint,
+						  entryFrame: Track.Grid.HeadFrame);
 	}
 
 	private void ClearGhost()
