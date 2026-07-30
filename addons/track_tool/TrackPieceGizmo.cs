@@ -14,20 +14,19 @@ namespace MasterTrack.Editor;
 /// which is what makes the threading order readable: the road connects the points in the order they
 /// will be driven.
 ///
-/// <b>The handles are the contract made visible.</b> A seam may move, rise and turn but never pitch
-/// or roll — <c>TrackAnchor</c> is a position and a yaw, so a tilted seam is a frame the next piece
-/// cannot be built against. Rather than letting the rotation happen and snapping it back, the entry
-/// and exit simply do not have bank handles: the handles that exist are exactly the moves that are
-/// legal, and nothing the tool offers ever silently un-does itself. Waypoints get the full set —
-/// aim in any direction, and a bank handle on each road edge that is dragged up and down.
+/// <b>Every route node gets the full set of handles, seams included.</b> The chain folds full
+/// transforms now (<c>TrackSnap</c>), so a banked or climbing seam is a legal frame for the next
+/// piece to be built against — the entry and exit used to be denied bank handles because
+/// <c>TrackAnchor</c> had nowhere to record a roll, and that restriction went out with it. A seam
+/// drawn as a <c>TrackConnector</c> also shows its declared width: the bar across the road is that
+/// wide, so a narrow lane reads as narrow at a glance.
 ///
 /// Handle kinds, per route node:
 /// <list type="bullet">
 /// <item><b>Move</b> — the node's centre; drags across the ground plane at its height.</item>
 /// <item><b>Height</b> — a dot above the node; drags vertically.</item>
-/// <item><b>Aim</b> — the arrow tip; point it where the road should go. Yaw only on seams,
-/// yaw and pitch on waypoints.</item>
-/// <item><b>Bank</b> — the two bar ends, waypoints only; lift an edge to roll the road.</item>
+/// <item><b>Aim</b> — the arrow tip; point it where the road should go, in yaw and pitch.</item>
+/// <item><b>Bank</b> — the two bar ends; lift an edge to roll the road.</item>
 /// </list>
 ///
 /// Between consecutive nodes a secondary handle sits on the route: clicking it inserts a waypoint
@@ -84,12 +83,26 @@ public partial class TrackPieceGizmo : EditorNode3DGizmoPlugin
 		CreateMaterial(RouteMaterial, new Color(1.0f, 0.82f, 0.05f));
 		CreateHandleMaterial(HandleMaterial);
 		CreateHandleMaterial(InsertHandleMaterial);
+
+		// Handles draw through geometry, or they may as well not draw: a handle is a dot a few
+		// pixels wide sitting on — and half inside — a road slab, and the extend handles in
+		// particular sit exactly where the ghost preview parks its mesh. Depth-tested, "there is
+		// no + anywhere" was the accurate user report.
+		foreach (string name in new[] { HandleMaterial, InsertHandleMaterial })
+		{
+			if (GetMaterial(name) is StandardMaterial3D material)
+			{
+				material.NoDepthTest = true;
+				material.RenderPriority = 100;
+			}
+		}
 	}
 
 	public override string _GetGizmoName() => "TrackPiece";
 
 	public override bool _HasGizmo(Node3D forNode3D)
 		=> forNode3D is TrackPiece
+		   || forNode3D is TrackAssembly
 		   || (forNode3D is Marker3D marker && marker.GetParent() is TrackPiece);
 
 	public override void _Redraw(EditorNode3DGizmo gizmo)
@@ -98,6 +111,20 @@ public partial class TrackPieceGizmo : EditorNode3DGizmoPlugin
 
 		switch (gizmo.GetNode3D())
 		{
+			// An assembly shows its whole frontier: every open seam gets its bar and a "+" handle.
+			case TrackAssembly assembly:
+				DrawAssembly(gizmo, assembly);
+				break;
+
+			// A piece sitting in an assembly is an instance being chained, not a shape being
+			// authored: its route draws so the joint can be read, but the editing handles belong
+			// to the piece's own scene — what it gets here are the "+" handles on its open seams.
+			case TrackPiece piece when piece.GetParent() is TrackAssembly assembly:
+				DrawRoute(gizmo, piece, Transform3D.Identity);
+				DrawExtendHandles(gizmo, OpenSeamsOf(assembly, piece),
+								  piece.GlobalTransform.AffineInverse());
+				break;
+
 			case TrackPiece piece:
 				DrawPiece(gizmo, piece);
 				break;
@@ -111,6 +138,127 @@ public partial class TrackPieceGizmo : EditorNode3DGizmoPlugin
 				DrawMarker(gizmo, piece, marker);
 				break;
 		}
+	}
+
+	/// <summary>
+	/// The frontier, drawn on the assembly itself: a bar at every open seam and a "+" handle off
+	/// each one's arrow tip. Selecting the assembly is how you see everywhere the track can grow
+	/// at once.
+	/// </summary>
+	private void DrawAssembly(EditorNode3DGizmo gizmo, TrackAssembly assembly)
+	{
+		Transform3D into = assembly.GlobalTransform.AffineInverse();
+
+		var seams = new List<Marker3D>();
+		foreach ((TrackPiece _, Marker3D seam) in assembly.OpenSeams())
+		{
+			seams.Add(seam);
+			DrawSeam(gizmo, into * seam.GlobalTransform, GetMaterial(ExitMaterial, gizmo),
+					 HalfWidthOf(seam));
+		}
+
+		// An empty assembly has no seams and therefore nowhere to click, which would make the
+		// first piece the one piece the tool cannot place. One handle at the origin instead: click
+		// it and the armed piece starts the track there.
+		if (seams.Count == 0 && !HasPieces(assembly))
+		{
+			DrawSeam(gizmo, Transform3D.Identity, GetMaterial(EntryMaterial, gizmo));
+
+			Vector3 tip = Vector3.Forward * ArrowLength;
+			Vector3 handle = tip + Vector3.Up * ExtendLift;
+
+			var lines = new List<Vector3>();
+			AddExtendCross(lines, handle, Basis.Identity, tip);
+
+			gizmo.AddLines(lines.ToArray(), GetMaterial(RouteMaterial, gizmo));
+			gizmo.AddHandles(new[] { handle },
+							 GetMaterial(InsertHandleMaterial, gizmo), new[] { 0 }, secondary: true);
+			return;
+		}
+
+		DrawExtendHandles(gizmo, seams, into);
+	}
+
+	private static bool HasPieces(TrackAssembly assembly)
+	{
+		foreach (TrackPiece _ in assembly.Pieces)
+			return true;
+
+		return false;
+	}
+
+	/// <summary>How far an extend handle floats above the seam's arrow tip. Clear of the deck —
+	/// and of the ghost preview parked on the same spot — with a stalk drawn down to the road so
+	/// the dot reads as belonging to the seam.</summary>
+	private const float ExtendLift = 7.0f;
+
+	/// <summary>
+	/// A clickable "+" per open seam, floating over the seam's arrow tip — click one and the
+	/// armed palette piece is built there. Secondary handles, like the waypoint inserts, because
+	/// a click that creates something is a commit, not a drag.
+	/// </summary>
+	private void DrawExtendHandles(EditorNode3DGizmo gizmo, List<Marker3D> seams, Transform3D into)
+	{
+		if (seams.Count == 0)
+			return;
+
+		var handles = new Vector3[seams.Count];
+		var ids = new int[seams.Count];
+		var lines = new List<Vector3>();
+
+		for (var i = 0; i < seams.Count; i++)
+		{
+			Transform3D at = into * seams[i].GlobalTransform;
+			Vector3 tip = at.Origin + at.Basis * Vector3.Forward * ArrowLength;
+
+			handles[i] = tip + at.Basis * Vector3.Up * ExtendLift;
+			ids[i] = i;
+
+			AddExtendCross(lines, handles[i], at.Basis, tip);
+		}
+
+		gizmo.AddLines(lines.ToArray(), GetMaterial(RouteMaterial, gizmo));
+		gizmo.AddHandles(handles, GetMaterial(InsertHandleMaterial, gizmo), ids, secondary: true);
+	}
+
+	/// <summary>Half-length of each arm of the "+" drawn at an extend point.</summary>
+	private const float CrossArm = 3.5f;
+
+	/// <summary>
+	/// The visible "+": a stalk up from the seam's arrow tip and a cross of lines around the
+	/// clickable handle. Drawn out of lines rather than trusting the handle's own dot, because a
+	/// handle renders as a textured point and a point that fails to draw fails silently — the
+	/// lines are the signpost, the handle underneath them is the button.
+	/// </summary>
+	private static void AddExtendCross(List<Vector3> lines, Vector3 at, Basis basis, Vector3 stalkFoot)
+	{
+		lines.Add(stalkFoot);
+		lines.Add(at);
+
+		Vector3 across = basis * Vector3.Right * CrossArm;
+		Vector3 along = basis * Vector3.Forward * CrossArm;
+		Vector3 up = basis * Vector3.Up * CrossArm;
+
+		lines.Add(at - across);
+		lines.Add(at + across);
+		lines.Add(at - along);
+		lines.Add(at + along);
+		lines.Add(at - up);
+		lines.Add(at + up);
+	}
+
+	/// <summary>The open seams belonging to one piece, in the assembly's frontier order.</summary>
+	private static List<Marker3D> OpenSeamsOf(TrackAssembly assembly, TrackPiece piece)
+	{
+		var mine = new List<Marker3D>();
+
+		foreach ((TrackPiece owner, Marker3D seam) in assembly.OpenSeams())
+		{
+			if (owner == piece)
+				mine.Add(seam);
+		}
+
+		return mine;
 	}
 
 	/// <summary>
@@ -134,14 +282,12 @@ public partial class TrackPieceGizmo : EditorNode3DGizmoPlugin
 
 		var ids = new List<int> { KindMove, KindHeight, KindAim };
 
-		if (!IsSeam(piece, marker))
-		{
-			handles.Add(Vector3.Left * SeamHalfWidth + Vector3.Up * BarUpright);
-			ids.Add(KindBankLeft);
+		float half = HalfWidthOf(marker);
+		handles.Add(Vector3.Left * half + Vector3.Up * BarUpright);
+		ids.Add(KindBankLeft);
 
-			handles.Add(Vector3.Right * SeamHalfWidth + Vector3.Up * BarUpright);
-			ids.Add(KindBankRight);
-		}
+		handles.Add(Vector3.Right * half + Vector3.Up * BarUpright);
+		ids.Add(KindBankRight);
 
 		gizmo.AddHandles(handles.ToArray(), GetMaterial(HandleMaterial, gizmo), ids.ToArray());
 	}
@@ -171,15 +317,13 @@ public partial class TrackPieceGizmo : EditorNode3DGizmoPlugin
 			handles.Add(at.Origin + at.Basis * Vector3.Forward * ArrowLength);
 			ids.Add(i * KindStride + KindAim);
 
-			// The one omission that is the point: a seam has no bank handles, because a banked seam
-			// is the one thing the chain cannot represent. Nothing to grab, nothing to snap back.
-			if (IsSeam(piece, node))
-				continue;
-
-			handles.Add(at.Origin + at.Basis * (Vector3.Left * SeamHalfWidth + Vector3.Up * BarUpright));
+			// Seams included: a banked seam is a frame the chain now carries whole, so the handle
+			// that banks one is a legal move like any other.
+			float half = HalfWidthOf(node);
+			handles.Add(at.Origin + at.Basis * (Vector3.Left * half + Vector3.Up * BarUpright));
 			ids.Add(i * KindStride + KindBankLeft);
 
-			handles.Add(at.Origin + at.Basis * (Vector3.Right * SeamHalfWidth + Vector3.Up * BarUpright));
+			handles.Add(at.Origin + at.Basis * (Vector3.Right * half + Vector3.Up * BarUpright));
 			ids.Add(i * KindStride + KindBankRight);
 		}
 
@@ -213,7 +357,7 @@ public partial class TrackPieceGizmo : EditorNode3DGizmoPlugin
 							: node == piece.Exit ? ExitMaterial
 							: WaypointMaterial;
 
-			DrawSeam(gizmo, into * node.Transform, GetMaterial(material, gizmo));
+			DrawSeam(gizmo, into * node.Transform, GetMaterial(material, gizmo), HalfWidthOf(node));
 		}
 
 		if (piece.Spine is not { Curve: { } curve } spine || curve.PointCount < 2)
@@ -233,17 +377,18 @@ public partial class TrackPieceGizmo : EditorNode3DGizmoPlugin
 		gizmo.AddLines(lines, GetMaterial(RouteMaterial, gizmo));
 	}
 
-	/// <summary>A route node: a bar across the road, an upright at each end so its bank is
-	/// readable, and an arrow the way the racer travels through it.</summary>
-	private static void DrawSeam(EditorNode3DGizmo gizmo, Transform3D at, Material material)
+	/// <summary>A route node: a bar across the road at its declared width, an upright at each end
+	/// so its bank is readable, and an arrow the way the racer travels through it.</summary>
+	private static void DrawSeam(EditorNode3DGizmo gizmo, Transform3D at, Material material,
+								 float halfWidth = SeamHalfWidth)
 	{
 		Vector3 origin = at.Origin;
 		Vector3 across = at.Basis * Vector3.Right;
 		Vector3 forward = at.Basis * Vector3.Forward;
 		Vector3 up = at.Basis * Vector3.Up;
 
-		Vector3 left = origin - across * SeamHalfWidth;
-		Vector3 right = origin + across * SeamHalfWidth;
+		Vector3 left = origin - across * halfWidth;
+		Vector3 right = origin + across * halfWidth;
 		Vector3 tip = origin + forward * ArrowLength;
 
 		gizmo.AddLines(new[]
@@ -263,7 +408,15 @@ public partial class TrackPieceGizmo : EditorNode3DGizmoPlugin
 	public override string _GetHandleName(EditorNode3DGizmo gizmo, int handleId, bool secondary)
 	{
 		if (secondary)
-			return "Insert waypoint";
+		{
+			// The same slot means two things depending on what the gizmo is attached to: on a
+			// piece being authored it inserts a waypoint, on an assembly (or a piece chained into
+			// one) it builds the armed piece at an open seam.
+			return gizmo.GetNode3D() is TrackAssembly
+				   || (gizmo.GetNode3D() is TrackPiece piece && piece.GetParent() is TrackAssembly)
+				? "Extend track"
+				: "Insert waypoint";
+		}
 
 		return (handleId % KindStride) switch
 		{
@@ -334,7 +487,6 @@ public partial class TrackPieceGizmo : EditorNode3DGizmoPlugin
 			|| piece == null || node == null)
 			return;
 
-		bool seam = IsSeam(piece, node);
 		Transform3D at = node.Transform;
 
 		// The pick ray in the piece's own space, which is the space every route transform lives in.
@@ -378,13 +530,10 @@ public partial class TrackPieceGizmo : EditorNode3DGizmoPlugin
 			case KindAim:
 			{
 				// Point the node at the cursor: the direction from the node to the nearest point on
-				// the pick ray. On a seam the vertical part is dropped, which is the yaw-only
-				// constraint doing its work in the one place it applies.
+				// the pick ray. Seams aim in pitch as well as yaw now — the chain carries the whole
+				// frame, so a seam mid-climb is as legal as a waypoint mid-climb.
 				Vector3 nearest = from + direction * Mathf.Max(0.0f, (at.Origin - from).Dot(direction));
 				Vector3 aim = nearest - at.Origin;
-
-				if (seam)
-					aim.Y = 0.0f;
 
 				if (aim.LengthSquared() < 0.25f)
 					return;
@@ -395,7 +544,7 @@ public partial class TrackPieceGizmo : EditorNode3DGizmoPlugin
 										  Mathf.DegToRad(-MaxPitchDegrees),
 										  Mathf.DegToRad(MaxPitchDegrees));
 				float yaw = Mathf.Atan2(-aim.X, -aim.Z);
-				float roll = seam ? 0.0f : TrackPiece.RollOf(at.Basis);
+				float roll = TrackPiece.RollOf(at.Basis);
 
 				node.Transform = at with { Basis = AimedBasis(yaw, pitch, roll) };
 				return;
@@ -432,7 +581,21 @@ public partial class TrackPieceGizmo : EditorNode3DGizmoPlugin
 				float pitch = Mathf.Asin(Mathf.Clamp(forward.Y, -1.0f, 1.0f));
 				float yaw = Mathf.Atan2(-forward.X, -forward.Z);
 
-				node.Transform = at with { Basis = AimedBasis(yaw, pitch, bank) };
+				// The bank hinges on the edge NOT being dragged: lift the left bar-end and the
+				// right one holds still, like tilting a plank resting on its far edge. A pure
+				// roll pivots the section about the spine, which drops the inside of the road
+				// exactly as far as it raises the outside — nobody banking a corner means that.
+				// Keeping the hinge edge fixed through each incremental update means the whole
+				// drag leaves it exactly where it started.
+				float half = HalfWidthOf(node);
+				Vector3 hingeLocal = kind == KindBankLeft
+					? Vector3.Right * half
+					: Vector3.Left * half;
+
+				Vector3 hinge = at.Origin + at.Basis * hingeLocal;
+				Basis banked = AimedBasis(yaw, pitch, bank);
+
+				node.Transform = new Transform3D(banked, hinge - banked * hingeLocal);
 				return;
 			}
 		}
@@ -443,10 +606,39 @@ public partial class TrackPieceGizmo : EditorNode3DGizmoPlugin
 	{
 		if (secondary)
 		{
-			// The insert happens here rather than in _SetHandle so it lands as one undoable action.
-			// Only ever offered on the piece's own gizmo, where the segment index means something.
-			if (!cancel && gizmo.GetNode3D() is TrackPiece owner)
-				Plugin?.InsertWaypointAfter(owner, handleId);
+			// Creation happens here rather than in _SetHandle so it lands as one undoable action —
+			// whether it is a waypoint into a route or a whole piece onto the frontier.
+			if (cancel)
+				return;
+
+			switch (gizmo.GetNode3D())
+			{
+				case TrackAssembly assembly:
+				{
+					List<(TrackPiece Piece, Marker3D Seam)> open = assembly.OpenSeams();
+
+					// No open seams and no pieces is the bootstrap handle: the armed piece
+					// starts the track at the assembly's own origin.
+					if (open.Count == 0 && !HasPieces(assembly))
+						Plugin?.ExtendTrack(assembly, null);
+					else if (handleId >= 0 && handleId < open.Count)
+						Plugin?.ExtendTrack(assembly, open[handleId].Seam);
+					return;
+				}
+
+				case TrackPiece chained when chained.GetParent() is TrackAssembly assembly:
+				{
+					List<Marker3D> mine = OpenSeamsOf(assembly, chained);
+					if (handleId >= 0 && handleId < mine.Count)
+						Plugin?.ExtendTrack(assembly, mine[handleId]);
+					return;
+				}
+
+				case TrackPiece owner:
+					Plugin?.InsertWaypointAfter(owner, handleId);
+					return;
+			}
+
 			return;
 		}
 
@@ -487,8 +679,10 @@ public partial class TrackPieceGizmo : EditorNode3DGizmoPlugin
 		return aimed.Rotated(forward.Normalized(), roll);
 	}
 
-	private static bool IsSeam(TrackPiece piece, Marker3D node)
-		=> node == piece.Entry || node == piece.Exit;
+	/// <summary>Half the width a node's bar draws at: a connector's declared width, or the
+	/// catalog road for a plain marker — waypoints and old-scene seams alike.</summary>
+	private static float HalfWidthOf(Marker3D node)
+		=> node is TrackConnector connector ? connector.Width * 0.5f : SeamHalfWidth;
 
 	private static List<Marker3D> RouteOf(TrackPiece piece)
 	{
