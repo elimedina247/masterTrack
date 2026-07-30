@@ -3,38 +3,33 @@
 [ext_resource type="Script" path="res://scripts/tiles/tool/TrackPiece.cs" id="1_piece"]
 [ext_resource type="Material" path="res://resources/tiles/road.tres" id="2_road"]
 
-; A banked quarter turn to the right, 63 m radius - TileCatalog.CornerRadius.
+; A banked quarter turn, 63 m radius - TileCatalog.CornerRadius.
 ;
-; THE BANK IS IN THE CROSS-SECTION, NOT IN THE WAYPOINTS
+; WHY THE BANK IS A WAYPOINT ROLL AND NOT A SHAPE IN THE POLYGON
 ;
-; Rolling a waypoint rotates the whole section about the spine, so one edge rises and the other
-; sinks by the same amount - which is how the old version of this piece ended up with its inside
-; edge buried 13.5 m under the pad. Drawn into the polygon instead, the inside stays flat on the
-; ground at y=0 and only the outside climbs. That leaves an inside line a car that arrived slowly
-; can still drive, which is the whole reason the hand-built corners kept one.
+; It was drawn into the cross-section, which gave a lovely profile - flat inside on the ground,
+; climbing to 15.2 m outside - and could not be joined to anything. CSGPolygon3D path mode sweeps
+; ONE polygon, unchanged from end to end, so that bank was at full height at the entry and exit
+; faces: a 15.2 m outer edge butting a straight's 2 m wall, a 13 m cliff at every seam.
 ;
-; So every waypoint here is LEVEL. Rolling one would bank it twice.
+; Roll is the one thing that can vary along a sweep, because Curve3D interpolates tilt between its
+; points. So the seams sit level, the apex is rolled 25 degrees, and the bank eases in and out on
+; its own - which is exactly what the hand-built corners' BankScale did, and it means this joins a
+; straight flat and square.
 ;
-; WHICH SIDE IS THE OUTSIDE
+; THE COST, STATED PLAINLY
 ;
-; The opposite of the way it turns. A right-hander throws the car LEFT, so the left edge is the one
-; in the air - the polygon rises toward -X. CurveLeft is the mirror of this and rises toward +X.
-; Getting it backwards builds a corner that tips you off it.
+; Roll pivots the whole section about the spine, so the inside edge dips as far below the seam
+; plane as the outside rises above it - about 11 m each way at this angle. The centre line stays
+; level, so there is no hump to launch off, but there is no flat inside line either: the whole road
+; tips. The profiled version kept one and could not be joined; this joins and cannot keep one.
 ;
-; THE PROFILE
+; Getting both needs a cross-section that changes along the sweep, which is a code sweep rather
+; than a CSG one - see docs/tile-tool.md.
 ;
-; Flat across the inner 35% of the road, then climbing to 15.2 m at the outer lip. The rise is the
-; integral of tan(60deg * u squared) across the banked part, which is the shape the hand-built
-; corners used: the angle is squared so the surface leaves the flat imperceptibly and keeps its
-; steepness for the top, rather than kinking where the flat ends.
-;
-; 60 degrees at the lip is a speed, not a look. A bank holds a car unaided at
-; v = sqrt(g * r * tan(theta)), so at 2 g and 63 m that is neutral just under TopSpeed - riding the
-; wall flat out is the car holding itself up. Change the radius and this wants re-reading with it.
-;
-; The outer face is vertical from the lip down to the underside, which is the wall: at 60 degrees
-; the surface itself throws a car back down rather than off.
-[sub_resource type="Curve3D" id="Curve_right"]
+; 25 degrees is a bank a 54 m wide road can carry without the edges running away: sin 25 across 54 m
+; is 22.8 m of total span. Raise it and read the height it produces before committing.
+[sub_resource type="Curve3D" id="Curve_CurveRight"]
 
 [node name="CurveRight" type="StaticBody3D"]
 script = ExtResource("1_piece")
@@ -42,20 +37,20 @@ script = ExtResource("1_piece")
 [node name="Entry" type="Marker3D" parent="."]
 
 [node name="P1" type="Marker3D" parent="."]
-transform = Transform3D(0.7071, 0, -0.7071, 0, 1, 0, 0.7071, 0, 0.7071, 18.45, 0, -44.55)
+transform = Transform3D(0.6408, 0.2989, -0.7071, -0.4226, 0.9063, 0, 0.6408, 0.2989, 0.7071, 18.45, 0, -44.55)
 
 [node name="Exit" type="Marker3D" parent="."]
 transform = Transform3D(0, 0, -1, 0, 1, 0, 1, 0, 0, 63, 0, -63)
 
 [node name="Spine" type="Path3D" parent="."]
-curve = SubResource("Curve_right")
+curve = SubResource("Curve_CurveRight")
 
 [node name="Build" type="CSGCombiner3D" parent="."]
 use_collision = true
 
 [node name="Road" type="CSGPolygon3D" parent="Build"]
 material = ExtResource("2_road")
-polygon = PackedVector2Array(-27, -1.6, 27, -1.6, 27, 2, 24.57, 2, 24.57, 0, 8.1, 0, 1.08, 0.11, -5.94, 0.81, -9.45, 1.58, -12.96, 2.74, -16.47, 4.43, -19.98, 6.8, -23.49, 10.19, -27, 15.22)
+polygon = PackedVector2Array(-27, -1.6, 27, -1.6, 27, 2, 24.57, 2, 24.57, 0, -24.57, 0, -24.57, 2, -27, 2)
 mode = 2
 path_node = NodePath("../../Spine")
 path_interval_type = 0

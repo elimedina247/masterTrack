@@ -3,9 +3,9 @@
 [ext_resource type="Script" uid="uid://crov4aijvusum" path="res://scripts/tiles/tool/TrackPiece.cs" id="1_piece"]
 [ext_resource type="Material" path="res://resources/tiles/road.tres" id="2_road"]
 
-[sub_resource type="Curve3D" id="Curve_straight"]
+[sub_resource type="Curve3D" id="Curve3D_2o5nj"]
 _data = {
-"points": PackedVector3Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -108),
+"points": PackedVector3Array(0, 0, 0, 0, 0, -36, 0, 0, 0, 0, 0, 36, 0, 0, 0, 0, 0, -108),
 "tilts": PackedFloat32Array(0, 0)
 }
 point_count = 2
@@ -19,7 +19,7 @@ script = ExtResource("1_piece")
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -108)
 
 [node name="Spine" type="Path3D" parent="." unique_id=466528866]
-curve = SubResource("Curve_straight")
+curve = SubResource("Curve3D_2o5nj")
 
 [node name="Build" type="CSGCombiner3D" parent="." unique_id=791106200]
 use_collision = true
