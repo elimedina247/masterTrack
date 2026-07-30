@@ -52,21 +52,36 @@ over the last half metre of a 63 m corner points 0.227° away from the true tang
 that half metre sweeps — and the chain *accumulates* that, because every piece is laid relative to
 the one before. Handles are exact.
 
-### The one rule
+### The one rule, retired
 
-`TrackAnchor` is a position and a yaw. Four floats, no pitch and no roll — which is deliberate, and
-is what keeps the chain clear of basis renormalisation and the drift that comes with it. So **both
-ends of a spine must be level and un-banked.**
+`TrackAnchor` is a position and a yaw, and while it was the chain's currency **both ends of a
+spine had to be level and un-banked** — a banked seam was a frame the next piece could not be
+built against. That rule is gone. The chain's currency is now a full `Transform3D` (see
+`TrackSnap`), orthonormalised after every composition so the drift the four-float anchor was
+guarding against never accumulates. A seam may bank, climb, or both; the next piece lands on the
+whole frame, and a corner that exits at 30° of bank joins a corner that enters at 30° of bank into
+one long banked sweep.
 
-`TrackPiece._GetConfigurationWarnings` enforces exactly that, and nothing about taste:
+What replaced the rule is a *contract per seam*: Entry and Exit are `TrackConnector` nodes (a
+Marker3D with a role, a width and a profile), and `_GetConfigurationWarnings` names visible costs —
+a width that steps against the catalog, a banked exit that only pairs with pieces expecting it —
+instead of forbidding shapes. Old pieces whose seams are plain Marker3Ds keep working with the
+connector defaults. `SeamSnapDegrees` still levels and squares the seams of pieces that want to
+chain on compass headings, but it is opt-in.
 
-- the spine starts at the origin;
-- it leaves heading down local −Z;
-- neither end is tilted (a roll the anchor cannot carry);
-- neither end is pitched (a kerb at the joint).
+### Assembling
 
-The bank is eased to zero over `BankBlend` at each end for the same reason. At full height from the
-first ring, a default corner would meet the straight beside it as a **16 m step**.
+Track is built out of pieces in a `TrackAssembly` node, three ways to the same result:
+
+- **Click-to-extend.** The *Track Pieces* dock lists everything in `scenes/tiles/pieces/`; click
+  one to arm it, select the assembly (or any piece in it), and every open seam shows a “+” handle
+  — click to build the armed piece there, exactly joined, undoable. An empty assembly offers one
+  handle at its origin to start from.
+- **By hand.** Instance piece scenes under the assembly in any order, tick `SnapChain`, and they
+  thread end to end in tree order.
+- **At runtime.** `PieceCatalog` reads every piece's seams straight out of the scene files —
+  `PackedScene.GetState()`, no instancing — and a builder folds `TrackSnap` over the entries. The
+  proving ground's chained course off the west edge of the pad is this path, drivable.
 
 ## What it costs
 
@@ -107,12 +122,19 @@ categories — `Straight`, `CurveLeft`/`CurveRight` (mirroring), `RampUp` (eleva
 against the chain arithmetic: `CurveRight` reports `(63, 0, -63)` at `-90°`, which is exactly what
 `TrackAnchor.Swept(63, π/2, 1)` folds.
 
-**Not yet wired into `TileCatalog`.** The pieces are laid out on the proving ground on purpose, so
-the seams can be driven before anything depends on them. Hooking them up means:
+**Wired into `TileCatalog`.** Every piece in the folder whose exit is level
+(`PieceEntry.IsAnchorChainable`) is appended to the catalog automatically — gold cards named after
+their files, dealt to the Track Master like anything else. `TileData.ScenePath` is what crosses
+the wire; on arrival `TrackTile` instances the scene by its entry seam instead of generating
+boxes, the exit anchor is folded from the piece's own seams
+(`PlacedTile.ExitAnchorFor`), and the footprint follows the spine's baked points — so a corkscrew
+reserves its coil, height band and all, not the chord between its ends.
 
-- `TileData.ScenePath` is declared and replicated but read by nothing — the hook is already stubbed;
-- the catalog becomes a list resource so the wire format stays an index into a stable order;
-- `TrackGrid`'s footprint comes from the swept spine rather than from `RunLength`/`TurnRadius`.
+The game chain speaks full frames too (`TrackGrid.HeadFrame`): a banked-exit piece is a card like
+any other, and placing one leaves the head banked — from where only authored pieces fit (a
+generated tile is built flat, so `Fits` refuses it a non-level frame) until something levels the
+track back out. A piece opts out of the deck by setting its root's `DeckWeight` to 0; weight and
+card description live on the piece root and are read straight out of the scene file.
 
 Every peer must have byte-identical piece files, since replication only sends a catalog id. Fine
 for pieces that ship; "players author tiles" is a much harder feature and is not this.
