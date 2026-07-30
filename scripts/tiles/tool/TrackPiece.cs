@@ -36,11 +36,16 @@ namespace MasterTrack.Tiles.Tool;
 /// scene, out of anything, facing any way. There is no spine to keep at the origin and no axis the
 /// geometry has to run down.
 ///
-/// Almost every mismatch between neighbours is free, because the next piece is placed <i>at</i>
-/// this one's exit: position, heading and height always agree by construction. The two that survive
-/// that are roll and pitch at the seam, because <see cref="TrackAnchor"/> is a position and a yaw
-/// with nowhere to record either — see <see cref="ExitRollDegrees"/>.
-/// <see cref="_GetConfigurationWarnings"/> names them rather than forbidding the shape.
+/// Every mismatch between neighbours is free, because the next piece is placed <i>at</i> this
+/// one's exit: position, heading, height, pitch and roll all agree by construction — the seam is a
+/// full <see cref="Transform3D"/> and <see cref="TrackSnap"/> folds the whole frame, so a corner
+/// that leaves banked hands its bank to whatever follows. The one mismatch left is width, which no
+/// transform carries; <see cref="TrackConnector.Width"/> declares it and
+/// <see cref="_GetConfigurationWarnings"/> names a disagreement rather than forbidding it.
+///
+/// The legacy chain (<see cref="TrackAnchor"/>, the grid game mode) still carries position and yaw
+/// only, so a banked or pitched seam is flattened <i>there</i> — the warnings say so while both
+/// paths exist.
 /// </summary>
 [Tool]
 [GlobalClass]
@@ -68,6 +73,25 @@ public partial class TrackPiece : StaticBody3D
 		get => _surface;
 		set { _surface = value; ApplySurfaceGroup(); }
 	}
+
+	/// <summary>
+	/// How often this piece is dealt to the Track Master, relative to every other card in the
+	/// catalog — the built-ins run from 2 (tall ramps) to 7 (corners). <b>0 keeps the piece out of
+	/// the deck entirely</b>, which is what a piece wants while it is still being shaped, or when
+	/// it only makes sense hand-placed in an assembly.
+	///
+	/// On the piece itself rather than in a registry, so the scene file is the whole truth about a
+	/// piece: the catalog reads it straight out of the saved scene, and there is no second list to
+	/// forget to update.
+	/// </summary>
+	[Export(PropertyHint.Range, "0,12,0.5")]
+	public float DeckWeight { get; set; } = 4.0f;
+
+	/// <summary>The card's tooltip in the Track Master's tray. Empty gets a serviceable default —
+	/// but the built-in tiles set the tone here, and it is worth matching: say what the piece asks
+	/// of the driver, not what it is made of.</summary>
+	[Export(PropertyHint.MultilineText)]
+	public string DeckDescription { get; set; } = "";
 
 	/// <summary>
 	/// Tick to bake the CSG under <c>Build</c> into a mesh and a collision shape. Unticks itself.
@@ -115,10 +139,29 @@ public partial class TrackPiece : StaticBody3D
 		{
 			foreach (Node child in GetChildren())
 			{
+				// A connector is never a waypoint, whatever it is called: a piece with a second
+				// exit must not have that exit quietly threaded into the middle of its road.
 				if (child is Marker3D marker
+					&& marker is not TrackConnector
 					&& marker.Name != EntryName
 					&& marker.Name != ExitName)
 					yield return marker;
+			}
+		}
+	}
+
+	/// <summary>
+	/// Every connector on the piece, in tree order. Today that is Entry and Exit; a split has a
+	/// third, and nothing here assumes two.
+	/// </summary>
+	public IEnumerable<TrackConnector> Connectors
+	{
+		get
+		{
+			foreach (Node child in GetChildren())
+			{
+				if (child is TrackConnector connector)
+					yield return connector;
 			}
 		}
 	}
@@ -350,19 +393,24 @@ public partial class TrackPiece : StaticBody3D
 	}
 
 	/// <summary>
-	/// Hold the two seams level, and — if asked — on a tidy heading.
+	/// If asked, hold the two seams level and on a tidy heading.
 	///
-	/// <b>Flat by construction rather than by warning.</b> The chain carries a position and a yaw,
-	/// so a seam with pitch or roll in it is a frame the next piece cannot be built against — and
-	/// being told off about it after the fact is worse than it simply not being possible. Position
-	/// and heading stay free; only the pitch and the roll are taken back out.
+	/// <b>Opt-in now, where it used to be the law.</b> While the chain was a position and a yaw, a
+	/// seam with pitch or roll in it was a frame the next piece could not be built against, so
+	/// every seam was flattened on every edit. <see cref="TrackSnap"/> folds full transforms, which
+	/// makes a banked exit a piece's most interesting feature rather than its defect — a corner
+	/// that leaves at 30 degrees of bank joins a corner that arrives at 30 degrees of bank, and
+	/// the pair make a longer banked sweep.
 	///
-	/// The heading is then snapped to <see cref="SeamSnapDegrees"/>, which is the difference between
-	/// a piece that chains predictably and one that does not: a tile leaving at -160.4 degrees sends
-	/// everything after it off at 160.4 degrees, and nothing downstream ever lines up with anything.
+	/// What survives is the tidiness knob: with <see cref="SeamSnapDegrees"/> set, both seams are
+	/// levelled and their headings snapped, which is what a piece meant to chain on square compass
+	/// headings wants. At 0 — the default — seams are wherever and however you aim them.
 	/// </summary>
-	private void LevelSeams()
+	private void SnapSeams()
 	{
+		if (SeamSnapDegrees <= 0.0f)
+			return;
+
 		foreach (Marker3D? seam in new[] { Entry, Exit })
 		{
 			if (seam == null)
@@ -376,13 +424,8 @@ public partial class TrackPiece : StaticBody3D
 			if (flat.LengthSquared() < 1e-6f)
 				continue;
 
-			float yaw = Mathf.Atan2(-flat.X, -flat.Z);
-
-			if (SeamSnapDegrees > 0.0f)
-			{
-				float step = Mathf.DegToRad(SeamSnapDegrees);
-				yaw = Mathf.Round(yaw / step) * step;
-			}
+			float step = Mathf.DegToRad(SeamSnapDegrees);
+			float yaw = Mathf.Round(Mathf.Atan2(-flat.X, -flat.Z) / step) * step;
 
 			var level = new Basis(Vector3.Up, yaw);
 			if (!seam.Transform.Basis.IsEqualApprox(level))
@@ -393,18 +436,17 @@ public partial class TrackPiece : StaticBody3D
 	private float _seamSnapDegrees;
 
 	/// <summary>
-	/// Snap both seams' headings to a multiple of this many degrees. 0 leaves them wherever they
-	/// are pointed.
+	/// Snap both seams level, with their headings on a multiple of this many degrees. 0 — the
+	/// default — leaves them exactly as aimed, banked and pitched included.
 	///
-	/// <b>What makes a piece chain predictably.</b> A seam's yaw <i>is</i> the turn the piece makes
-	/// — a right-hander exits at -90 because that is what turning right means — so it cannot simply
-	/// be zeroed without making every tile a straight. What can be done is to keep it on a tidy
-	/// number: at 90 a piece leaves heading straight on, or square left or right, and the tile after
-	/// it starts from an angle that lines up with everything else. At -160.4 degrees it does not,
-	/// and nothing downstream of it ever will.
+	/// <b>The tidiness knob for pieces meant to chain on square headings.</b> A seam's yaw <i>is</i>
+	/// the turn the piece makes — a right-hander exits at -90 because that is what turning right
+	/// means — and at 90 a piece leaves heading straight on, or square left or right, so the tile
+	/// after it starts from an angle that lines up with everything else. Setting it also levels the
+	/// seams, because a piece asking for square headings is a piece asking for flat joints.
 	///
-	/// 45 for pieces that want the diagonals too. Off by default, so it never quietly rotates a
-	/// piece that was deliberately at some other angle.
+	/// 45 for pieces that want the diagonals too. Off by default, so it never quietly rotates — or
+	/// un-banks — a seam that was deliberately aimed somewhere else.
 	/// </summary>
 	[Export(PropertyHint.Range, "0,90,15")]
 	public float SeamSnapDegrees
@@ -604,6 +646,50 @@ public partial class TrackPiece : StaticBody3D
 	public Marker3D? Exit => GetNodeOrNull<Marker3D>(ExitName);
 
 	/// <summary>
+	/// The seam the piece is attached <i>by</i>: its first entry connector, or the Entry marker on
+	/// an old scene. Everything that places a piece goes through this rather than through
+	/// <see cref="Entry"/>, so a piece whose seams are typed and one whose seams are plain markers
+	/// place identically.
+	/// </summary>
+	public Marker3D? EntrySeam
+	{
+		get
+		{
+			foreach (TrackConnector connector in Connectors)
+			{
+				if (connector.Role == ConnectorRole.Entry)
+					return connector;
+			}
+
+			return Entry;
+		}
+	}
+
+	/// <summary>
+	/// Every seam the piece hands the track on through, in tree order. One for a piece that runs
+	/// through, two for a split — and an old scene's Exit marker counts, so nothing has to be
+	/// upgraded before it can be built onto.
+	/// </summary>
+	public IEnumerable<Marker3D> ExitSeams
+	{
+		get
+		{
+			var any = false;
+			foreach (TrackConnector connector in Connectors)
+			{
+				if (connector.Role != ConnectorRole.Exit)
+					continue;
+
+				any = true;
+				yield return connector;
+			}
+
+			if (!any && Exit is { } exit)
+				yield return exit;
+		}
+	}
+
+	/// <summary>
 	/// Where the racer leaves the piece, <i>relative to where they entered it</i> — what the chain
 	/// folds onto the head.
 	///
@@ -646,12 +732,12 @@ public partial class TrackPiece : StaticBody3D
 	/// <summary>
 	/// How far the exit is rolled relative to the entry, in degrees.
 	///
-	/// <b>The one mismatch the chain genuinely cannot absorb.</b> Position, heading and height are
-	/// free — the next piece is placed <i>at</i> this seam, so those always agree by construction.
-	/// Roll does not: <see cref="TrackAnchor"/> is a position and a yaw, so a piece that leaves
-	/// banked hands its neighbour a frame with nowhere to record the bank, and the neighbour is
-	/// built as though it were flat. Until there is a transition piece to twist between them, this
-	/// wants to be zero at both ends.
+	/// <b>No longer a defect — a property.</b> The assembled chain folds full transforms
+	/// (<see cref="TrackSnap"/>), so a piece that leaves banked hands the whole banked frame to its
+	/// neighbour and the joint is seamless. What this number still is, is information: a piece with
+	/// a rolled exit only looks continuous against a piece whose entry expects that roll, and the
+	/// legacy <see cref="TrackAnchor"/> chain — position and yaw — flattens it entirely. Read it,
+	/// don't fear it.
 	/// </summary>
 	public float ExitRollDegrees
 	{
@@ -683,7 +769,7 @@ public partial class TrackPiece : StaticBody3D
 		if (Engine.IsEditorHint())
 		{
 			EnsureAnchors();
-			LevelSeams();
+			SnapSeams();
 			SetProcess(true);
 		}
 		else if (IsBaked)
@@ -726,9 +812,9 @@ public partial class TrackPiece : StaticBody3D
 
 		_seam = shape;
 
-		// Order matters: the seams are levelled first so the spine is generated through frames that
+		// Order matters: the seams are snapped first so the spine is generated through frames that
 		// already satisfy the contract, rather than being built and then contradicted.
-		LevelSeams();
+		SnapSeams();
 		RebuildSpine();
 		UpdateConfigurationWarnings();
 
@@ -792,9 +878,12 @@ public partial class TrackPiece : StaticBody3D
 	/// </summary>
 	private void EnsureAnchors()
 	{
+		// TrackConnectors rather than bare markers, so a new piece's seams carry width and profile
+		// from the moment they exist. Old scenes whose seams are plain Marker3Ds keep working —
+		// everything reads them through the Marker3D type and assumes the connector defaults.
 		if (Entry == null)
 		{
-			var entry = new Marker3D { Name = EntryName };
+			var entry = new TrackConnector { Name = EntryName, Role = ConnectorRole.Entry };
 			AddChild(entry);
 			Adopt(entry);
 		}
@@ -803,9 +892,10 @@ public partial class TrackPiece : StaticBody3D
 		// somewhere else.
 		if (Exit == null)
 		{
-			var exit = new Marker3D
+			var exit = new TrackConnector
 			{
 				Name = ExitName,
+				Role = ConnectorRole.Exit,
 				Position = new Vector3(0.0f, 0.0f, -TileCatalog.ShortRun),
 			};
 			AddChild(exit);
@@ -935,6 +1025,13 @@ public partial class TrackPiece : StaticBody3D
 		if (Build == null && !IsBaked)
 			warnings.Add($"No {BuildName} node and nothing baked, so this piece has no shape yet.");
 
+		if (DeckWeight > 0.0f && !IsBaked && Build != null)
+		{
+			warnings.Add($"In the deck (weight {DeckWeight:0.#}) but not baked: every mid-race "
+						 + "placement rebuilds this CSG on every peer. Tick Bake before it ships, "
+						 + "or set DeckWeight to 0 while it is still being shaped.");
+		}
+
 		// A piece is positioned by its Entry when it is placed, which overwrites this node's whole
 		// transform — scale included. So a scaled root shows you one size in the editor and builds
 		// another in the game, which is the most misleading thing a piece can do.
@@ -967,23 +1064,21 @@ public partial class TrackPiece : StaticBody3D
 						 + "where it already was, so the track would quietly stop growing.");
 		}
 
-		// Position, heading and height need no checking at all: the next piece is placed *at* this
-		// seam, so those agree by construction. These two are the mismatches that survive that, and
-		// they survive it because TrackAnchor is a position and a yaw with nowhere to put them.
+		// Position, heading, height, pitch and roll all need no checking at all: the next piece is
+		// placed *at* this seam as a full transform, so every one of them agrees by construction.
+		// The one caveat, while the legacy anchor chain still exists, is that *it* carries position
+		// and yaw only — a piece meant for the grid game mode wants level seams, and this says so
+		// without forbidding the banked ones the assembly workflow is for.
 		float roll = ExitRollDegrees;
-		if (Mathf.Abs(roll) > 1.0f)
-		{
-			warnings.Add($"{ExitName} is rolled {roll:0.#} degrees relative to {EntryName}. The chain "
-						 + "carries no roll, so the next piece will be built flat and the joint will "
-						 + "be a step. Level the exit, or wait for transition pieces.");
-		}
-
 		Vector3 forward = (seam.Basis * Vector3.Forward).Normalized();
-		if (Mathf.Abs(forward.Y) > Mathf.Sin(Mathf.DegToRad(1.0f)))
+		float pitch = Mathf.RadToDeg(Mathf.Asin(Mathf.Clamp(forward.Y, -1.0f, 1.0f)));
+
+		if (Mathf.Abs(roll) > 1.0f || Mathf.Abs(pitch) > 1.0f)
 		{
-			warnings.Add($"{ExitName} is pitched {Mathf.RadToDeg(Mathf.Asin(forward.Y)):0.#} degrees. "
-						 + "A climb has to flatten out before the seam, or the joint with the next "
-						 + "piece is a kerb.");
+			warnings.Add($"{ExitName} leaves banked {roll:0.#} degrees and pitched {pitch:0.#} "
+						 + "degrees relative to the entry. Assembled tracks carry that through the "
+						 + "joint — just pair it with pieces that expect it. Only the legacy grid "
+						 + "chain flattens seams; a piece for that mode wants both at zero.");
 		}
 
 		return warnings.ToArray();
