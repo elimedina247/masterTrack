@@ -1,0 +1,48 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/tiles/tool/TrackPiece.cs" id="1_piece"]
+[ext_resource type="Material" path="res://resources/tiles/road.tres" id="2_road"]
+
+; A banked quarter turn to the left, 63 m radius - the mirror of CurveRight.
+;
+; A left-hander throws the car RIGHT, so the right edge is the one in the air: the polygon is
+; CurveRight's with every X negated and the run reversed to keep its winding. The inside stays flat
+; on the ground at y=0 and only the outside climbs, so there is still an inside line a car that
+; arrived slowly can drive.
+;
+; Every waypoint is LEVEL. The bank lives entirely in the cross-section - rolling a waypoint would
+; rotate the whole section about the spine and bank it twice, sinking the inside edge below the
+; ground the way the old hand-rolled version did.
+;
+; See CurveRight for why the profile is shaped the way it is and why 60 degrees at the lip is a
+; speed rather than a look.
+[sub_resource type="Curve3D" id="Curve_left"]
+
+[node name="CurveLeft" type="StaticBody3D"]
+script = ExtResource("1_piece")
+
+[node name="Entry" type="Marker3D" parent="."]
+
+[node name="P1" type="Marker3D" parent="."]
+transform = Transform3D(0.7071, 0, 0.7071, 0, 1, 0, -0.7071, 0, 0.7071, -18.45, 0, -44.55)
+
+[node name="Exit" type="Marker3D" parent="."]
+transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, -63, 0, -63)
+
+[node name="Spine" type="Path3D" parent="."]
+curve = SubResource("Curve_left")
+
+[node name="Build" type="CSGCombiner3D" parent="."]
+use_collision = true
+
+[node name="Road" type="CSGPolygon3D" parent="Build"]
+material = ExtResource("2_road")
+polygon = PackedVector2Array(-27, -1.6, 27, -1.6, 27, 15.22, 23.49, 10.19, 19.98, 6.8, 16.47, 4.43, 12.96, 2.74, 9.45, 1.58, 5.94, 0.81, 1.08, 0.11, -8.1, 0, -24.57, 0, -24.57, 2, -27, 2)
+mode = 2
+path_node = NodePath("../../Spine")
+path_interval_type = 0
+path_interval = 6.0
+path_simplify_angle = 1.0
+path_rotation = 2
+path_local = true
+path_continuous_u = true

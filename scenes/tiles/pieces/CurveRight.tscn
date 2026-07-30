@@ -1,44 +1,66 @@
-[gd_scene format=3 uid="uid://b3ok2dlk0v6m5"]
+[gd_scene load_steps=4 format=3]
 
-[ext_resource type="Script" uid="uid://crov4aijvusum" path="res://scripts/tiles/tool/TrackPiece.cs" id="1_piece"]
+[ext_resource type="Script" path="res://scripts/tiles/tool/TrackPiece.cs" id="1_piece"]
 [ext_resource type="Material" path="res://resources/tiles/road.tres" id="2_road"]
 
-[sub_resource type="Curve3D" id="Curve3D_0t7wg"]
-_data = {
-"points": PackedVector3Array(0, 0, 0, 0, 0, -16.709064, 0, 0, 0, -11.815094, 0, 11.815094, 11.815094, 0, -11.815094, 18.45, 0, -44.55, -16.709064, 0, 0, 0, 0, 0, 63, 0, -63),
-"tilts": PackedFloat32Array(0, 0.50613993, 0)
-}
-point_count = 3
+; A banked quarter turn to the right, 63 m radius - TileCatalog.CornerRadius.
+;
+; THE BANK IS IN THE CROSS-SECTION, NOT IN THE WAYPOINTS
+;
+; Rolling a waypoint rotates the whole section about the spine, so one edge rises and the other
+; sinks by the same amount - which is how the old version of this piece ended up with its inside
+; edge buried 13.5 m under the pad. Drawn into the polygon instead, the inside stays flat on the
+; ground at y=0 and only the outside climbs. That leaves an inside line a car that arrived slowly
+; can still drive, which is the whole reason the hand-built corners kept one.
+;
+; So every waypoint here is LEVEL. Rolling one would bank it twice.
+;
+; WHICH SIDE IS THE OUTSIDE
+;
+; The opposite of the way it turns. A right-hander throws the car LEFT, so the left edge is the one
+; in the air - the polygon rises toward -X. CurveLeft is the mirror of this and rises toward +X.
+; Getting it backwards builds a corner that tips you off it.
+;
+; THE PROFILE
+;
+; Flat across the inner 35% of the road, then climbing to 15.2 m at the outer lip. The rise is the
+; integral of tan(60deg * u squared) across the banked part, which is the shape the hand-built
+; corners used: the angle is squared so the surface leaves the flat imperceptibly and keeps its
+; steepness for the top, rather than kinking where the flat ends.
+;
+; 60 degrees at the lip is a speed, not a look. A bank holds a car unaided at
+; v = sqrt(g * r * tan(theta)), so at 2 g and 63 m that is neutral just under TopSpeed - riding the
+; wall flat out is the car holding itself up. Change the radius and this wants re-reading with it.
+;
+; The outer face is vertical from the lip down to the underside, which is the wall: at 60 degrees
+; the surface itself throws a car back down rather than off.
+[sub_resource type="Curve3D" id="Curve_right"]
 
-[node name="CurveRight" type="StaticBody3D" unique_id=205509542]
+[node name="CurveRight" type="StaticBody3D"]
 script = ExtResource("1_piece")
 
-[node name="Entry" type="Marker3D" parent="." unique_id=1088013319]
+[node name="Entry" type="Marker3D" parent="."]
 
-[node name="Exit" type="Marker3D" parent="." unique_id=849003529]
+[node name="P1" type="Marker3D" parent="."]
+transform = Transform3D(0.7071, 0, -0.7071, 0, 1, 0, 0.7071, 0, 0.7071, 18.45, 0, -44.55)
+
+[node name="Exit" type="Marker3D" parent="."]
 transform = Transform3D(0, 0, -1, 0, 1, 0, 1, 0, 0, 63, 0, -63)
 
-[node name="Point" type="Marker3D" parent="." unique_id=1986571759]
-transform = Transform3D(0.6184, 0.3428, -0.7071, -0.4848, 0.8746, 0, 0.6184, 0.3428, 0.7071, 18.45, 0, -44.55)
+[node name="Spine" type="Path3D" parent="."]
+curve = SubResource("Curve_right")
 
-[node name="Spine" type="Path3D" parent="." unique_id=506470642]
-curve = SubResource("Curve3D_0t7wg")
-
-[node name="Build" type="CSGCombiner3D" parent="." unique_id=590714538]
+[node name="Build" type="CSGCombiner3D" parent="."]
 use_collision = true
 
-[node name="Road" type="CSGPolygon3D" parent="Build" unique_id=2040205285]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.041452408, 0.059184074, -0.017082214)
-polygon = PackedVector2Array(-27, -1.6, 27, -1.6, 27, 2, 24.57, 2, 24.57, 0, -24.57, 0, -24.57, 2, -27, 2)
+[node name="Road" type="CSGPolygon3D" parent="Build"]
+material = ExtResource("2_road")
+polygon = PackedVector2Array(-27, -1.6, 27, -1.6, 27, 2, 24.57, 2, 24.57, 0, 8.1, 0, 1.08, 0.11, -5.94, 0.81, -9.45, 1.58, -12.96, 2.74, -16.47, 4.43, -19.98, 6.8, -23.49, 10.19, -27, 15.22)
 mode = 2
 path_node = NodePath("../../Spine")
 path_interval_type = 0
-path_interval = 8.0
+path_interval = 6.0
 path_simplify_angle = 1.0
 path_rotation = 2
-path_rotation_accurate = false
 path_local = true
 path_continuous_u = true
-path_u_distance = 1.0
-path_joined = false
-material = ExtResource("2_road")
