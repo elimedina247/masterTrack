@@ -49,8 +49,12 @@ public partial class PhysicsTestArea : Node3D
 	/// <summary>
 	/// Tiles per row. The catalog is long enough now that one row would be a two kilometre line
 	/// nobody is going to drive to the end of, so it wraps.
+	///
+	/// Nine rather than six, which trades depth for width: three rows instead of five takes the
+	/// grid's reach along from eleven cells to four, and that is what frees the band the authored
+	/// pieces now sit in — close to the origin instead of two kilometres west of it.
 	/// </summary>
-	[Export] public int TileColumns { get; set; } = 6;
+	[Export] public int TileColumns { get; set; } = 9;
 
 	/// <summary>Cells between tile columns. Three, so there is a clear cell beside even a
 	/// two-cell-wide hairpin.</summary>
@@ -272,6 +276,7 @@ public partial class PhysicsTestArea : Node3D
 		// And west, under the row of authored pieces. They have no size limit the way a catalog
 		// tile does, so this is worked out from how many there are rather than from a constant.
 		_padHalfX = Mathf.Max(_padHalfX, PadEdgeForPieces);
+		_padHalfZ = Mathf.Max(_padHalfZ, PadEdgeAlongForPieces);
 	}
 
 	public override void _UnhandledInput(InputEvent @event)

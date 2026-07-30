@@ -31,13 +31,18 @@ public partial class PhysicsTestArea
 	private const string PieceFolder = "res://scenes/tiles/pieces";
 
 	/// <summary>
-	/// Cell the row of specimens runs along, and the cell the first one sits on.
+	/// Cell the row of specimens runs along.
 	///
-	/// West of the catalog's layout and south of its rows, which is the one region of the pad
-	/// nothing else claims: the tile grid spans cells -7 to 8 across and -12 to 12 along, and the
-	/// two tracks anchor off the north and south edges at -15 and 15.
+	/// <b>Straddling the origin rather than trailing off to one side.</b> The row used to start west
+	/// of the catalog grid and run outward, which put the eighth piece two kilometres from where the
+	/// car spawns — most of the time spent looking at a piece was spent driving to it. Centred, the
+	/// furthest is about a third of that and the nearest is straight ahead.
+	///
+	/// Just south of the catalog's rows, which is the one band of the pad nothing else claims: the
+	/// tile grid reaches Z cell 4 at nine columns, and the two tracks anchor off the far edges at
+	/// -15 and 15.
 	/// </summary>
-	private static readonly Vector2I PieceFirstCell = new(-11, 6);
+	private const int PieceRowCell = 7;
 
 	/// <summary>
 	/// Cells between one specimen and the next.
@@ -56,12 +61,15 @@ public partial class PhysicsTestArea
 	/// <summary>How many authored pieces there are, counted without loading any of them.</summary>
 	private static int PieceCount => PieceScenePaths().Length;
 
+	/// <summary>Cell of the first specimen, so the row straddles the origin.</summary>
+	private static int FirstPieceCell => -((PieceCount - 1) * PieceCellStride) / 2;
+
 	/// <summary>
-	/// How far west the pad has to reach for the whole row to have ground under it.
+	/// How far across the pad has to reach for the whole row to have ground under it.
 	///
-	/// The pad is grown to this in <see cref="MeasurePad"/>, for the same reason it is grown to
-	/// reach the two tracks: everything off the pad is open air, so a specimen a metre past the edge
-	/// is one you can only arrive at by falling.
+	/// Grown to this in <see cref="MeasurePad"/>, for the same reason the pad is grown to reach the
+	/// two tracks: everything off it is open air, so a specimen a metre past the edge is one you can
+	/// only arrive at by falling.
 	/// </summary>
 	private static float PadEdgeForPieces
 	{
@@ -71,13 +79,19 @@ public partial class PhysicsTestArea
 			if (count == 0)
 				return 0.0f;
 
-			int furthest = Mathf.Abs(PieceFirstCell.X) + (count - 1) * PieceCellStride;
+			int first = FirstPieceCell;
+			int last = first + (count - 1) * PieceCellStride;
+			int furthest = Mathf.Max(Mathf.Abs(first), Mathf.Abs(last));
 
-			// Plus a piece's own width, since a specimen is placed by its entry and sweeps outward
-			// from there.
+			// Plus a piece's own reach, since a specimen is placed by its entry and sweeps outward
+			// from there rather than being centred on it.
 			return (furthest + PieceCellStride) * TileCatalog.TileSize;
 		}
 	}
+
+	/// <summary>And how far along, for the same reason. A piece runs north from its row.</summary>
+	private static float PadEdgeAlongForPieces
+		=> PieceCount == 0 ? 0.0f : (PieceRowCell + PieceCellStride) * TileCatalog.TileSize;
 
 	/// <summary>
 	/// Set every authored piece down on the pad, at ground level, facing north — so the run-up is
@@ -107,7 +121,7 @@ public partial class PhysicsTestArea
 			string label = System.IO.Path.GetFileNameWithoutExtension(paths[i]);
 			piece.Name = $"Piece_{label}";
 
-			var cell = new Vector2I(PieceFirstCell.X - i * PieceCellStride, PieceFirstCell.Y);
+			var cell = new Vector2I(FirstPieceCell + i * PieceCellStride, PieceRowCell);
 			Vector3 world = TileCatalog.CellToWorld(cell);
 
 			_generated.AddChild(piece);
@@ -130,12 +144,14 @@ public partial class PhysicsTestArea
 		}
 
 		AddLabel("Authored pieces ↓",
-				 TileCatalog.CellToWorld(PieceFirstCell)
-				 + new Vector3(TileCatalog.TileSize * 2.0f, 14.0f, TileCatalog.TileSize * 0.7f),
+				 TileCatalog.CellToWorld(new Vector2I(0, PieceRowCell))
+				 + new Vector3(0.0f, 16.0f, TileCatalog.TileSize * 1.4f),
 				 new Color(1.0f, 0.82f, 0.05f));
 
-		GD.Print($"[TestArea] Laid out {paths.Length} authored piece(s) from {PieceFirstCell} "
-				 + $"westward, every {PieceCellStride} cells, at ground level.");
+		GD.Print($"[TestArea] Laid out {paths.Length} authored piece(s) along row {PieceRowCell} "
+				 + $"from cell {FirstPieceCell}, every {PieceCellStride} cells, at ground level. "
+				 + $"Pad reaches "
+				 + $"X +/-{_padHalfX:0} m, Z +/-{_padHalfZ:0} m.");
 
 		ReportGeometry();
 	}
@@ -315,9 +331,19 @@ public partial class PhysicsTestArea
 				continue;
 			}
 
+			// In world space, because "is it on the pad" is a question about where it actually
+			// ended up, not about how big it is.
+			Aabb world = piece.Transform * bounds;
+			bool onPad = Mathf.Abs(world.Position.X) <= _padHalfX
+						 && Mathf.Abs(world.End.X) <= _padHalfX
+						 && Mathf.Abs(world.Position.Z) <= _padHalfZ
+						 && Mathf.Abs(world.End.Z) <= _padHalfZ;
+
 			GD.Print($"[TestArea]   {piece.Name}: live CSG, extent "
 					 + $"{bounds.Size.X:0.##} x {bounds.Size.Y:0.##} x {bounds.Size.Z:0.##} m, "
-					 + $"base Y {bounds.Position.Y:0.##} m.");
+					 + $"base Y {bounds.Position.Y:0.##} m, world X {world.Position.X:0} to "
+					 + $"{world.End.X:0}, Z {world.Position.Z:0} to {world.End.Z:0}, "
+					 + (onPad ? "on the pad." : "OFF THE PAD."));
 
 			// A specimen is set down by its Entry marker, so a piece whose geometry does not reach
 			// down to the entry is a piece hanging in the air above the spot it was placed on. It
