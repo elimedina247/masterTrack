@@ -1,0 +1,30 @@
+[gd_scene format=3 uid="uid://mcmw14roxiqv"]
+
+[ext_resource type="Script" uid="uid://bpeai682hyi53" path="res://scripts/tiles/tool/TrackAssembly.cs" id="1_pbgi7"]
+[ext_resource type="PackedScene" path="res://scenes/tiles/pieces/CurveRight.tscn" id="2_t61px"]
+[ext_resource type="Script" uid="uid://crov4aijvusum" path="res://scripts/tiles/tool/TrackPiece.cs" id="3_cjnv3"]
+[ext_resource type="PackedScene" uid="uid://cf6j566028myy" path="res://scenes/tiles/pieces/Straight.tscn" id="4_y5jk0"]
+[ext_resource type="PackedScene" uid="uid://ctv3e8wwg3hji" path="res://scenes/tiles/pieces/spiral_ramp.tscn" id="5_15k57"]
+
+[node name="TrackAssembly" type="Node3D" unique_id=274437712]
+script = ExtResource("1_pbgi7")
+metadata/_custom_type_script = "uid://bpeai682hyi53"
+
+[node name="CurveRight" type="StaticBody3D" parent="." unique_id=1514571719 instance=ExtResource("2_t61px")]
+script = ExtResource("3_cjnv3")
+
+[node name="CurveRight2" type="StaticBody3D" parent="." unique_id=1311009939 instance=ExtResource("2_t61px")]
+transform = Transform3D(0, 0, -1, 0, 1, 0, 1, 0, 0, 63, 0, -63)
+script = ExtResource("3_cjnv3")
+
+[node name="Straight" type="StaticBody3D" parent="." unique_id=1110771082 instance=ExtResource("4_y5jk0")]
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 126, 0, 0)
+script = ExtResource("3_cjnv3")
+
+[node name="spiral_ramp" type="StaticBody3D" parent="." unique_id=936072214 instance=ExtResource("5_15k57")]
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 126, 0, 108)
+script = ExtResource("3_cjnv3")
+
+[node name="Straight2" type="StaticBody3D" parent="." unique_id=958148031 instance=ExtResource("4_y5jk0")]
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 126, 108, 108)
+script = ExtResource("3_cjnv3")
