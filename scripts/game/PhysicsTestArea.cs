@@ -56,8 +56,16 @@ public partial class PhysicsTestArea : Node3D
 	/// two-cell-wide hairpin.</summary>
 	[Export] public int TileCellStride { get; set; } = 3;
 
-	/// <summary>Cells between tile rows: a three-cell tile, plus three cells of run-up to it.</summary>
-	[Export] public int TileRowStride { get; set; } = 6;
+	/// <summary>
+	/// Cells between tile rows: a three-cell tile, plus one cell of run-up to it.
+	///
+	/// Cut from six. The proving ground had grown into something you spent longer driving across
+	/// than looking at — six cells is 324 m a row, and with five rows that is most of a kilometre of
+	/// empty tarmac between the first tile and the last. Four still clears the longest tile in the
+	/// catalog with 54 m to spare, which is enough to see the next one coming; the fixed course is
+	/// where tiles are met at racing speed, and that has run-up of its own.
+	/// </summary>
+	[Export] public int TileRowStride { get; set; } = 4;
 
 	/// <summary>Widest and longest any tile in the catalog is, in cells. Hairpins are the wide
 	/// ones; the straight-through tiles are the long ones.</summary>

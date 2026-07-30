@@ -37,14 +37,21 @@ public partial class PhysicsTestArea
 	/// nothing else claims: the tile grid spans cells -7 to 8 across and -12 to 12 along, and the
 	/// two tracks anchor off the north and south edges at -15 and 15.
 	/// </summary>
-	private static readonly Vector2I PieceFirstCell = new(-14, 10);
+	private static readonly Vector2I PieceFirstCell = new(-11, 6);
 
 	/// <summary>
-	/// Cells between one specimen and the next. Six, because an authored piece has no size limit the
-	/// way a catalog tile does — the Twister is about a hundred and fifty metres across — and a row
-	/// of them overlapping would be worse than a row spread too thin.
+	/// Cells between one specimen and the next.
+	///
+	/// Cut from six, which put 324 m between pieces and pushed the pad out past two kilometres in
+	/// each direction — more time spent driving between them than looking at them. Four is 216 m,
+	/// which still clears the widest thing built so far: a three-loop corkscrew measures 162 m
+	/// across, so there is a clear cell between it and its neighbour.
+	///
+	/// An authored piece has no size limit the way a catalog tile does, so this is the one number to
+	/// raise if pieces start overlapping. The proving ground reports every piece's extents, which is
+	/// what to read it against.
 	/// </summary>
-	private const int PieceCellStride = 6;
+	private const int PieceCellStride = 4;
 
 	/// <summary>How many authored pieces there are, counted without loading any of them.</summary>
 	private static int PieceCount => PieceScenePaths().Length;

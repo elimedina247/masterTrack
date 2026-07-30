@@ -1,92 +1,63 @@
-[gd_scene load_steps=4 format=3]
+[gd_scene format=3 uid="uid://ctv3e8wwg3hji"]
 
-[ext_resource type="Script" path="res://scripts/tiles/tool/TrackPiece.cs" id="1_piece"]
+[ext_resource type="Script" uid="uid://crov4aijvusum" path="res://scripts/tiles/tool/TrackPiece.cs" id="1_piece"]
 [ext_resource type="Material" path="res://resources/tiles/road.tres" id="2_road"]
 
-; A corkscrew: three full turns to the right around a 54 m radius, climbing 36 m a turn, so it
-; comes out 108 m up directly above the entry and facing the same way.
-;
-; THE ARITHMETIC
-;
-; Centre of the arc is one radius right of Entry, at (54, 0, 0), and each quarter turn steps a
-; radius forward and a radius right of wherever it was - so the four plan positions just cycle:
-;
-;     0 deg    (0,   .,  0)     facing -Z
-;     90       (54,  .,  -54)   facing +X
-;     180      (108, .,  0)     facing +Z
-;     270      (54,  .,  54)    facing -X
-;
-; Twelve quarters is three loops. Height climbs 9 m a quarter, so 36 a loop - one
-; TileCatalog.HeightStep, which is what the ramps use, so a deck of this stacks with them.
-;
-; WHY 54 m AND 36 m
-;
-; 54 m is TileCatalog.HairpinRadius, the tightest the catalog turns. The road is 54 m wide and
-; centred on the arc, so its inside edge lands at 27 m - which TileCatalog.CornerRadius notes is
-; already past what the car holds at speed. Tighter and the inside line stops being drivable.
-;
-; 36 m a loop is the vertical clearance. The section is 3.6 m tall including its walls, so each
-; deck passes 32 m clear of the one below it. Drop the climb much below about 8 m a loop and the
-; corkscrew starts driving through itself.
-;
-; The grade is 36 m over 339 m of arc, about 6 degrees. Gentle, because a tight radius and a steep
-; climb pull against each other; raise the exit height if you want it steeper.
-;
-; The waypoints must stay in this order in the tree - that is the order the spine threads them -
-; and they are left level. Rotate one to bank the road there, or draw the bank into the Road
-; polygon instead, which lifts only the outside edge rather than rolling the whole section.
-[sub_resource type="Curve3D" id="Curve_corkscrew"]
+[sub_resource type="Curve3D" id="Curve3D_psg6v"]
+_data = {
+"points": PackedVector3Array(0, 0, 0, 0, 0, -30.029772, 0, 0, 0, -29.92745, -2.4768717, 0, 29.885414, 2.4733927, 0, 54, 9, -54, 0, -2.4733927, -29.885414, 0, 2.4733927, 29.885414, 108, 18, 0, 29.885414, -2.4733927, 0, -29.885414, 2.4733927, 0, 54, 27, 54, 0, -2.4733927, 29.885414, 0, 2.4733927, -29.885414, 0, 36, 0, -29.885414, -2.4733927, 0, 29.885414, 2.4733927, 0, 54, 45, -54, 0, -2.4733927, -29.885414, 0, 2.4733927, 29.885414, 108, 54, 0, 29.885414, -2.4733927, 0, -29.885414, 2.4733927, 0, 54, 63, 54, 0, -2.4733927, 29.885414, 0, 2.4733927, -29.885414, 0, 72, 0, -29.885414, -2.4733927, 0, 29.885414, 2.4733927, 0, 54, 81, -54, 0, -2.4733927, -29.885414, 0, 2.4733927, 29.885414, 108, 90, 0, 29.885414, -2.4733927, 0, -29.92745, 2.4768717, 0, 54, 99, 54, 0, 0, 30.029772, 0, 0, 0, 0, 108, 0),
+"tilts": PackedFloat32Array(0, -0.1657026, -0.33140472, -0.4971099, -0.66280955, -0.8285097, -0.9942118, -1.1599166, -1.3256241, -1.4913336, -1.657044, -1.8227545, -1.9884559)
+}
+point_count = 13
 
-[node name="SpiralRamp" type="StaticBody3D"]
+[node name="SpiralRamp" type="StaticBody3D" unique_id=936072214]
 script = ExtResource("1_piece")
-Smoothing = 0.5
 
-[node name="Entry" type="Marker3D" parent="."]
+[node name="Entry" type="Marker3D" parent="." unique_id=760342012]
 
-[node name="P01" type="Marker3D" parent="."]
+[node name="P01" type="Marker3D" parent="." unique_id=884571038]
 transform = Transform3D(0, 0, -1, 0, 1, 0, 1, 0, 0, 54, 9, -54)
 
-[node name="P02" type="Marker3D" parent="."]
+[node name="P02" type="Marker3D" parent="." unique_id=1235115252]
 transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 108, 18, 0)
 
-[node name="P03" type="Marker3D" parent="."]
+[node name="P03" type="Marker3D" parent="." unique_id=941407448]
 transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 54, 27, 54)
 
-[node name="P04" type="Marker3D" parent="."]
+[node name="P04" type="Marker3D" parent="." unique_id=1651569939]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 36, 0)
 
-[node name="P05" type="Marker3D" parent="."]
+[node name="P05" type="Marker3D" parent="." unique_id=733395955]
 transform = Transform3D(0, 0, -1, 0, 1, 0, 1, 0, 0, 54, 45, -54)
 
-[node name="P06" type="Marker3D" parent="."]
+[node name="P06" type="Marker3D" parent="." unique_id=1710164046]
 transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 108, 54, 0)
 
-[node name="P07" type="Marker3D" parent="."]
+[node name="P07" type="Marker3D" parent="." unique_id=1353747577]
 transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 54, 63, 54)
 
-[node name="P08" type="Marker3D" parent="."]
+[node name="P08" type="Marker3D" parent="." unique_id=179413068]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 72, 0)
 
-[node name="P09" type="Marker3D" parent="."]
+[node name="P09" type="Marker3D" parent="." unique_id=1100652379]
 transform = Transform3D(0, 0, -1, 0, 1, 0, 1, 0, 0, 54, 81, -54)
 
-[node name="P10" type="Marker3D" parent="."]
+[node name="P10" type="Marker3D" parent="." unique_id=1551436848]
 transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 108, 90, 0)
 
-[node name="P11" type="Marker3D" parent="."]
+[node name="P11" type="Marker3D" parent="." unique_id=1887321583]
 transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 54, 99, 54)
 
-[node name="Exit" type="Marker3D" parent="."]
+[node name="Exit" type="Marker3D" parent="." unique_id=1446371206]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 108, 0)
 
-[node name="Spine" type="Path3D" parent="."]
-curve = SubResource("Curve_corkscrew")
+[node name="Spine" type="Path3D" parent="." unique_id=2127096939]
+curve = SubResource("Curve3D_psg6v")
 
-[node name="Build" type="CSGCombiner3D" parent="."]
+[node name="Build" type="CSGCombiner3D" parent="." unique_id=1165036889]
 use_collision = true
 
-[node name="Road" type="CSGPolygon3D" parent="Build"]
-material = ExtResource("2_road")
+[node name="Road" type="CSGPolygon3D" parent="Build" unique_id=1284662999]
 polygon = PackedVector2Array(-27, -1.6, 27, -1.6, 27, 2, 24.57, 2, 24.57, 0, -24.57, 0, -24.57, 2, -27, 2)
 mode = 2
 path_node = NodePath("../../Spine")
@@ -94,4 +65,9 @@ path_interval_type = 0
 path_interval = 6.0
 path_simplify_angle = 1.0
 path_rotation = 2
+path_rotation_accurate = false
+path_local = false
 path_continuous_u = true
+path_u_distance = 1.0
+path_joined = false
+material = ExtResource("2_road")
