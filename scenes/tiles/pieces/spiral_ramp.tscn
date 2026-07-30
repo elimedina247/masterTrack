@@ -1,0 +1,97 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/tiles/tool/TrackPiece.cs" id="1_piece"]
+[ext_resource type="Material" path="res://resources/tiles/road.tres" id="2_road"]
+
+; A corkscrew: three full turns to the right around a 54 m radius, climbing 36 m a turn, so it
+; comes out 108 m up directly above the entry and facing the same way.
+;
+; THE ARITHMETIC
+;
+; Centre of the arc is one radius right of Entry, at (54, 0, 0), and each quarter turn steps a
+; radius forward and a radius right of wherever it was - so the four plan positions just cycle:
+;
+;     0 deg    (0,   .,  0)     facing -Z
+;     90       (54,  .,  -54)   facing +X
+;     180      (108, .,  0)     facing +Z
+;     270      (54,  .,  54)    facing -X
+;
+; Twelve quarters is three loops. Height climbs 9 m a quarter, so 36 a loop - one
+; TileCatalog.HeightStep, which is what the ramps use, so a deck of this stacks with them.
+;
+; WHY 54 m AND 36 m
+;
+; 54 m is TileCatalog.HairpinRadius, the tightest the catalog turns. The road is 54 m wide and
+; centred on the arc, so its inside edge lands at 27 m - which TileCatalog.CornerRadius notes is
+; already past what the car holds at speed. Tighter and the inside line stops being drivable.
+;
+; 36 m a loop is the vertical clearance. The section is 3.6 m tall including its walls, so each
+; deck passes 32 m clear of the one below it. Drop the climb much below about 8 m a loop and the
+; corkscrew starts driving through itself.
+;
+; The grade is 36 m over 339 m of arc, about 6 degrees. Gentle, because a tight radius and a steep
+; climb pull against each other; raise the exit height if you want it steeper.
+;
+; The waypoints must stay in this order in the tree - that is the order the spine threads them -
+; and they are left level. Rotate one to bank the road there, or draw the bank into the Road
+; polygon instead, which lifts only the outside edge rather than rolling the whole section.
+[sub_resource type="Curve3D" id="Curve_corkscrew"]
+
+[node name="SpiralRamp" type="StaticBody3D"]
+script = ExtResource("1_piece")
+Smoothing = 0.5
+
+[node name="Entry" type="Marker3D" parent="."]
+
+[node name="P01" type="Marker3D" parent="."]
+transform = Transform3D(0, 0, -1, 0, 1, 0, 1, 0, 0, 54, 9, -54)
+
+[node name="P02" type="Marker3D" parent="."]
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 108, 18, 0)
+
+[node name="P03" type="Marker3D" parent="."]
+transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 54, 27, 54)
+
+[node name="P04" type="Marker3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 36, 0)
+
+[node name="P05" type="Marker3D" parent="."]
+transform = Transform3D(0, 0, -1, 0, 1, 0, 1, 0, 0, 54, 45, -54)
+
+[node name="P06" type="Marker3D" parent="."]
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 108, 54, 0)
+
+[node name="P07" type="Marker3D" parent="."]
+transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 54, 63, 54)
+
+[node name="P08" type="Marker3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 72, 0)
+
+[node name="P09" type="Marker3D" parent="."]
+transform = Transform3D(0, 0, -1, 0, 1, 0, 1, 0, 0, 54, 81, -54)
+
+[node name="P10" type="Marker3D" parent="."]
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 108, 90, 0)
+
+[node name="P11" type="Marker3D" parent="."]
+transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 54, 99, 54)
+
+[node name="Exit" type="Marker3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 108, 0)
+
+[node name="Spine" type="Path3D" parent="."]
+curve = SubResource("Curve_corkscrew")
+
+[node name="Build" type="CSGCombiner3D" parent="."]
+use_collision = true
+
+[node name="Road" type="CSGPolygon3D" parent="Build"]
+material = ExtResource("2_road")
+polygon = PackedVector2Array(-27, -1.6, 27, -1.6, 27, 2, 24.57, 2, 24.57, 0, -24.57, 0, -24.57, 2, -27, 2)
+mode = 2
+path_node = NodePath("../../Spine")
+path_interval_type = 0
+path_interval = 6.0
+path_simplify_angle = 1.0
+path_rotation = 2
+path_continuous_u = true
