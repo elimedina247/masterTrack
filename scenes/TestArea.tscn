@@ -14,7 +14,7 @@
 [ext_resource type="Script" uid="uid://b1crjms4syy7i" path="res://scripts/tiles/TrackController.cs" id="12_track"]
 [ext_resource type="Script" uid="uid://dbk7pylfv22wn" path="res://scripts/trackmaster/TrackMasterController.cs" id="13_builder"]
 [ext_resource type="Script" uid="uid://cj0ww0l43v351" path="res://scripts/ui/TilePalette.cs" id="14_palette"]
-[ext_resource type="Script" path="res://scripts/ui/TrackFeed.cs" id="15_feed"]
+[ext_resource type="Script" uid="uid://c8jmpay1cn5al" path="res://scripts/ui/TrackFeed.cs" id="15_feed"]
 
 [sub_resource type="Environment" id="Env"]
 background_mode = 2
@@ -109,7 +109,7 @@ grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("11_lobby")
 
-[node name="TrackFeed" type="Control" parent="HUD" node_paths=PackedStringArray("Track")]
+[node name="TrackFeed" type="Control" parent="HUD" unique_id=1700273462 node_paths=PackedStringArray("Track")]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0

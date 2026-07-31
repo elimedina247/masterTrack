@@ -1,0 +1,64 @@
+[gd_scene format=3 uid="uid://cn2x1bonevpa2"]
+
+[ext_resource type="Script" uid="uid://crov4aijvusum" path="res://scripts/tiles/tool/TrackPiece.cs" id="1_piece"]
+[ext_resource type="Script" uid="uid://ey6sp1p7l4w8" path="res://scripts/tiles/tool/BankedRoad.cs" id="2_bank"]
+[ext_resource type="Material" path="res://resources/tiles/hairpin.tres" id="3_road"]
+
+[sub_resource type="Curve3D" id="Curve3D_2cjkj"]
+_data = {
+"points": PackedVector3Array(0, 0, 0, 0, 0, -42, 0, 0, 0, 0, 0, 42, 0, 0, -14.3217, 0, 0, -126, -10.126972, 0, 10.126972, 10.126969, 0, -10.126969, 15.8162, 0, -164.1838, -14.321696, 0, 0, 14.321696, 0, 0, 54, 0, -180, -10.126969, 0, -10.126969, 10.126972, 0, 10.126972, 92.1838, 0, -164.1838, 0, 0, -14.3217, 0, 0, 12, 108, 0, -126, 0, 0, -12, 0, 0, 14.321697, 108, 0, -90, -10.12697, 0, -10.12697, 10.12697, 0, 10.12697, 123.8162, 0, -51.8162, -14.321697, 0, 0, 14.3217, 0, 0, 162, 0, -36, -10.126972, 0, 10.126972, 10.126969, 0, -10.126969, 200.1838, 0, -51.8162, 0, 0, 14.321696, 0, 0, -12, 216, 0, -90, 0, 0, 12, 0, 0, 0, 216, 0, -126),
+"tilts": PackedFloat32Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+}
+point_count = 12
+
+[node name="SBend" type="StaticBody3D" unique_id=1950818814]
+script = ExtResource("1_piece")
+DeckWeight = 5.0
+DeckDescription = "The switchback: a full hairpin right, one short breath of straight facing back the way you came, then a full hairpin left. Two walls, two slides, one rhythm - and the middle straight is exactly long enough to make you think you have time to fix it."
+Smoothing = 0.0
+
+[node name="Entry" type="Marker3D" parent="." unique_id=366776588]
+
+[node name="P1" type="Marker3D" parent="." unique_id=1095971853]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -126)
+
+[node name="P2" type="Marker3D" parent="." unique_id=1111048736]
+transform = Transform3D(0.7071068, 0, -0.7071068, 0, 1, 0, 0.7071068, 0, 0.7071068, 15.8162, 0, -164.1838)
+
+[node name="P3" type="Marker3D" parent="." unique_id=795486472]
+transform = Transform3D(0, 0, -1, 0, 1, 0, 1, 0, 0, 54, 0, -180)
+
+[node name="P4" type="Marker3D" parent="." unique_id=1107028277]
+transform = Transform3D(-0.7071068, 0, -0.7071068, 0, 1, 0, 0.7071068, 0, -0.7071068, 92.1838, 0, -164.1838)
+
+[node name="P5" type="Marker3D" parent="." unique_id=699953834]
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 108, 0, -126)
+
+[node name="P6" type="Marker3D" parent="." unique_id=1190547500]
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 108, 0, -90)
+
+[node name="P7" type="Marker3D" parent="." unique_id=1308867666]
+transform = Transform3D(-0.7071068, 0, -0.7071068, 0, 1, 0, 0.7071068, 0, -0.7071068, 123.8162, 0, -51.8162)
+
+[node name="P8" type="Marker3D" parent="." unique_id=1454849665]
+transform = Transform3D(0, 0, -1, 0, 1, 0, 1, 0, 0, 162, 0, -36)
+
+[node name="P9" type="Marker3D" parent="." unique_id=1000173315]
+transform = Transform3D(0.7071068, 0, -0.7071068, 0, 1, 0, 0.7071068, 0, 0.7071068, 200.1838, 0, -51.8162)
+
+[node name="P10" type="Marker3D" parent="." unique_id=1655542575]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 216, 0, -90)
+
+[node name="Exit" type="Marker3D" parent="." unique_id=1543612811]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 216, 0, -126)
+
+[node name="Spine" type="Path3D" parent="." unique_id=813163346]
+curve = SubResource("Curve3D_2cjkj")
+
+[node name="Build" type="CSGCombiner3D" parent="." unique_id=864308020]
+use_collision = true
+
+[node name="Road" type="CSGMesh3D" parent="Build" unique_id=1385603371]
+script = ExtResource("2_bank")
+ReferenceRadius = 54.0
+SurfaceMaterial = ExtResource("3_road")

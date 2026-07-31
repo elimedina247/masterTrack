@@ -1,0 +1,60 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" uid="uid://crov4aijvusum" path="res://scripts/tiles/tool/TrackPiece.cs" id="1_piece"]
+[ext_resource type="Material" path="res://resources/tiles/road.tres" id="2_road"]
+[ext_resource type="Material" path="res://resources/tiles/bottleneck.tres" id="3_accent"]
+
+[sub_resource type="Curve3D" id="Curve3D_Bottleneck"]
+_data = {
+"points": PackedVector3Array(0, 0, 0, 0, 0, -36, 0, 0, 0, 0, 0, 36, 0, 0, 0, 0, 0, -108),
+"tilts": PackedFloat32Array(0, 0)
+}
+point_count = 2
+
+[node name="Bottleneck" type="StaticBody3D"]
+script = ExtResource("1_piece")
+DeckWeight = 5.0
+DeckDescription = "The track pinches to a sixteen-metre throat, squeezing the racers together at the worst possible moment for everyone involved."
+
+[node name="Entry" type="Marker3D" parent="."]
+
+[node name="Exit" type="Marker3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -108)
+
+[node name="Spine" type="Path3D" parent="."]
+curve = SubResource("Curve3D_Bottleneck")
+
+[node name="Build" type="CSGCombiner3D" parent="."]
+use_collision = true
+
+[node name="Road" type="CSGPolygon3D" parent="Build"]
+polygon = PackedVector2Array(-27, -1.6, 27, -1.6, 27, -1.2, 24, 0, -24, 0, -27, -1.2)
+mode = 2
+path_node = NodePath("../../Spine")
+path_interval_type = 0
+path_interval = 12.0
+path_simplify_angle = 1.0
+path_rotation = 2
+path_local = true
+path_continuous_u = true
+material = ExtResource("2_road")
+
+[node name="WallLeftIn" type="CSGBox3D" parent="Build"]
+transform = Transform3D(0.873, 0, -0.4877, 0, 1, 0, 0.4877, 0, 0.873, -17.5, 2.5, -37)
+size = Vector3(3, 5, 42)
+material = ExtResource("3_accent")
+
+[node name="WallLeftOut" type="CSGBox3D" parent="Build"]
+transform = Transform3D(0.873, 0, 0.4877, 0, 1, 0, -0.4877, 0, 0.873, -17.5, 2.5, -71)
+size = Vector3(3, 5, 42)
+material = ExtResource("3_accent")
+
+[node name="WallRightIn" type="CSGBox3D" parent="Build"]
+transform = Transform3D(0.873, 0, 0.4877, 0, 1, 0, -0.4877, 0, 0.873, 17.5, 2.5, -37)
+size = Vector3(3, 5, 42)
+material = ExtResource("3_accent")
+
+[node name="WallRightOut" type="CSGBox3D" parent="Build"]
+transform = Transform3D(0.873, 0, -0.4877, 0, 1, 0, 0.4877, 0, 0.873, 17.5, 2.5, -71)
+size = Vector3(3, 5, 42)
+material = ExtResource("3_accent")

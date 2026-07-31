@@ -1,0 +1,77 @@
+[gd_scene format=3 uid="uid://ev2xtin0n0b3"]
+
+[ext_resource type="Script" uid="uid://crov4aijvusum" path="res://scripts/tiles/tool/TrackPiece.cs" id="1_piece"]
+[ext_resource type="Material" uid="uid://cl1xbrbwh0omr" path="res://resources/tiles/road.tres" id="2_road"]
+[ext_resource type="Material" path="res://resources/tiles/wave.tres" id="3_accent"]
+
+[sub_resource type="Curve3D" id="Curve3D_nls7v"]
+_data = {
+"points": PackedVector3Array(0, 0, 0, 0, 0, -108, 0, 0, 0, 0, 0, 108, 0, 0, 0, 0, 0, -324),
+"tilts": PackedFloat32Array(0, 0)
+}
+point_count = 2
+
+[node name="SquareWave" type="StaticBody3D" unique_id=1089219777]
+script = ExtResource("1_piece")
+DeckDescription = "A square wave stood on its side: six flat peaks, each a step lower than the last, with nothing between them but air. Kick up onto the first and ride the wave down - every gap is a jump that lands downhill, and losing the rhythm once is a long fall from a short place."
+
+[node name="Entry" type="Marker3D" parent="." unique_id=1875257799]
+
+[node name="Exit" type="Marker3D" parent="." unique_id=167230808]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -324)
+
+[node name="Spine" type="Path3D" parent="." unique_id=1828074451]
+curve = SubResource("Curve3D_nls7v")
+
+[node name="Build" type="CSGCombiner3D" parent="." unique_id=1572167955]
+use_collision = true
+
+[node name="EntrySlab" type="CSGBox3D" parent="Build" unique_id=1715587785]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.8, -15)
+size = Vector3(54, 1.6, 30)
+material = ExtResource("2_road")
+
+[node name="Kicker" type="CSGBox3D" parent="Build" unique_id=1383234490]
+transform = Transform3D(1, 0, 0, 0, 0.8660254, -0.5, 0, 0.5, 0.8660254, 0, 5.434, -40.892)
+size = Vector3(54, 2, 24)
+material = ExtResource("3_accent")
+
+[node name="Peak1" type="CSGBox3D" parent="Build" unique_id=775926448]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 5, -64)
+size = Vector3(54, 14, 20)
+material = ExtResource("3_accent")
+
+[node name="Peak2" type="CSGBox3D" parent="Build" unique_id=440019439]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 4, -101)
+size = Vector3(54, 12, 20)
+material = ExtResource("3_accent")
+
+[node name="Peak3" type="CSGBox3D" parent="Build" unique_id=699849852]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 3, -138)
+size = Vector3(54, 10, 20)
+material = ExtResource("3_accent")
+
+[node name="Peak4" type="CSGBox3D" parent="Build" unique_id=1303910082]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, -175)
+size = Vector3(54, 8, 20)
+material = ExtResource("3_accent")
+
+[node name="Peak5" type="CSGBox3D" parent="Build" unique_id=1923309720]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, -212)
+size = Vector3(54, 6, 20)
+material = ExtResource("3_accent")
+
+[node name="Peak6" type="CSGBox3D" parent="Build" unique_id=961252160]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -249)
+size = Vector3(54, 4, 20)
+material = ExtResource("3_accent")
+
+[node name="Landing" type="CSGBox3D" parent="Build" unique_id=2006875642]
+transform = Transform3D(1, 0, 0, 0, 0.98481, 0.17365, 0, -0.17365, 0.98481, 0, -0.03, -281.74)
+size = Vector3(54, 2, 12)
+material = ExtResource("3_accent")
+
+[node name="ExitSlab" type="CSGBox3D" parent="Build" unique_id=468061295]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.8, -306)
+size = Vector3(54, 1.6, 36)
+material = ExtResource("2_road")

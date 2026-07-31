@@ -11,14 +11,13 @@ namespace MasterTrack.Game;
 /// A playground for feeling out the vehicle physics, and the lobby everyone waits in.
 ///
 /// The pad itself: a big open surface to slide around on, a grass apron so surface changes are
-/// obvious, a bump strip for the dampers, and one of every tile in <see cref="TileCatalog"/> laid
-/// out in a row with a run-up to each.
+/// obvious, a bump strip for the dampers, and every authored piece from the catalog set out as a
+/// specimen with a run-up to it (<c>PhysicsTestArea.Pieces.cs</c>).
 ///
-/// Two race tracks run off the ends of it. South is a fixed course — the same catalog again, but
-/// joined end to end into one drivable track instead of set out as specimens, and always the same
-/// so a physics change can be judged against it (<c>PhysicsTestArea.RaceTrack.cs</c>). North is a
-/// bare start tile and whatever the host builds onto it this lobby
-/// (<c>PhysicsTestArea.Builder.cs</c>).
+/// Two tracks run off it. West is the chained course — the same pieces joined end to end into one
+/// drivable line, always the same so a physics change can be judged against it
+/// (<c>PhysicsTestArea.PieceRun.cs</c>). North is a bare start tile and whatever the host builds
+/// onto it this lobby (<c>PhysicsTestArea.Builder.cs</c>).
 ///
 /// In a session it is also where the group gathers. Cars are <see cref="RacerArena"/>'s business,
 /// the same node the match uses, so a car that reaches everybody here reaches everybody there;
@@ -45,36 +44,6 @@ public partial class PhysicsTestArea : Node3D
 
 	/// <summary>Width of the grass apron along the +X edge of the pad.</summary>
 	[Export] public float GrassWidth { get; set; } = 120.0f;
-
-	/// <summary>
-	/// Tiles per row. The catalog is long enough now that one row would be a two kilometre line
-	/// nobody is going to drive to the end of, so it wraps.
-	///
-	/// Nine rather than six, which trades depth for width: three rows instead of five takes the
-	/// grid's reach along from eleven cells to four, and that is what frees the band the authored
-	/// pieces now sit in — close to the origin instead of two kilometres west of it.
-	/// </summary>
-	[Export] public int TileColumns { get; set; } = 9;
-
-	/// <summary>Cells between tile columns. Three, so there is a clear cell beside even a
-	/// two-cell-wide hairpin.</summary>
-	[Export] public int TileCellStride { get; set; } = 3;
-
-	/// <summary>
-	/// Cells between tile rows: a three-cell tile, plus one cell of run-up to it.
-	///
-	/// Cut from six. The proving ground had grown into something you spent longer driving across
-	/// than looking at — six cells is 324 m a row, and with five rows that is most of a kilometre of
-	/// empty tarmac between the first tile and the last. Four still clears the longest tile in the
-	/// catalog with 54 m to spare, which is enough to see the next one coming; the fixed course is
-	/// where tiles are met at racing speed, and that has run-up of its own.
-	/// </summary>
-	[Export] public int TileRowStride { get; set; } = 4;
-
-	/// <summary>Widest and longest any tile in the catalog is, in cells. Hairpins are the wide
-	/// ones; the straight-through tiles are the long ones.</summary>
-	private const int WidestTileCells = 2;
-	private const int LongestTileCells = 3;
 
 	/// <summary>Pad half-extents, worked out from the layout in <see cref="Rebuild"/>.</summary>
 	private float _padHalfX;
@@ -235,47 +204,28 @@ public partial class PhysicsTestArea : Node3D
 		MeasurePad();
 
 		BuildSurfaces();
-		BuildTileGrid();
 		BuildBumpStrip();
-		BuildRaceTrack();
 		BuildStartLine();
 		BuildPieceSpecimens();
 		BuildPieceRun();
 	}
 
-	/// <summary>Rows the tile layout needs to hold the whole catalog.</summary>
-	private int TileRows => (TileCatalog.All.Count + TileColumns - 1) / Mathf.Max(1, TileColumns);
-
-	/// <summary>Cell of the first column, so the grid straddles the origin.</summary>
-	private int FirstColumnCell => -((TileColumns - 1) * TileCellStride) / 2;
-
-	/// <summary>Cell of the first row.</summary>
-	private int FirstRowCell => -((TileRows - 1) * TileRowStride) / 2;
-
 	/// <summary>
-	/// Work out how much tarmac the tile layout needs under it. Tiles run north from their own
-	/// cell, and a hairpin swings a cell out to one side, so the extent is the grid plus room for
-	/// the biggest tile in each direction plus the run-up a racer needs to arrive at speed.
+	/// Work out how much tarmac the layout needs under it: the buildable track's start line, and
+	/// the row of authored pieces.
 	/// </summary>
 	private void MeasurePad()
 	{
-		int lastColumnCell = FirstColumnCell + (TileColumns - 1) * TileCellStride;
-		int lastRowCell = FirstRowCell + (TileRows - 1) * TileRowStride;
+		_padHalfX = PadHalfSize;
+		_padHalfZ = PadHalfSize;
 
-		int spreadX = Mathf.Max(Mathf.Abs(FirstColumnCell), Mathf.Abs(lastColumnCell)) + WidestTileCells;
-		int spreadZ = Mathf.Max(Mathf.Abs(FirstRowCell - (LongestTileCells - 1)),
-								Mathf.Abs(lastRowCell)) + LongestTileCells;
-
-		_padHalfX = Mathf.Max(PadHalfSize, spreadX * TileCatalog.TileSize);
-		_padHalfZ = Mathf.Max(PadHalfSize, spreadZ * TileCatalog.TileSize);
-
-		// A track runs off each end of the pad, and the tarmac has to reach both start lines:
-		// everything off the pad is open air, so a metre short and the only way onto a track is a
-		// fall. One half-extent covers both because the pad is symmetric about the origin.
-		_padHalfZ = Mathf.Max(_padHalfZ, Mathf.Max(PadEdgeForRaceTrack, PadEdgeForBuildableTrack));
+		// The buildable track anchors off the pad's edge, and the tarmac has to reach its start
+		// line: everything off the pad is open air, so a metre short and the only way onto the
+		// track is a fall.
+		_padHalfZ = Mathf.Max(_padHalfZ, PadEdgeForBuildableTrack);
 
 		// And west, under the row of authored pieces. They have no size limit the way a catalog
-		// tile does, so this is worked out from how many there are rather than from a constant.
+		// tile did, so this is worked out from how many there are rather than from a constant.
 		_padHalfX = Mathf.Max(_padHalfX, PadEdgeForPieces);
 		_padHalfZ = Mathf.Max(_padHalfZ, PadEdgeAlongForPieces);
 	}
@@ -321,44 +271,6 @@ public partial class PhysicsTestArea : Node3D
 				new Vector3(_padHalfX + GrassWidth * 0.5f, SurfaceY - SlabThickness * 0.5f, 0));
 
 		AddLabel("Grass →", new Vector3(_padHalfX - 12.0f, 5.0f, -40.0f), GrassColor);
-	}
-
-	/// <summary>
-	/// One of every catalog tile, in a grid, each with clear tarmac in front of it to build speed
-	/// on. Rows rather than one long line: the catalog outgrew the line.
-	/// </summary>
-	private void BuildTileGrid()
-	{
-		for (int i = 0; i < TileCatalog.All.Count; i++)
-		{
-			TileDefinition definition = TileCatalog.All[i];
-
-			// Scene pieces are already on display, one per pedestal, in the authored pieces row —
-			// a second copy in the tile grid would just say the catalog picked them up.
-			if (definition.IsScenePiece)
-				continue;
-
-			var cell = new Vector2I(
-				FirstColumnCell + i % TileColumns * TileCellStride,
-				FirstRowCell + i / TileColumns * TileRowStride);
-
-			var tile = new TrackTile { Name = $"Tile_{definition.DisplayName.Replace(" ", "")}" };
-			_generated.AddChild(tile);
-
-			Vector3 world = TileCatalog.CellToWorld(cell);
-
-			// Facing north, so the run-up is from +Z — the same way a racer meets it in a match.
-			// Always from ground level: a ramp here climbs away from the pad rather than starting
-			// in the air, which is the only way to drive onto one from the tarmac.
-			tile.Initialize(definition.ToTileData(), i,
-							PlacedTile.AnchorFor(world, TrackDirection.North,
-												 TileCatalog.TileSize * 0.5f));
-
-			// On the near side of the tile rather than over its middle, so the label is readable
-			// from the run-up and is not buried inside a loop or a ramp.
-			AddLabel(definition.DisplayName,
-					 world + new Vector3(0.0f, 6.0f, TileCatalog.TileSize * 0.7f), definition.Accent);
-		}
 	}
 
 	/// <summary>

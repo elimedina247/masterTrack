@@ -1,0 +1,51 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" uid="uid://crov4aijvusum" path="res://scripts/tiles/tool/TrackPiece.cs" id="1_piece"]
+[ext_resource type="Script" path="res://scripts/tiles/tool/BankedRoad.cs" id="2_bank"]
+[ext_resource type="Material" path="res://resources/tiles/hairpin.tres" id="3_road"]
+
+[sub_resource type="Curve3D" id="Curve3D_HairpinLeft"]
+_data = {
+"points": PackedVector3Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -7.2346447, 0, -27, 0, 0, 0, 0, 0, 0, -27, 0, -46.7653718, 0, 0, 0, 0, 0, 0, -54, 0, -54, 0, 0, 0, 0, 0, 0, -81, 0, -46.7653718, 0, 0, 0, 0, 0, 0, -100.7653718, 0, -27, 0, 0, 0, 0, 0, 0, -108, 0, 0),
+"tilts": PackedFloat32Array(0, 0, 0, 0, 0, 0, 0)
+}
+point_count = 7
+
+[node name="HairpinLeft" type="StaticBody3D"]
+script = ExtResource("1_piece")
+DeckWeight = 3.0
+DeckDescription = "A 180-degree turn to the left, walled higher and steeper than any corner. Crawl the flat inside lane, or ride the wall the long way round at speed - and getting it wrong up there drops you back down the bank having lost everything."
+
+[node name="Entry" type="Marker3D" parent="."]
+
+[node name="P1" type="Marker3D" parent="."]
+transform = Transform3D(0.8660254, 0, 0.5, 0, 1, 0, -0.5, 0, 0.8660254, -7.2346447, 0, -27)
+
+[node name="P2" type="Marker3D" parent="."]
+transform = Transform3D(0.5, 0, 0.8660254, 0, 1, 0, -0.8660254, 0, 0.5, -27, 0, -46.7653718)
+
+[node name="P3" type="Marker3D" parent="."]
+transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, -54, 0, -54)
+
+[node name="P4" type="Marker3D" parent="."]
+transform = Transform3D(-0.5, 0, 0.8660254, 0, 1, 0, -0.8660254, 0, -0.5, -81, 0, -46.7653718)
+
+[node name="P5" type="Marker3D" parent="."]
+transform = Transform3D(-0.8660254, 0, 0.5, 0, 1, 0, -0.5, 0, -0.8660254, -100.7653718, 0, -27)
+
+[node name="Exit" type="Marker3D" parent="."]
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, -108, 0, 0)
+
+[node name="Spine" type="Path3D" parent="."]
+curve = SubResource("Curve3D_HairpinLeft")
+
+[node name="Build" type="CSGCombiner3D" parent="."]
+use_collision = true
+
+[node name="Road" type="CSGMesh3D" parent="Build"]
+script = ExtResource("2_bank")
+SurfaceMaterial = ExtResource("3_road")
+MaxBankDegrees = 70.0
+FlatFraction = 0.3
+ReferenceRadius = 54.0
+BlendMeters = 28.0

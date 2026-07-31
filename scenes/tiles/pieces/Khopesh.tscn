@@ -1,0 +1,63 @@
+[gd_scene format=3 uid="uid://nm72erlydc8k"]
+
+[ext_resource type="Script" uid="uid://crov4aijvusum" path="res://scripts/tiles/tool/TrackPiece.cs" id="1_piece"]
+[ext_resource type="Script" uid="uid://ey6sp1p7l4w8" path="res://scripts/tiles/tool/BankedRoad.cs" id="2_bank"]
+[ext_resource type="Material" path="res://resources/tiles/sweeper.tres" id="3_road"]
+
+[sub_resource type="Curve3D" id="Curve3D_ifylb"]
+_data = {
+"points": PackedVector3Array(0, 0, 0, 0, 0, -25.333334, 0, 0, 0, 0, 0, 25.333334, 0, 0, -7.372545, 0, 0, -76, -3.6862724, 0, 6.384811, 3.6863701, 0, -6.38498, 5.6269803, 0, -97, -6.383387, -0.16470706, 3.6854498, 6.3914814, 0.16491592, -3.6901228, 21, 0, -112.37307, -7.35112, -0.67547584, 0, 12.073136, 1.10937, 0, 42, 1, -118, -11.88361, -2.402323, 0, 12.910959, 2.610006, 0, 78, 6, -118, -8.73107, -4.58714, 8.73107, 9.34243, 4.908337, -9.34243, 111.941124, 16, -132.05887, 0, -6.3438888, 12.586058, 0, 6.4787965, -12.85371, 126, 34, -166, 9.369851, -5.6217847, 9.369851, -8.694981, 5.2168713, -8.694981, 111.941124, 54, -199.94113, 12.966109, -3.209536, 0, -11.188018, 2.7694004, 0, 78, 66, -214, 11.481119, -1.0125347, 0, -11.294978, 0.9961187, 0, 44, 72, -214, 11.338817, 0, 0, 0, 0, 0, 10, 72, -214),
+"tilts": PackedFloat32Array(0, 0, 0, -7.8327145e-07, -0.02354995, -0.023348924, 0.17702083, 0.51492685, 0.8830558, 1.1200309, 1.1205419, 1.1205415)
+}
+point_count = 12
+
+[node name="Khopesh" type="StaticBody3D" unique_id=2119378274]
+script = ExtResource("1_piece")
+DeckWeight = 2.0
+DeckDescription = "The khopesh. A sweeping right cut at the guard, a breath of straight, then the blade hooks all the way round while climbing seventy-two metres - a banked spiral wall with nothing inside the hook but air."
+Smoothing = 0.0
+
+[node name="Entry" type="Marker3D" parent="." unique_id=609485251]
+
+[node name="P1" type="Marker3D" parent="." unique_id=911144426]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -76)
+
+[node name="P2" type="Marker3D" parent="." unique_id=1985246201]
+transform = Transform3D(0.8660254, 0, -0.5, 0, 1, 0, 0.5, 0, 0.8660254, 5.6269803, 0, -97)
+
+[node name="P3" type="Marker3D" parent="." unique_id=1673617914]
+transform = Transform3D(0.5, -0.019347, -0.865809, 0, 0.99975, -0.02234, 0.8660254, 0.01117, 0.499875, 21, 0, -112.37307)
+
+[node name="P4" type="Marker3D" parent="." unique_id=1555707862]
+transform = Transform3D(0, -0.091502, -0.995805, 0, 0.995805, -0.091502, 1, 0, 0, 42, 1, -118)
+
+[node name="P5" type="Marker3D" parent="." unique_id=1305152224]
+transform = Transform3D(0, -0.198146, -0.980172, 0, 0.980172, -0.198146, 1, 0, 0, 78, 6, -118)
+
+[node name="P6" type="Marker3D" parent="." unique_id=1132786479]
+transform = Transform3D(0.7071068, -0.246252, -0.662852, 0, 0.93741, -0.34825, 0.7071068, 0.246252, 0.662852, 111.941124, 16, -132.05887)
+
+[node name="P7" type="Marker3D" parent="." unique_id=1654694125]
+transform = Transform3D(1, 0, 0, 0, 0.892979, -0.450098, 0, 0.450098, 0.892979, 126, 34, -166)
+
+[node name="P8" type="Marker3D" parent="." unique_id=1137750302]
+transform = Transform3D(0.7071068, 0.276167, 0.650948, 0, 0.92058, -0.39056, -0.7071068, 0.276167, 0.650948, 111.941124, 54, -199.94113)
+
+[node name="P9" type="Marker3D" parent="." unique_id=1711954714]
+transform = Transform3D(0, 0.24028, 0.9707, 0, 0.9707, -0.24028, -1, 0, 0, 78, 66, -214)
+
+[node name="P10" type="Marker3D" parent="." unique_id=1366666549]
+transform = Transform3D(0, 0.08785, 0.99613, 0, 0.99613, -0.08785, -1, 0, 0, 44, 72, -214)
+
+[node name="Exit" type="Marker3D" parent="." unique_id=1257277142]
+transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 10, 72, -214)
+
+[node name="Spine" type="Path3D" parent="." unique_id=297332202]
+curve = SubResource("Curve3D_ifylb")
+
+[node name="Build" type="CSGCombiner3D" parent="." unique_id=751562639]
+use_collision = true
+
+[node name="Road" type="CSGMesh3D" parent="Build" unique_id=1444138325]
+script = ExtResource("2_bank")
+SurfaceMaterial = ExtResource("3_road")

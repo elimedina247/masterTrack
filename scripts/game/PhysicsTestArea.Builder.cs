@@ -30,8 +30,8 @@ public partial class PhysicsTestArea
 {
 	/// <summary>
 	/// Cell the buildable track's start tile sits on, and the way it runs: off the north edge of
-	/// the pad, mirroring the fixed course off the south edge, so the two grow away from each
-	/// other and can never meet in the middle.
+	/// the pad, away from everything else the pad hosts, so the track can grow without meeting
+	/// any of it.
 	/// </summary>
 	private static readonly Vector2I BuildStartCell = new(0, -15);
 
@@ -41,8 +41,7 @@ public partial class PhysicsTestArea
 	private static readonly Color StartLineColor = new(0.94f, 0.94f, 0.90f);
 
 	/// <summary>
-	/// How far the pad has to reach to meet the start tile. Same shape as
-	/// <see cref="PadEdgeForRaceTrack"/> and for the same reason: off the pad is open air, and a
+	/// How far the pad has to reach to meet the start tile: off the pad is open air, and a
 	/// start line you can only arrive at by falling is no start line.
 	/// </summary>
 	private static float PadEdgeForBuildableTrack

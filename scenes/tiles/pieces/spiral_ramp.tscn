@@ -1,7 +1,7 @@
 [gd_scene format=3 uid="uid://ctv3e8wwg3hji"]
 
 [ext_resource type="Script" uid="uid://crov4aijvusum" path="res://scripts/tiles/tool/TrackPiece.cs" id="1_piece"]
-[ext_resource type="Material" path="res://resources/tiles/road.tres" id="2_road"]
+[ext_resource type="Material" path="res://resources/tiles/ramp.tres" id="2_road"]
 
 [sub_resource type="Curve3D" id="Curve3D_psg6v"]
 _data = {
@@ -58,7 +58,7 @@ curve = SubResource("Curve3D_psg6v")
 use_collision = true
 
 [node name="Road" type="CSGPolygon3D" parent="Build" unique_id=1284662999]
-polygon = PackedVector2Array(-27, -1.6, 27, -1.6, 27, 2, 24.57, 2, 24.57, 0, -24.57, 0, -24.57, 2, -27, 2)
+polygon = PackedVector2Array(-27, -1.6, 27, -1.6, 27, -1.2, 24, 0, -24, 0, -27, -1.2)
 mode = 2
 path_node = NodePath("../../Spine")
 path_interval_type = 0

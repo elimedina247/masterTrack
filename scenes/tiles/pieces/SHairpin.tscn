@@ -1,0 +1,76 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" uid="uid://crov4aijvusum" path="res://scripts/tiles/tool/TrackPiece.cs" id="1_piece"]
+[ext_resource type="Script" uid="uid://ey6sp1p7l4w8" path="res://scripts/tiles/tool/BankedRoad.cs" id="2_bank"]
+[ext_resource type="Material" path="res://resources/tiles/hairpin.tres" id="3_road"]
+
+[sub_resource type="Curve3D" id="Curve3D_SHairpin"]
+_data = {
+"points": PackedVector3Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -126, 0, 0, 0, 0, 0, 0, 15.8162, 0, -164.1838, 0, 0, 0, 0, 0, 0, 54, 0, -180, 0, 0, 0, 0, 0, 0, 92.1838, 0, -164.1838, 0, 0, 0, 0, 0, 0, 108, 0, -126, 0, 0, 0, 0, 0, 0, 108, 0, -90, 0, 0, 0, 0, 0, 0, 123.8162, 0, -51.8162, 0, 0, 0, 0, 0, 0, 162, 0, -36, 0, 0, 0, 0, 0, 0, 200.1838, 0, -51.8162, 0, 0, 0, 0, 0, 0, 216, 0, -90, 0, 0, 0, 0, 0, 0, 216, 0, -162, 0, 0, 0, 0, 0, 0, 231.8162, 0, -200.1838, 0, 0, 0, 0, 0, 0, 270, 0, -216, 0, 0, 0, 0, 0, 0, 308.1838, 0, -200.1838, 0, 0, 0, 0, 0, 0, 324, 0, -162),
+"tilts": PackedFloat32Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+}
+point_count = 16
+
+[node name="SHairpin" type="StaticBody3D"]
+script = ExtResource("1_piece")
+Smoothing = 0.0
+DeckWeight = 3.0
+DeckDescription = "The full serpentine: the switchback's two hairpins, one more breath of straight, and then a third wall right at the door. Three slides, alternating sides, each one starting with whatever the last one left you. Nobody exits this tile with dignity and speed both."
+
+[node name="Entry" type="Marker3D" parent="."]
+
+[node name="P1" type="Marker3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -126)
+
+[node name="P2" type="Marker3D" parent="."]
+transform = Transform3D(0.7071068, 0, -0.7071068, 0, 1, 0, 0.7071068, 0, 0.7071068, 15.8162, 0, -164.1838)
+
+[node name="P3" type="Marker3D" parent="."]
+transform = Transform3D(0, 0, -1, 0, 1, 0, 1, 0, 0, 54, 0, -180)
+
+[node name="P4" type="Marker3D" parent="."]
+transform = Transform3D(-0.7071068, 0, -0.7071068, 0, 1, 0, 0.7071068, 0, -0.7071068, 92.1838, 0, -164.1838)
+
+[node name="P5" type="Marker3D" parent="."]
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 108, 0, -126)
+
+[node name="P6" type="Marker3D" parent="."]
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 108, 0, -90)
+
+[node name="P7" type="Marker3D" parent="."]
+transform = Transform3D(-0.7071068, 0, -0.7071068, 0, 1, 0, 0.7071068, 0, -0.7071068, 123.8162, 0, -51.8162)
+
+[node name="P8" type="Marker3D" parent="."]
+transform = Transform3D(0, 0, -1, 0, 1, 0, 1, 0, 0, 162, 0, -36)
+
+[node name="P9" type="Marker3D" parent="."]
+transform = Transform3D(0.7071068, 0, -0.7071068, 0, 1, 0, 0.7071068, 0, 0.7071068, 200.1838, 0, -51.8162)
+
+[node name="P10" type="Marker3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 216, 0, -90)
+
+[node name="P11" type="Marker3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 216, 0, -162)
+
+[node name="P12" type="Marker3D" parent="."]
+transform = Transform3D(0.7071068, 0, -0.7071068, 0, 1, 0, 0.7071068, 0, 0.7071068, 231.8162, 0, -200.1838)
+
+[node name="P13" type="Marker3D" parent="."]
+transform = Transform3D(0, 0, -1, 0, 1, 0, 1, 0, 0, 270, 0, -216)
+
+[node name="P14" type="Marker3D" parent="."]
+transform = Transform3D(-0.7071068, 0, -0.7071068, 0, 1, 0, 0.7071068, 0, -0.7071068, 308.1838, 0, -200.1838)
+
+[node name="Exit" type="Marker3D" parent="."]
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 324, 0, -162)
+
+[node name="Spine" type="Path3D" parent="."]
+curve = SubResource("Curve3D_SHairpin")
+
+[node name="Build" type="CSGCombiner3D" parent="."]
+use_collision = true
+
+[node name="Road" type="CSGMesh3D" parent="Build"]
+script = ExtResource("2_bank")
+ReferenceRadius = 54.0
+SurfaceMaterial = ExtResource("3_road")

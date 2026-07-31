@@ -1,0 +1,99 @@
+[gd_scene format=3 uid="uid://dxills582jwel"]
+
+[ext_resource type="Script" uid="uid://crov4aijvusum" path="res://scripts/tiles/tool/TrackPiece.cs" id="1_piece"]
+[ext_resource type="Script" uid="uid://c3mor8vh6qtph" path="res://scripts/tiles/tool/FunnelBowl.cs" id="2_bowl"]
+[ext_resource type="Material" path="res://resources/tiles/bowl.tres" id="3_road"]
+[ext_resource type="Script" uid="uid://cdgqvihpj3ahh" path="res://scripts/tiles/tool/TubeRoad.cs" id="4_tube"]
+
+[sub_resource type="Curve3D" id="Curve3D_4f77e"]
+_data = {
+"points": PackedVector3Array(0, 0, 0, 0, 0, -28.79706, 0, 0, 0, 3.9812238, -3.309849, 28.327822, -3.4789593, 2.8922842, -24.754032, -12, 8, -85, 0, -3.5021598, 24.919178, 0, 7.503541, -53.390503, -28, 18, -158, -52.92463, -10.287507, 0, 56.01099, 10.887436, 0, 66, 50, -255, 0, 0, -57.05933, 0, 0, 38.12166, 150, 86, -141, 37.542496, 6.619809, 0, -36.36156, -6.4115767, 0, 72, 72, -84, 25.438923, 26.108225, 5.873077, -13.695062, -14.05538, -3.1617749, 80, 10, -172, 0, 1.7324214, 19.801615, 0, -0.9609321, -10.983475, 66, -22, -212, 0, 0, 11.025431, 0, 0, 0, 66, -24, -245),
+"tilts": PackedFloat32Array(0, 0.005167376, -0.01723947, -0.3456072, -0.7259206, -0.5466679, -0.9989514, -0.087082386, -0.08707059)
+}
+point_count = 9
+
+[sub_resource type="Curve3D" id="Curve3D_Chute"]
+_data = {
+"points": PackedVector3Array(0, 0, 0, 0, 1, -28, 0, 0, 0, 2, -2.5, 28, -2, 2.5, -28, -12, 8, -85, 1.05, -4.52, 23.75, -0.91, 3.9, -20.51, -28, 18, -158, -9.11, -4.26, 18.32, 15.61, 7.29, -31.38, -12, 33, -215, -35.12, -6.89, 1.44, 39.53, 7.75, -1.62, 66, 50, -277.45148, -14.55, -7.29, -36.87, 9.24, 4.63, 23.42, 156.02504, 75.61487, -214, 11.96, 1.43, -22.59, -6.5, -0.78, 12.26, 150, 86.07331, -141, 9.86, 2.21, -9.55, -14.47, -3.24, 14.01, 124, 76.02823, -111, 20.33, 0.61, -1.6, 0, 0, 0, 72, 72.16978, -83.73867),
+"tilts": PackedFloat32Array(0, 0, 0, 0, 0, 0, 0, 0, 0)
+}
+point_count = 9
+
+[sub_resource type="Curve3D" id="Curve3D_Tunnel"]
+_data = {
+"points": PackedVector3Array(0, 0, 0, 0, -3.2, -11, 66, -17, -132, 0, 2.5, 12, 0, 0, -13, 66, -24, -166, 0, 0, 26, 0, 0, 0, 66, -24, -245),
+"tilts": PackedFloat32Array(0, 0, 0)
+}
+point_count = 3
+
+[node name="ToiletBowl" type="StaticBody3D" unique_id=820541737]
+script = ExtResource("1_piece")
+DeckWeight = 2.0
+DeckDescription = "The bowl. The pipe climbs round the outside and pours in at the rim; swirl the eighty-metre funnel as fast or as slow as your nerve allows, then fall through the hole into the sunken tunnel out. The wall is the racing line; the saucer is the slow way down."
+Smoothing = 0.0
+
+[node name="Entry" type="Marker3D" parent="." unique_id=1161907488]
+
+[node name="P1" type="Marker3D" parent="." unique_id=614240853]
+transform = Transform3D(0.990268, 0.015989, 0.138251, 0, 0.993373, -0.114937, -0.139173, 0.113818, 0.983705, -12, 8, -85)
+
+[node name="P2" type="Marker3D" parent="." unique_id=1367829269]
+transform = Transform3D(1, 0, 0, 0, 0.990268, -0.139173, 0, 0.139173, 0.990268, -28, 18, -158)
+
+[node name="P3" type="Marker3D" parent="." unique_id=1696918610]
+transform = Transform3D(0, -0.190809, -0.981627, 0, 0.981627, -0.190809, 1, 0, 0, 66, 50, -255)
+
+[node name="P4" type="Marker3D" parent="." unique_id=1891533147]
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 150, 86, -141)
+
+[node name="P4b" type="Marker3D" parent="." unique_id=2057031967]
+transform = Transform3D(0, -0.17365, 0.98481, 0, 0.98481, 0.17365, -1, 0, 0, 72, 72, -84)
+
+[node name="P5" type="Marker3D" parent="." unique_id=2054560776]
+transform = Transform3D(0.22495, -0.688973, 0.688973, 0, 0.7071, 0.7071, -0.97437, -0.159063, 0.159063, 80, 10, -172)
+
+[node name="P6" type="Marker3D" parent="." unique_id=1906287168]
+transform = Transform3D(1, 0, 0, 0, 0.996195, 0.087156, 0, -0.087156, 0.996195, 66, -22, -212)
+
+[node name="Exit" type="Marker3D" parent="." unique_id=430266817]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 66, -24, -245)
+
+[node name="Spine" type="Path3D" parent="." unique_id=2038939583]
+curve = SubResource("Curve3D_4f77e")
+
+[node name="Build" type="CSGCombiner3D" parent="." unique_id=1128508234]
+use_collision = true
+
+[node name="Funnel" type="CSGMesh3D" parent="Build" unique_id=160654084]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 66, 0, -160)
+script = ExtResource("2_bowl")
+RimRadius = 84.0
+RimHeight = 80.0
+HoleRadius = 6.5
+HoleHeight = 0.0
+ProfilePower = 2.75
+Thickness = 2.5
+SurfaceMaterial = ExtResource("3_road")
+
+[node name="ChutePath" type="Path3D" parent="Build" unique_id=594298470]
+curve = SubResource("Curve3D_Chute")
+
+[node name="Chute" type="CSGMesh3D" parent="Build" unique_id=222583454]
+script = ExtResource("4_tube")
+PathNode = NodePath("../ChutePath")
+Radius = 11.5
+FloorWidth = 14.0
+OpennessDegrees = 0.0
+SurfaceMaterial = ExtResource("3_road")
+
+[node name="TunnelPath" type="Path3D" parent="Build" unique_id=115564970]
+curve = SubResource("Curve3D_Tunnel")
+
+[node name="Tunnel" type="CSGMesh3D" parent="Build" unique_id=1621307423]
+script = ExtResource("4_tube")
+PathNode = NodePath("../TunnelPath")
+Radius = 14.0
+FloorWidth = 18.0
+OpennessDegrees = 130.0
+Thickness = 1.4
+SurfaceMaterial = ExtResource("3_road")

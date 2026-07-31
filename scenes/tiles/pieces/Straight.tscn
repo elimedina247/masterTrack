@@ -25,7 +25,7 @@ curve = SubResource("Curve3D_2o5nj")
 use_collision = true
 
 [node name="Road" type="CSGPolygon3D" parent="Build" unique_id=1483541369]
-polygon = PackedVector2Array(-27, -1.6, 27, -1.6, 27, 2, 24.57, 2, 24.57, 0, -24.57, 0, -24.57, 2, -27, 2)
+polygon = PackedVector2Array(-27, -1.6, 27, -1.6, 27, -1.2, 24, 0, -24, 0, -27, -1.2)
 mode = 2
 path_node = NodePath("../../Spine")
 path_interval_type = 0

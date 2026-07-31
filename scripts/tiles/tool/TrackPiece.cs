@@ -94,6 +94,116 @@ public partial class TrackPiece : StaticBody3D
 	public string DeckDescription { get; set; } = "";
 
 	/// <summary>
+	/// How hard <see cref="BankWaypoints"/> rolls the road into its corners, in degrees.
+	///
+	/// The number is a speed, and the equation is the one the hand-built corners were written
+	/// against: a bank carries a car round unaided at <c>v = sqrt(g·r·tan θ)</c>. At this game's
+	/// gravity and the catalog's 63 m corner that puts 25 degrees at about 100 km/h, 45 at 150,
+	/// and 60 at 200 — dead neutral at top speed, which is where the old <c>TurnMaxBank</c> sat.
+	/// Under that number the tires make up the difference; over it the bank is holding you up.
+	///
+	/// Read the height before committing to a steep one: the road is 54 m across, so the span from
+	/// low edge to high is <c>54·sin θ</c> — 38 m at 45 degrees, 47 m at 60.
+	/// </summary>
+	[Export(PropertyHint.Range, "0,70,1")]
+	public float BankDegrees { get; set; } = 45.0f;
+
+	/// <summary>
+	/// Tick to roll every waypoint into the corner it sits in, by <see cref="BankDegrees"/>.
+	/// Unticks itself.
+	///
+	/// <b>Banking a corner by hand is the fiddliest thing this tool asks for</b>, because it is the
+	/// one edit where getting the sign wrong looks plausible — a corner banked the wrong way is
+	/// still a banked corner, just one that throws the car off. Each waypoint is rolled by which
+	/// way the road actually turns through it, measured from the neighbours either side, so the
+	/// road always leans into its own bend and both hands of a corner come out right from the same
+	/// button.
+	///
+	/// <b>The seams are never touched.</b> They are the contract with the pieces either side, and
+	/// leaving them level is what lets a banked corner butt onto a flat straight — the bank rises
+	/// out of nothing after the entry and is gone again by the exit, which is exactly what the
+	/// hand-built corners' <c>BankScale</c> did. A waypoint on a straight stretch is left alone
+	/// rather than levelled, so a deliberate camber on a straight survives.
+	/// </summary>
+	[Export]
+	public bool BankWaypoints
+	{
+		get => false;
+		set
+		{
+			if (value && Engine.IsEditorHint())
+				ApplyBank();
+		}
+	}
+
+	private void ApplyBank()
+	{
+		var route = new List<Marker3D>(Route());
+		if (route.Count < 3)
+		{
+			GD.PushWarning($"[TrackPiece] {Name} has no waypoints to bank — the seams are held "
+						   + "level on purpose. Add one with the ＋ Waypoint button first.");
+			return;
+		}
+
+		float bank = Mathf.DegToRad(BankDegrees);
+		var rolled = 0;
+
+		for (var i = 1; i < route.Count - 1; i++)
+		{
+			Marker3D node = route[i];
+
+			// Which way the road turns through this node, read off the neighbours either side and
+			// flattened, because a bank answers to the bend in plan and not to the climb.
+			Vector3 into = node.Transform.Origin - route[i - 1].Transform.Origin;
+			Vector3 outOf = route[i + 1].Transform.Origin - node.Transform.Origin;
+
+			into.Y = 0.0f;
+			outOf.Y = 0.0f;
+
+			if (into.LengthSquared() < 1e-4f || outOf.LengthSquared() < 1e-4f)
+				continue;
+
+			// Positive turning left. The roll wanted is the opposite sign: lifting the outside of
+			// a left-hander tips the surface normal to the right, which is a negative roll.
+			float turn = into.Normalized().Cross(outOf.Normalized()).Y;
+
+			// Running straight through: there is no bend to lean into, and levelling it would
+			// throw away a camber somebody put there deliberately.
+			if (Mathf.Abs(turn) < 0.01f)
+				continue;
+
+			node.Transform = node.Transform with
+			{
+				Basis = Rolled(node.Transform.Basis, -Mathf.Sign(turn) * bank),
+			};
+
+			rolled++;
+		}
+
+		GD.Print($"[TrackPiece] {Name}: banked {rolled} waypoint(s) to {BankDegrees:0.#} degrees. "
+				 + $"The road spans {TileCatalog.TileSize * Mathf.Sin(bank):0.#} m from low edge to "
+				 + "high there; the seams are untouched.");
+	}
+
+	/// <summary>The same heading and pitch a basis already has, rolled by exactly
+	/// <paramref name="roll"/> about the direction it faces — the inverse of <see cref="RollOf"/>,
+	/// so banking twice does not compound.</summary>
+	private static Basis Rolled(Basis basis, float roll)
+	{
+		Vector3 forward = (basis * Vector3.Forward).Normalized();
+
+		float pitch = Mathf.Asin(Mathf.Clamp(forward.Y, -1.0f, 1.0f));
+		float yaw = Mathf.Atan2(-forward.X, -forward.Z);
+
+		Basis aimed = Basis.FromEuler(new Vector3(pitch, yaw, 0.0f));
+
+		return Mathf.IsZeroApprox(roll)
+			? aimed
+			: aimed.Rotated((aimed * Vector3.Forward).Normalized(), roll);
+	}
+
+	/// <summary>
 	/// Tick to bake the CSG under <c>Build</c> into a mesh and a collision shape. Unticks itself.
 	///
 	/// A button rather than something automatic, because baking is the moment the shape stops being

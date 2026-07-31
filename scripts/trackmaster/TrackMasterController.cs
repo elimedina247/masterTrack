@@ -584,7 +584,8 @@ public partial class TrackMasterController : Node3D
 			0.0f);
 	}
 
-	/// <summary>Fly the camera: WASD along the way it's facing, look with the mouse held.</summary>
+	/// <summary>Fly the camera: WASD along the way it's facing, Space and Shift straight up and
+	/// down, look with the mouse held.</summary>
 	private void UpdateFreeRoam(float delta)
 	{
 		var move = new Vector3(
@@ -592,12 +593,18 @@ public partial class TrackMasterController : Node3D
 			0.0f,
 			Input.GetActionStrength("builder_cam_back") - Input.GetActionStrength("builder_cam_forward"));
 
-		if (move == Vector3.Zero)
+		// Vertical is world up and down rather than camera-local: rising is about getting over
+		// the track, and which way the camera happens to be aimed has nothing to say about it.
+		float lift = Input.GetActionStrength("builder_cam_up")
+					 - Input.GetActionStrength("builder_cam_down");
+
+		// WASD stays relative to where the camera is pointing, so "forward" means into the screen
+		// however the Track Master has it aimed.
+		Vector3 direction = _camera.Basis * move + Vector3.Up * lift;
+		if (direction.LengthSquared() < 1e-6f)
 			return;
 
-		// Relative to where the camera is pointing, so "forward" means into the screen however
-		// the Track Master has it aimed.
-		_camera.Position += _camera.Basis * move.Normalized()
+		_camera.Position += direction.Normalized()
 							* (FreeMoveSpeed * _freeSpeedScale * delta);
 	}
 

@@ -204,13 +204,20 @@ public sealed class PlacedTile
         }
 
         Vector3 from = frame * route[0];
+        Vector3 previous = from;
         float covered = 0.0f;
         float lastYaw = entry.Yaw;
 
         for (var i = 1; i < route.Count; i++)
         {
             Vector3 to = frame * route[i];
-            covered += (to - from).Length();
+
+            // Arc length since the box started: one segment at a time, from the point before.
+            // Measured from the box's own start it re-counts the whole chord at every sample, and
+            // the boxes come out a tenth of the stride apart — each padded to the minimum length,
+            // reaching back through the seam, and every placement reads as a collision.
+            covered += (to - previous).Length();
+            previous = to;
 
             if (covered < stride && i < route.Count - 1)
                 continue;
@@ -717,13 +724,35 @@ public sealed class TrackGrid
     /// <summary>
     /// Lay down a starting straight so racers have something to launch from, and leave the
     /// head at the far end of it. <paramref name="length"/> counts tiles, not cells — each one
-    /// is a catalog straight, so it runs <see cref="TileCatalog.ShortRun"/> metres.
+    /// is the catalog's authored Straight piece, so it runs that piece's length.
     /// </summary>
     public void BuildStartingStraight(TrackAnchor start, int length)
     {
         Reset(start);
+
+        // The authored piece, found by its scene file rather than its display name so renaming
+        // the card in the deck cannot quietly swap what every track starts on. Placing the same
+        // shared TileData repeatedly is fine — the grid never writes to one.
+        TileData? straight = null;
+        foreach (TileData data in TileCatalog.AllAsData)
+        {
+            if (data.ScenePath.EndsWith("/Straight.tscn", System.StringComparison.Ordinal))
+            {
+                straight = data;
+                break;
+            }
+        }
+
+        // The generated grey straight is the fallback of last resort: a start line the racers can
+        // at least sit on while the missing piece gets put back.
+        if (straight == null)
+        {
+            GD.PushWarning("[TrackGrid] The pieces folder has no Straight.tscn, so the starting "
+                           + "straight is generated boxes instead of the authored piece.");
+        }
+
         for (int i = 0; i < length; i++)
-            Place(new TileData(TileHazard.Straight, runLength: TileCatalog.ShortRun));
+            Place(straight ?? new TileData(TileHazard.Straight, runLength: TileCatalog.ShortRun));
     }
 
 }
