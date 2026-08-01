@@ -769,6 +769,47 @@ ends, higher is gentler ends and a steeper middle.
 
 ---
 
+## Car-to-car impacts
+
+Cars are simulated on exactly one machine each; everyone else's car here is a frozen kinematic
+puppet slid along its replicated pose. The solver therefore sees a remote car as an **unlimited
+mass with zero velocity**: leaning on one works (its advancing pose genuinely shoves you), but a
+real collision comes out as bouncing off scenery — no momentum exchange, and no consequence for
+the car that was hit. The impact layer in `RacerController.ProcessCarContacts` adds the movie on
+top, Burnout-style and deliberately over the top.
+
+**Each machine only ever touches its own car.** Both sides detect the same contact — you against
+their puppet, them against yours — and each applies its own share of a reaction computed from the
+same replicated data (`NetVelocity` rides alongside the pose for exactly this). Nothing is
+negotiated and no authority moves; the two responses agree because the rule is symmetric even
+though the shares are not.
+
+A hit is four things, all scaled by closing speed up to `ImpactFullSpeed`:
+
+1. **Launch** — `ImpactBounce` × closing speed along the contact normal. Above 1.0 on purpose:
+   the solver already did the physically honest part, this is theatre.
+2. **Pop** — `ImpactPop` × closing speed straight up. Lifting the victim off the road hands them
+   to the airborne rules (no grip, no drive, a projectile), which is what sells the takeout.
+3. **Spin** — up to `ImpactSpinRate` of yaw, signed by which side of the centre of mass the hit
+   landed. Clipping a rear quarter pirouettes them.
+4. **Stun** — up to `ImpactStunTime` during which grip, steering torque and drive force are
+   scaled down by the `Stun*Loss` fractions, fading back linearly. This is the load-bearing one:
+   the launch and spin are just velocity, and this car's grip and steering solvers exist to
+   delete unwanted velocity within a few frames. The stun is the window in which they aren't
+   allowed to, so the spin actually *runs*.
+
+**Who was the victim matters.** The car that got driven into receives the full reaction; the one
+that did the driving receives `ImpactRammerScale` of it. Split it evenly and rear-ending someone
+stops *you* dead — punishing exactly the play the mechanic rewards. Head-ons land in the middle
+and wreck everybody.
+
+The launch and pop are deliberately **unclamped** above `ImpactFullSpeed` right now (severity —
+spin and stun — is clamped). Two boosted cars meeting head-on will produce something absurd.
+That is the current tuning philosophy: cranked to 10 first, then walked back by feel. The knobs
+all live in the `Car Impact` export group on `Vehicle`.
+
+---
+
 ## Known noise
 
 Two warnings at exit are expected and predate all of this: `2 ObjectDB instances were leaked`

@@ -530,6 +530,87 @@ public partial class Vehicle : RigidBody3D
     /// </summary>
     [Export] public float FallGravityMultiplier { get; set; } = 1.6f;
 
+    // ---------------------------------------------------------------- Car impact
+
+    /// <summary>
+    /// Slowest closing speed that counts as a hit, in m/s. Below this two cars leaning on each
+    /// other are *racing*, and the solver's ordinary contact response is the right answer — the
+    /// impulse layer only wakes up for the moment one of them arrives with intent.
+    /// </summary>
+    [ExportGroup("Car Impact")]
+    [Export] public float ImpactMinSpeed { get; set; } = 3.0f;
+
+    /// <summary>
+    /// Closing speed that counts as a maximum-severity hit, in m/s. Everything about a hit — the
+    /// launch, the spin, how long the victim is wrecked for — scales with closing speed up to
+    /// this, then stops growing. 20 m/s is well inside what one boost buys, so a takeout is
+    /// something a player can *choose* to line up rather than a jackpot.
+    /// </summary>
+    [Export] public float ImpactFullSpeed { get; set; } = 20.0f;
+
+    /// <summary>
+    /// How much of the closing speed comes back as launch, along the contact normal. 1.0 is a
+    /// perfectly elastic wall; this ships above it on purpose. The solver has already resolved
+    /// the "real" collision by the time this fires — this is the movie version layered on top,
+    /// and under-selling it reads as two shopping trolleys touching.
+    /// </summary>
+    [Export] public float ImpactBounce { get; set; } = 1.2f;
+
+    /// <summary>
+    /// How much of the closing speed becomes upward pop. Pure theatre: a car that gets hit hard
+    /// should come *off the road* a little, because the airborne rules then do the rest — no
+    /// grip, no drive, a projectile with a spin on it. This is what makes a takeout look like a
+    /// takeout from the chase camera instead of like a lateral teleport.
+    /// </summary>
+    [Export] public float ImpactPop { get; set; } = 0.35f;
+
+    /// <summary>
+    /// Yaw rate a full-severity hit injects, in rad/s. 10 is a bit over a full rotation and a
+    /// half per second off the line — Burnout numbers, deliberately. The sign comes from where
+    /// the hit landed relative to the centre of mass, so clipping someone's rear quarter
+    /// pirouettes them, which is the classic takeout and should be the one that pays best.
+    /// </summary>
+    [Export] public float ImpactSpinRate { get; set; } = 10.0f;
+
+    /// <summary>
+    /// How long a full-severity hit wrecks the car for, in seconds. Scaled down by severity, and
+    /// it is the load-bearing number of the whole feature: the launch and the spin are *velocity*,
+    /// and this car's grip and steering solvers exist to delete unwanted velocity within a few
+    /// frames. The stun holds the door open so the spin actually runs. See <see cref="StunAmount"/>.
+    /// </summary>
+    [Export] public float ImpactStunTime { get; set; } = 1.2f;
+
+    /// <summary>
+    /// Dead time per opposing car before another impulse can fire, in seconds. Two boxes
+    /// grinding along each other report contact every step; without this, the "hit" would
+    /// machine-gun. One big hit, then the solver's push takes over — that is the shape of it.
+    /// </summary>
+    [Export] public float ImpactCooldown { get; set; } = 0.3f;
+
+    /// <summary>
+    /// Fraction of the reaction the *aggressor* eats, 0..1. The car that got driven into takes
+    /// the full launch and spin; the car that did the driving takes this much of it.
+    ///
+    /// This asymmetry is the Burnout grammar and it is not optional. Split the reaction evenly
+    /// and rear-ending someone stops <i>you</i> dead — which punishes exactly the play the
+    /// mechanic exists to reward. The rammer still eats enough to feel the hit land; they just
+    /// keep their race.
+    /// </summary>
+    [Export(PropertyHint.Range, "0,1,0.01")]
+    public float ImpactRammerScale { get; set; } = 0.35f;
+
+    /// <summary>Fraction of grip the stun takes away at full strength. See <see cref="StunAmount"/>.</summary>
+    [Export(PropertyHint.Range, "0,1,0.01")]
+    public float StunGripLoss { get; set; } = 0.9f;
+
+    /// <summary>Fraction of steering torque the stun takes away at full strength.</summary>
+    [Export(PropertyHint.Range, "0,1,0.01")]
+    public float StunSteerLoss { get; set; } = 0.85f;
+
+    /// <summary>Fraction of drive force the stun takes away at full strength.</summary>
+    [Export(PropertyHint.Range, "0,1,0.01")]
+    public float StunDriveLoss { get; set; } = 0.6f;
+
     // ---------------------------------------------------------------- Inputs
 
     /// <summary>0..1 throttle. Written by the controller every physics step.</summary>
@@ -689,6 +770,29 @@ public partial class Vehicle : RigidBody3D
     /// <summary>Fires when a drift ends, with the tier it earned. 0 means it earned nothing.</summary>
     [Signal] public delegate void DriftEndedEventHandler(int tier);
 
+    // ---- Impact ----
+
+    /// <summary>
+    /// How wrecked the car currently is, 0..1, fading linearly back to 0 over the stun window.
+    ///
+    /// While this is up, the car's three correcting authorities — grip, steering torque, drive
+    /// force — are scaled down by their respective <c>Stun*Loss</c> fractions. That is the whole
+    /// trick: an impact is just velocity, and this simulation is built to delete velocity it
+    /// didn't ask for. Stun is the window during which it isn't allowed to, which is what turns
+    /// "a nudge the solver corrects in three frames" into "a car sliding sideways across the
+    /// track with the driver sawing at a dead wheel".
+    ///
+    /// Public so the cosmetics can key off it — wobbling steering, dazed camera, smoke.
+    /// </summary>
+    public float StunAmount { get; private set; }
+
+    /// <summary>
+    /// Fires when this car takes a hit from another racer, with the severity (0..1) and the
+    /// world-space contact point. Camera shake, crunch sounds and sparks hang off this; physics
+    /// must not.
+    /// </summary>
+    [Signal] public delegate void CarImpactEventHandler(float severity, Vector3 worldPoint);
+
     // ---------------------------------------------------------------- Internals
 
     private float _headingYaw;
@@ -704,6 +808,10 @@ public partial class Vehicle : RigidBody3D
 
     private bool _driftWasHeld;
     private bool _hopWasHeld;
+
+    /// <summary>Stun clock: seconds left, and the window it started from. See <see cref="StunAmount"/>.</summary>
+    private float _stunRemaining;
+    private float _stunDuration;
 
     /// <summary>Seconds until another hop may be sprung. See <see cref="HopCooldown"/>.</summary>
     private float _hopCooldown;
@@ -739,6 +847,15 @@ public partial class Vehicle : RigidBody3D
         Mass = VehicleMass;
         CenterOfMassMode = CenterOfMassModeEnum.Custom;
         CenterOfMass = new Vector3(0.0f, CenterOfMassHeight, 0.0f);
+
+        // Swept rather than teleported through each step. At 120 Hz a car at MaxFallSpeed moves
+        // 0.54 m per step and the chassis box is 0.46 m tall, so a hard landing can put the whole
+        // box past the road's collision skin in one step — the car ends up *inside* the tile,
+        // where the ground rays start under the surface, see nothing (trimesh backfaces don't
+        // report), and the suspension goes silent with the drive scaled to zero behind it. Jolt
+        // runs this as its LinearCast motion quality; the cost is one shape cast on a handful of
+        // bodies and it closes the tunnel outright.
+        ContinuousCd = true;
 
         WheelArray.Clear();
         WheelArray.Add(fl);
@@ -809,6 +926,7 @@ public partial class Vehicle : RigidBody3D
         ReadState();
         ProcessSuspension();
         ProcessInputRamp(dt);
+        ProcessStun(dt);
         ProcessDrift(dt);
         ProcessBoost(dt);
         ProcessHop(dt);
@@ -862,6 +980,56 @@ public partial class Vehicle : RigidBody3D
         float t = 1.0f - Mathf.Exp(-InputRampSpeed * delta);
         ThrottleAmount = Mathf.Lerp(ThrottleAmount, Mathf.Clamp(ThrottleInput, 0.0f, 1.0f), t);
         BrakeAmount = Mathf.Lerp(BrakeAmount, Mathf.Clamp(BrakeInput, 0.0f, 1.0f), t);
+    }
+
+    // ---------------------------------------------------------------- Impact stun
+
+    /// <summary>
+    /// Take a hit: start (or extend) the stun window and tell the cosmetics. The velocity side
+    /// of an impact — the launch and the spin — is the caller's business, because only the
+    /// caller knows what was hit and how; this is the car's own reaction to being hit.
+    ///
+    /// A weaker hit never shortens the window a stronger one already opened, so getting clipped
+    /// twice mid-spin can't accidentally hand control back early.
+    /// </summary>
+    public void RegisterImpact(float severity, Vector3 worldPoint)
+    {
+        severity = Mathf.Clamp(severity, 0.0f, 1.0f);
+
+        float duration = ImpactStunTime * severity;
+        if (duration > _stunRemaining)
+        {
+            _stunRemaining = duration;
+            _stunDuration = Mathf.Max(duration, 0.001f);
+        }
+
+        EmitSignal(SignalName.CarImpact, severity, worldPoint);
+    }
+
+    /// <summary>Hand control straight back. A respawned car should not still be seeing stars.</summary>
+    public void ClearImpactStun()
+    {
+        _stunRemaining = 0.0f;
+        _stunDuration = 0.0f;
+        StunAmount = 0.0f;
+    }
+
+    /// <summary>
+    /// Run the stun clock down. <see cref="StunAmount"/> fades linearly, so grip and steering
+    /// come back *gradually* over the window — the car hooks up again rather than snapping from
+    /// carousel to rails on one frame, which is also what keeps <see cref="MaxGripForce"/> from
+    /// having to absorb the whole recovery at once.
+    /// </summary>
+    private void ProcessStun(float delta)
+    {
+        if (_stunRemaining <= 0.0f)
+        {
+            StunAmount = 0.0f;
+            return;
+        }
+
+        _stunRemaining = Mathf.Max(_stunRemaining - delta, 0.0f);
+        StunAmount = _stunDuration > 0.0f ? _stunRemaining / _stunDuration : 0.0f;
     }
 
     // ---------------------------------------------------------------- Drift
@@ -1200,6 +1368,12 @@ public partial class Vehicle : RigidBody3D
                 backwardLimit = MaxBrakeForce;
         }
 
+        // A stunned car can't just power out of its own spin — the drive solve chasing the target
+        // speed is a stabiliser too, and it would straighten the car's path even with the grip and
+        // steering already stood down. Brakes are left alone: stamping the brake mid-spin is a
+        // *choice*, and it should remain one.
+        forwardLimit *= 1.0f - StunDriveLoss * StunAmount;
+
         // Scaled by how much of the car is actually on the road, not switched off the moment the
         // last ray leaves it: a car skimming a crease with two corners down keeps half its drive
         // instead of losing all of it. Ramps are chord facets, and the creases unstick the car
@@ -1239,6 +1413,11 @@ public partial class Vehicle : RigidBody3D
         // air. A car crossing a crease on a ramp should lose some grip, not all of it; a car that
         // has left the road entirely should have none.
         grip *= GroundFraction;
+
+        // A car that has just been hit is not allowed to save itself. This grip solve would
+        // otherwise cancel most of a takeout's sideways launch within a few frames — the stun is
+        // what lets the hit *carry*. See StunAmount.
+        grip *= 1.0f - StunGripLoss * StunAmount;
 
         CurrentGrip = grip;
 
@@ -1327,7 +1506,12 @@ public partial class Vehicle : RigidBody3D
         // its side or mid-roll stops trying to steer and lets the righting torque do its work.
         float uprightFactor = Mathf.Clamp(GlobalTransform.Basis.Y.Dot(Vector3.Up), 0.0f, 1.0f);
 
-        SteerTorque = turnForce * uprightFactor;
+        // Faded while stunned, or the PD controller would kill an injected takeout spin almost
+        // immediately — 22000 Nm of damping against 10 rad/s is exactly the fight it was built to
+        // win. The wheel goes light, the spin runs, and authority bleeds back with the stun.
+        float stunFactor = 1.0f - StunSteerLoss * StunAmount;
+
+        SteerTorque = turnForce * uprightFactor * stunFactor;
         ApplyTorque(Vector3.Up * SteerTorque);
     }
 

@@ -882,7 +882,7 @@ public partial class TrackPiece : StaticBody3D
 			SnapSeams();
 			SetProcess(true);
 		}
-		else if (IsBaked)
+		else if (IsBaked && !KeepBuildForRebake)
 		{
 			// CSG is an authoring tool. A baked piece has everything it needs, and leaving the
 			// combiner in the tree would have the engine rebuilding the same shape on load for every
@@ -1043,6 +1043,15 @@ public partial class TrackPiece : StaticBody3D
 	// ---- Baking ----
 
 	/// <summary>
+	/// Set by <c>tools/BakePieces</c> before it instances anything, when a forced re-bake was
+	/// asked for. A baked piece normally frees its Build subtree the moment it enters the tree at
+	/// runtime — right for the game, fatal for a tool that is about to bake that very CSG again.
+	/// Static because the pieces are instanced by a scene that has no other line to them before
+	/// their <c>_Ready</c> runs.
+	/// </summary>
+	public static bool KeepBuildForRebake { get; set; }
+
+	/// <summary>
 	/// Turn the CSG under <c>Build</c> into a mesh and a collision shape saved with the scene.
 	///
 	/// A frame is awaited first because CSG updates are deferred by one — baking without it hands
@@ -1052,8 +1061,14 @@ public partial class TrackPiece : StaticBody3D
 	/// The results are given an <see cref="Node.Owner"/>, unlike everything the old generator built:
 	/// they are the point of the exercise and have to be written into the file. The CSG stays too,
 	/// so the shape remains editable and can be baked again.
+	///
+	/// Public, and callable outside the editor, because the inspector tick box is not the only
+	/// legitimate way to press it: <c>tools/BakePieces.tscn</c> bakes the whole catalog headlessly
+	/// in one run, which beats opening seventeen scenes by hand and forgetting the eighteenth.
+	/// Completion is observed through <see cref="IsBaked"/> — this is <c>async void</c> and cannot
+	/// be awaited; it saves nothing to disk either way, that stays the caller's decision.
 	/// </summary>
-	private async void RunBake()
+	public async void RunBake()
 	{
 		CsgShape3D? build = Build;
 		if (build == null)

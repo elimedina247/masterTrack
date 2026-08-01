@@ -23,11 +23,7 @@ namespace MasterTrack.Game;
 /// </summary>
 public partial class Game : Node3D
 {
-    private const string MainMenuScenePath = "res://scenes/Main.tscn";
     private const string LobbyScenePath = "res://scenes/TestArea.tscn";
-
-    /// <summary>How long a passing message stays on screen.</summary>
-    private const float NoticeSeconds = 2.5f;
 
     private RacerArena _arena = null!;
     private TrackController _track = null!;
@@ -63,6 +59,10 @@ public partial class Game : Node3D
                  $"role={_localRole}, race={_track.TileLimit} tiles.");
 
         ApplyRole();
+
+        // Pay every piece's one-time costs now, while the scene is still settling, rather than
+        // the first time the Track Master plays each card mid-race.
+        WarmPieceCaches();
 
         // Warnings are computed against the authoritative track, so only the server does it.
         _track.TilePlaced += OnTilePlaced;
@@ -116,6 +116,44 @@ public partial class Game : Node3D
     /// so hand it to the manager, which is the only thing that decides matches are over.
     /// </summary>
     private void OnRaceFinished(int peerId) => GameManager.Instance.DeclareWinner(peerId);
+
+    /// <summary>
+    /// Instance every deck piece once, out of sight, and throw it away a frame later.
+    ///
+    /// Baking took the big cost out of placement — the CSG rebuild — but two one-time costs per
+    /// piece remain, and both used to land in the middle of a race the first time each card was
+    /// played: loading and parsing the scene file (ToiletBowl carries a seventy-thousand-vertex
+    /// baked mesh now), and Jolt cooking the baked trimesh into its own format when the shape
+    /// first enters the physics space. Both are cached — the resource cache holds the scene, and
+    /// the cooked shape lives on the shared shape resource — so touching each piece once here
+    /// means every placement for the rest of the session is an instancing, nothing more.
+    ///
+    /// One piece per frame, far below the board, on every peer and both roles: racers build the
+    /// replicated track too. Fire-and-forget, so the handshake with the other peers runs on top
+    /// of it rather than after it.
+    /// </summary>
+    private async void WarmPieceCaches()
+    {
+        foreach (TileDefinition definition in TileCatalog.All)
+        {
+            // The scene could be torn down mid-warmup — a host cancelling out of a match during
+            // the first second of it. Awaiting across that without checking would instance
+            // pieces into a freed parent.
+            if (!IsInsideTree())
+                return;
+
+            if (definition.ScenePath is not { Length: > 0 } path
+                || GD.Load<PackedScene>(path) is not { } scene
+                || scene.Instantiate() is not Node3D piece)
+                continue;
+
+            piece.Position = new Vector3(0.0f, -3000.0f, 0.0f);
+            AddChild(piece);
+
+            await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+            piece.QueueFree();
+        }
+    }
 
     /// <summary>
     /// Everyone, server included: say who won and leave it up. The manager takes the session back
@@ -235,47 +273,5 @@ public partial class Game : Node3D
                  $"Track tiles: {_track.Grid.Count}, head {_track.Grid.HeadAnchor.Position} " +
                  $"yaw {Mathf.RadToDeg(_track.Grid.HeadAnchor.Yaw):0}deg. Current camera: " +
                  (current != null ? current.GetPath() : "<none>"));
-    }
-
-    /// <summary>
-    /// Escape leaves the match — it does not close the game. Somebody will press it by reflex,
-    /// and quitting the process drops them out of a session they then have to be talked back
-    /// into.
-    /// </summary>
-    public override void _UnhandledInput(InputEvent @event)
-    {
-        if (!@event.IsActionPressed("ui_cancel"))
-            return;
-
-        // Solo has no session to return to, so the menu is the only place to go.
-        if (!NetworkManager.Instance.IsNetworked)
-        {
-            GetTree().ChangeSceneToFile(MainMenuScenePath);
-            return;
-        }
-
-        // Only the host can call it, and it takes the whole session back at once. There is no
-        // win condition yet, so this is also the only way a round ends.
-        if (NetworkManager.Instance.IsHost)
-            GameManager.Instance.EndMatch();
-        else
-            ShowNotice("Only the host can end the match.");
-    }
-
-    /// <summary>Say something in the middle of the screen for a moment, then take it away.</summary>
-    private void ShowNotice(string text)
-    {
-        if (_waiting == null)
-            return;
-
-        _waiting.Text = text;
-        _waiting.Visible = true;
-
-        GetTree().CreateTimer(NoticeSeconds).Timeout += () =>
-        {
-            // The scene can be gone by the time this fires.
-            if (IsInstanceValid(_waiting))
-                _waiting.Visible = false;
-        };
     }
 }

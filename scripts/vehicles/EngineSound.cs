@@ -79,6 +79,9 @@ public partial class EngineSound : AudioStreamPlayer3D
 
     public override void _Ready()
     {
+        // Set here rather than per-scene so every car answers the pause menu's SFX slider.
+        Bus = "SFX";
+
         Rpm = IdleRpm;
 
         if (VehicleNode == null)

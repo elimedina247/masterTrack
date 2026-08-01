@@ -115,6 +115,67 @@ baked mesh to go stale, and a change to a shared profile reshapes every piece us
 
 The console prints each piece's run length, exit anchor, rise, vertex count and extent.
 
+## Keeping it smooth
+
+The racers ride the mesh on raycast springs, so every facet joint in the road is a step change in
+surface gradient and its angle is exactly the size of the kick the springs take crossing it. Three
+things exist to keep those angles small, all in the viewport:
+
+- **The smoothness overlay.** Selecting a piece (or any of its route markers) paints lines along
+  the road surface, each facet coloured by the angle it makes with its neighbour: dim green is
+  smooth, orange reads as texture at race speed (½°), red is a roadbump you steer around (1¼°).
+  The lanes are the mesh's own construction — a `BankedRoad` hands the overlay its actual rows,
+  bank wall included, which is where a drift line's bumps live — so the overlay shows the road the
+  car gets, not an idealised curve the mesh only approximates.
+- **The ∿ Smooth button** (3D toolbar, next to ＋ Waypoint) re-aims every waypoint of the selected
+  piece along the line its neighbours make, as one undoable action. Positions stay put, each
+  waypoint's bank survives, and the seams — the contract with the neighbouring pieces — are never
+  touched. It is the piece's `Smoothing` knob written into the markers instead of applied silently,
+  for pieces authored with `Smoothing` at 0.
+- **`BankedRoad.SmoothingMeters`** fairs the bank wall itself. The wall's height tracks the
+  spine's local curvature, and a Bezier chain's curvature combs between control points and kinks
+  where segments meet — ridden along the wall in a drift, those waves were the Khopesh opening
+  curve's roadbumps. The strength profile is averaged over this many metres of road before the
+  wall is built from it, and eased to flat at the seams *after* the averaging, so smoothing never
+  bleeds bank height onto a joint.
+
+Joins between pieces need no smoothing of their own: the seam carries a full transform, so
+position, heading, pitch and roll already agree there by construction, and once each side's mesh
+leaves its seam without a kink the joint rides like the middle of a straight. After smoothing a
+piece, re-bake it — `tools/BakePieces.tscn` with `-- --force` re-bakes the whole catalog when a
+generator change makes every saved bake stale.
+
+## Reading the road
+
+Color means change, and it is applied **where the road asks for it, not per tile**. Every road
+is grey at rest — entries, exits, flat lanes — so the racers follow grey and read color as a
+promise about the stretch it is painted on:
+
+- **Blue is bank wall.** `BankedRoad` writes each surface point's sideways lean into UV.x as it
+  sweeps, and `banked_road.tres` switches the shader's `use_uv_turn` on to paint the turning
+  blue from that channel — leaning past ~8°, grown to full over a few degrees more, per pixel.
+  So an S-bend is grey through its entry, exit and inner lane with exactly its outer walls in
+  blue, the boundary is one clean contour rather than a facet staircase, and the blue grows and
+  fades with the wall because it *is* the wall. The bowl and the tubes wear blue whole — those
+  nodes are the feature head to toe.
+- **Green is pitch**, painted per-pixel by the shared `road_surface.gdshader`: any driveable
+  face pitched past ~8° blends to the slope color by ~14°. A ramp's incline is green while its
+  approach and run-off are grey, on every piece, with nothing to author — the pitch is read off
+  the surface normal.
+- **Red marks danger, and only danger** — accents on things you can hit or fall into: the
+  bottleneck's walls, the slalom's pylons, the wave's baffles, the jump's gap markers, the
+  split's divider. Nothing decorative is red, so red never cries wolf.
+
+The same shader paints every face too steep to drive on at all — slab sides, undersides, cut
+faces — near-black, outlining each road against the world. Every boundary is a smoothstep band a
+few degrees wide rather than a hard cut — the road is facets, and a hard threshold saw-tooths
+wherever its iso-line runs along a strip of triangles. Everything keys off surface normals and
+the UV lean channel, both of which survive CSG booleans and the bake unchanged; the generated
+meshes also shade their driveable top smooth and their shells flat (`SolidMesh`'s buckets), so
+normals vary continuously exactly where the colors read off them. The palette lives in
+`resources/tiles/*.tres`; a material whose albedo already is the message (the turning blue) sets
+`slope_color` to its own albedo, which switches the green off.
+
 ## Where this is up to
 
 Done: the sweep, the profile, the piece, seam validation, and four pieces covering the three

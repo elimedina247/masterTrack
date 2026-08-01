@@ -15,6 +15,8 @@
 [ext_resource type="Script" uid="uid://dbk7pylfv22wn" path="res://scripts/trackmaster/TrackMasterController.cs" id="13_builder"]
 [ext_resource type="Script" uid="uid://cj0ww0l43v351" path="res://scripts/ui/TilePalette.cs" id="14_palette"]
 [ext_resource type="Script" uid="uid://c8jmpay1cn5al" path="res://scripts/ui/TrackFeed.cs" id="15_feed"]
+[ext_resource type="PackedScene" path="res://scenes/ui/PauseMenu.tscn" id="16_pause"]
+[ext_resource type="Script" path="res://scripts/ui/Speedometer.cs" id="17_speedo"]
 
 [sub_resource type="Environment" id="Env"]
 background_mode = 2
@@ -89,6 +91,19 @@ grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("3_hud")
 
+[node name="Speedometer" type="Control" parent="HUD"]
+layout_mode = 3
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 16.0
+offset_top = -246.0
+offset_right = 376.0
+offset_bottom = -16.0
+grow_vertical = 0
+mouse_filter = 2
+script = ExtResource("17_speedo")
+
 [node name="VehicleDebug" type="Control" parent="HUD" unique_id=2078078617]
 layout_mode = 3
 anchors_preset = 15
@@ -132,3 +147,5 @@ grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("14_palette")
 Builder = NodePath("../../TrackMaster")
+
+[node name="PauseMenu" parent="." instance=ExtResource("16_pause")]

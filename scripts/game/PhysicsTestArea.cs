@@ -49,7 +49,6 @@ public partial class PhysicsTestArea : Node3D
 	private float _padHalfX;
 	private float _padHalfZ;
 
-	private const string MainMenuScenePath = "res://scenes/Main.tscn";
 	private const string GameScenePath = "res://scenes/Game.tscn";
 	private const string GeneratedRootName = "Generated";
 
@@ -236,26 +235,9 @@ public partial class PhysicsTestArea : Node3D
 			return;
 
 		// racer_reset is the car's own business now — RacerController handles it, so it works
-		// here and in a match alike rather than only on this pad.
-		if (@event.IsActionPressed("ui_cancel"))
-		{
-			LeaveToMenu();
-			return;
-		}
-
+		// here and in a match alike rather than only on this pad. Escape belongs to the
+		// PauseMenu overlay, which sees it before this node does.
 		HandleBuilderInput(@event);
-	}
-
-	/// <summary>
-	/// Back to the main menu. In a session that means dropping out of it first — otherwise the
-	/// peer stays connected from behind the menu and the host keeps waiting on a ghost.
-	/// </summary>
-	private void LeaveToMenu()
-	{
-		if (NetworkManager.Instance.IsNetworked)
-			NetworkManager.Instance.Disconnect();
-
-		GetTree().ChangeSceneToFile(MainMenuScenePath);
 	}
 
 	private void BuildSurfaces()

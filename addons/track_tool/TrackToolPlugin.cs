@@ -25,6 +25,7 @@ public partial class TrackToolPlugin : EditorPlugin
 	private TrackPalette? _palette;
 	private Button? _addWaypoint;
 	private Button? _removeWaypoint;
+	private Button? _smooth;
 	private Button? _mirror;
 	private Button? _extend;
 
@@ -78,6 +79,17 @@ public partial class TrackToolPlugin : EditorPlugin
 		};
 		_removeWaypoint.Pressed += OnRemovePressed;
 		AddControlToContainer(CustomControlContainer.SpatialEditorMenu, _removeWaypoint);
+
+		_smooth = new Button
+		{
+			Text = "∿ Smooth",
+			TooltipText = "Re-aim every waypoint of the selected piece along the line its "
+						  + "neighbours make, so the road runs through them without wiggles. "
+						  + "Positions and banking stay put; the seams are never touched. Undoable.",
+			Visible = false,
+		};
+		_smooth.Pressed += OnSmoothPressed;
+		AddControlToContainer(CustomControlContainer.SpatialEditorMenu, _smooth);
 
 		_mirror = new Button
 		{
@@ -136,6 +148,7 @@ public partial class TrackToolPlugin : EditorPlugin
 
 		RemoveButton(ref _addWaypoint);
 		RemoveButton(ref _removeWaypoint);
+		RemoveButton(ref _smooth);
 		RemoveButton(ref _mirror);
 		RemoveButton(ref _extend);
 	}
@@ -165,6 +178,9 @@ public partial class TrackToolPlugin : EditorPlugin
 
 		if (_removeWaypoint != null)
 			_removeWaypoint.Visible = visible;
+
+		if (_smooth != null)
+			_smooth.Visible = visible;
 
 		if (_mirror != null)
 			_mirror.Visible = visible;
@@ -224,6 +240,90 @@ public partial class TrackToolPlugin : EditorPlugin
 	{
 		if (SelectedPiece() is { } piece)
 			RemoveLastWaypoint(piece);
+	}
+
+	private void OnSmoothPressed()
+	{
+		if (SelectedPiece() is { } piece)
+			SmoothRoute(piece);
+	}
+
+	/// <summary>
+	/// Aim every waypoint along the chord its neighbours make, as one undoable action — the
+	/// viewport's answer to a road that wiggles.
+	///
+	/// A waypoint aimed even a few degrees off the line through its neighbours forces the curve to
+	/// swing out and back to obey it, and the swing reads as a wiggle in the road and rides as a
+	/// bump — the piece's <c>Smoothing</c> knob eases exactly this, but silently, at spine-build
+	/// time. This writes the same easing <i>into the markers</i>, taken to its limit: afterwards
+	/// what you see on every arrow is what the road does, and a piece authored with Smoothing at 0
+	/// (obey my aims exactly) gets aims worth obeying.
+	///
+	/// Only headings move. Positions stay where they were dragged, each waypoint's bank survives
+	/// (measured about the new heading), and the seams are never touched — their aims are the
+	/// piece's contract with its neighbours.
+	/// </summary>
+	private void SmoothRoute(TrackPiece piece)
+	{
+		var route = new System.Collections.Generic.List<Marker3D>();
+		foreach (Marker3D node in piece.Route())
+			route.Add(node);
+
+		if (route.Count < 3)
+		{
+			GD.PushWarning($"[TrackTool] {piece.Name} has no waypoints between its seams — "
+						   + "nothing to smooth. Add one with the ＋ Waypoint button first.");
+			return;
+		}
+
+		var changes = new System.Collections.Generic.List<(Marker3D Node, Transform3D After,
+														   Transform3D Before)>();
+
+		for (var i = 1; i < route.Count - 1; i++)
+		{
+			Marker3D node = route[i];
+			Transform3D at = node.Transform;
+
+			Vector3 chord = route[i + 1].Transform.Origin - route[i - 1].Transform.Origin;
+			if (chord.LengthSquared() < 1e-4f)
+				continue;
+
+			chord = chord.Normalized();
+
+			float pitch = Mathf.Asin(Mathf.Clamp(chord.Y, -1.0f, 1.0f));
+			float yaw = Mathf.Atan2(-chord.X, -chord.Z);
+			float roll = TrackPiece.RollOf(at.Basis);
+
+			Basis smoothed = Basis.FromEuler(new Vector3(pitch, yaw, 0.0f));
+			if (!Mathf.IsZeroApprox(roll))
+				smoothed = smoothed.Rotated((smoothed * Vector3.Forward).Normalized(), roll);
+
+			if (at.Basis.IsEqualApprox(smoothed))
+				continue;
+
+			changes.Add((node, at with { Basis = smoothed }, at));
+		}
+
+		if (changes.Count == 0)
+		{
+			GD.Print($"[TrackTool] {piece.Name}'s waypoints already run along their neighbours — "
+					 + "nothing to smooth.");
+			return;
+		}
+
+		EditorUndoRedoManager undo = GetUndoRedo();
+		undo.CreateAction($"Smooth route of {piece.Name}");
+
+		foreach ((Marker3D node, Transform3D after, Transform3D before) in changes)
+		{
+			undo.AddDoProperty(node, Node3D.PropertyName.Transform, after);
+			undo.AddUndoProperty(node, Node3D.PropertyName.Transform, before);
+		}
+
+		undo.CommitAction();
+
+		GD.Print($"[TrackTool] {piece.Name}: re-aimed {changes.Count} waypoint(s) along the route. "
+				 + "Positions, banks and seams untouched.");
 	}
 
 	/// <summary>

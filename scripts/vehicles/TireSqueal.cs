@@ -84,6 +84,9 @@ public partial class TireSqueal : AudioStreamPlayer3D
 
     public override void _Ready()
     {
+        // Set here rather than per-scene so every car answers the pause menu's SFX slider.
+        Bus = "SFX";
+
         if (VehicleNode == null)
             GD.PushWarning($"[TireSqueal] {Name} has no VehicleNode assigned; staying silent.");
 

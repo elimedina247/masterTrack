@@ -43,6 +43,20 @@ public partial class TrackPieceGizmo : EditorNode3DGizmoPlugin
 	private const string RouteMaterial = "route";
 	private const string HandleMaterial = "handles";
 	private const string InsertHandleMaterial = "insert_handles";
+	private const string LaneSmoothMaterial = "lane_smooth";
+	private const string LaneWarnMaterial = "lane_warn";
+	private const string LaneBadMaterial = "lane_bad";
+
+	/// <summary>
+	/// Where a facet joint stops reading as smooth road, in degrees of bend from one facet to the
+	/// next. The numbers are about the car, not the eye: the racers ride the mesh on raycast
+	/// springs, so every facet joint is a step change in surface gradient and the kink angle is
+	/// directly how hard the springs get kicked crossing it. Half a degree reads as texture at
+	/// race speed; past a degree and a quarter it is a roadbump you steer around.
+	/// </summary>
+	private const float WarnKinkDegrees = 0.5f;
+
+	private const float BadKinkDegrees = 1.25f;
 
 	/// <summary>Half the width of the bar drawn across a seam — the catalog's road, so a piece
 	/// whose section is narrower reads as narrow at a glance.</summary>
@@ -81,6 +95,13 @@ public partial class TrackPieceGizmo : EditorNode3DGizmoPlugin
 		CreateMaterial(ExitMaterial, new Color(0.2f, 0.9f, 1.0f));
 		CreateMaterial(WaypointMaterial, new Color(1.0f, 1.0f, 1.0f));
 		CreateMaterial(RouteMaterial, new Color(1.0f, 0.82f, 0.05f));
+
+		// The smoothness overlay: dim green for road that reads smooth, orange for texture, red
+		// for a bump. Dim on purpose — the overlay paints a dozen lines along the piece, and at
+		// full brightness they would shout down the route and the handles.
+		CreateMaterial(LaneSmoothMaterial, new Color(0.15f, 0.55f, 0.2f));
+		CreateMaterial(LaneWarnMaterial, new Color(1.0f, 0.55f, 0.05f));
+		CreateMaterial(LaneBadMaterial, new Color(1.0f, 0.12f, 0.1f));
 		CreateHandleMaterial(HandleMaterial);
 		CreateHandleMaterial(InsertHandleMaterial);
 
@@ -375,6 +396,171 @@ public partial class TrackPieceGizmo : EditorNode3DGizmoPlugin
 		}
 
 		gizmo.AddLines(lines, GetMaterial(RouteMaterial, gizmo));
+
+		DrawSmoothness(gizmo, piece, into);
+	}
+
+	// ---- The smoothness overlay ----
+
+	/// <summary>
+	/// Paint the road surface by how it will actually ride: lines along the piece, each facet
+	/// coloured by the angle it makes with its neighbour. The racers sit on raycast springs, so a
+	/// facet joint is exactly a jolt and its angle is exactly the size of it — this draws the
+	/// roadbumps where they are, before anyone has to drive over one to find them.
+	///
+	/// The lanes come from the same construction the mesh does: a <see cref="BankedRoad"/> hands
+	/// over its actual rows (every strip boundary, bank wall included — a drift line's bumps live
+	/// there), and any other piece is sampled along its spine at the sweep's own facet interval.
+	/// </summary>
+	private void DrawSmoothness(EditorNode3DGizmo gizmo, TrackPiece piece, Transform3D into)
+	{
+		if (piece.Spine is not { Curve: { PointCount: >= 2 } curve } spine)
+			return;
+
+		Transform3D toGizmo = into * spine.Transform;
+
+		var lanes = new List<Vector3[]>();
+
+		if (FindBankedRoad(piece.Build) is { } banked
+			&& banked.SurfaceRows(out int strips) is { } rows)
+		{
+			for (var m = 0; m <= strips; m++)
+			{
+				var lane = new Vector3[rows.Length];
+				for (var k = 0; k < rows.Length; k++)
+					lane[k] = rows[k][m];
+
+				lanes.Add(lane);
+			}
+		}
+		else
+		{
+			AddSweptLanes(lanes, piece, curve);
+		}
+
+		var smooth = new List<Vector3>();
+		var warn = new List<Vector3>();
+		var bad = new List<Vector3>();
+
+		foreach (Vector3[] lane in lanes)
+			BucketByKink(lane, toGizmo, smooth, warn, bad);
+
+		if (smooth.Count > 0)
+			gizmo.AddLines(smooth.ToArray(), GetMaterial(LaneSmoothMaterial, gizmo));
+
+		if (warn.Count > 0)
+			gizmo.AddLines(warn.ToArray(), GetMaterial(LaneWarnMaterial, gizmo));
+
+		if (bad.Count > 0)
+			gizmo.AddLines(bad.ToArray(), GetMaterial(LaneBadMaterial, gizmo));
+	}
+
+	/// <summary>
+	/// Three lanes — both edges and the middle — for a piece whose road is a plain sweep, sampled
+	/// at the sweep's own facet spacing so the overlay measures the mesh the car gets, not an
+	/// idealised curve the mesh only approximates.
+	/// </summary>
+	private static void AddSweptLanes(List<Vector3[]> lanes, TrackPiece piece, Curve3D curve)
+	{
+		float length = curve.GetBakedLength();
+		if (length < 1.0f)
+			return;
+
+		float interval = piece.RoadPolygon is { Mode: CsgPolygon3D.ModeEnum.Path } polygon
+			? Mathf.Max(1.0f, polygon.PathInterval)
+			: 3.0f;
+
+		int rings = Mathf.Max(2, Mathf.CeilToInt(length / interval));
+		float half = piece.RoadWidth > 0.01f ? piece.RoadWidth * 0.5f : SeamHalfWidth;
+
+		var left = new Vector3[rings + 1];
+		var centre = new Vector3[rings + 1];
+		var right = new Vector3[rings + 1];
+
+		for (var k = 0; k <= rings; k++)
+		{
+			float offset = length * k / rings;
+
+			Vector3 origin = curve.SampleBaked(offset, cubic: true);
+			Vector3 up = curve.UpVectorEnabled
+				? curve.SampleBakedUpVector(offset, applyTilt: true)
+				: Vector3.Up;
+
+			// A chord either side, same as the sweep's own frame: the facet direction, not the
+			// analytic tangent the facets only approximate.
+			float epsilon = Mathf.Max(0.05f, length * 0.001f);
+			Vector3 forward = curve.SampleBaked(Mathf.Min(length, offset + epsilon), cubic: true)
+							  - curve.SampleBaked(Mathf.Max(0.0f, offset - epsilon), cubic: true);
+
+			Vector3 across = forward.Cross(up);
+			across = across.LengthSquared() < 1e-9f ? Vector3.Right : across.Normalized();
+
+			left[k] = origin - across * half;
+			centre[k] = origin;
+			right[k] = origin + across * half;
+		}
+
+		lanes.Add(left);
+		lanes.Add(centre);
+		lanes.Add(right);
+	}
+
+	/// <summary>
+	/// Sort one lane's facets into the three severity buckets. A facet wears the worst of the two
+	/// joints it touches, so a single sharp joint marks both facets meeting at it — two road
+	/// lengths of red is findable from across the map where one might vanish between rings.
+	/// </summary>
+	private static void BucketByKink(Vector3[] lane, Transform3D toGizmo,
+									 List<Vector3> smooth, List<Vector3> warn, List<Vector3> bad)
+	{
+		int facets = lane.Length - 1;
+		if (facets < 1)
+			return;
+
+		// The bend at each interior joint, in degrees; the ends have no joint and read as flat.
+		var kinks = new float[facets + 1];
+
+		for (var k = 1; k < facets; k++)
+		{
+			Vector3 before = lane[k] - lane[k - 1];
+			Vector3 after = lane[k + 1] - lane[k];
+
+			if (before.LengthSquared() < 1e-9f || after.LengthSquared() < 1e-9f)
+				continue;
+
+			kinks[k] = Mathf.RadToDeg(before.Normalized().AngleTo(after.Normalized()));
+		}
+
+		for (var k = 0; k < facets; k++)
+		{
+			float kink = Mathf.Max(kinks[k], kinks[k + 1]);
+
+			List<Vector3> bucket = kink >= BadKinkDegrees ? bad
+								 : kink >= WarnKinkDegrees ? warn
+								 : smooth;
+
+			bucket.Add(toGizmo * lane[k]);
+			bucket.Add(toGizmo * lane[k + 1]);
+		}
+	}
+
+	/// <summary>The first BankedRoad anywhere under a piece's Build, or null — the overlay reads
+	/// the wall's actual rows from it rather than re-deriving them.</summary>
+	private static BankedRoad? FindBankedRoad(Node? from)
+	{
+		if (from == null)
+			return null;
+
+		if (from is BankedRoad banked)
+			return banked;
+
+		foreach (Node child in from.GetChildren())
+		{
+			if (FindBankedRoad(child) is { } found)
+				return found;
+		}
+
+		return null;
 	}
 
 	/// <summary>A route node: a bar across the road at its declared width, an upright at each end

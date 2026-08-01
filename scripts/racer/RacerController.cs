@@ -71,6 +71,22 @@ public partial class RacerController : Vehicle
 	/// </summary>
 	[Export] public Quaternion NetRotation { get; set; } = Quaternion.Identity;
 
+	/// <summary>
+	/// Replicated velocity, written by the owner alongside the pose.
+	///
+	/// A puppet is frozen kinematic and slid by assignment, so as far as the local physics is
+	/// concerned it has no velocity at all — and car-to-car impact response is built entirely on
+	/// <i>relative</i> velocity. Without this, a 200 km/h T-bone and a parking-lot nudge are the
+	/// same event. See <see cref="ProcessCarContacts"/>.
+	/// </summary>
+	[Export] public Vector3 NetVelocity { get; set; }
+
+	/// <summary>
+	/// How fast this car is really going, from whichever source knows: the simulation if it runs
+	/// here, the wire if it runs somewhere else. What impact response reads off the *other* car.
+	/// </summary>
+	public Vector3 EffectiveVelocity => IsRemote ? NetVelocity : LinearVelocity;
+
 	/// <summary>How quickly a remote car closes on its replicated pose, per second.</summary>
 	[Export] public float RemoteSmoothing { get; set; } = 18.0f;
 
@@ -116,6 +132,21 @@ public partial class RacerController : Vehicle
 	private Transform3D _recoveryPose;
 
 	private float _recoveryCountdown;
+
+	/// <summary>
+	/// Slower than this with no wheel on anything counts as stuck, in m/s. Free fall at 2 g blows
+	/// past it within a tenth of a second, and the moment of zero speed at the top of a hop is a
+	/// moment, so nothing a car does on purpose stays under it for long.
+	/// </summary>
+	private const float StuckSpeedThreshold = 1.0f;
+
+	/// <summary>
+	/// How long a car must be stuck before it is rescued, in seconds. Long enough that no live
+	/// state trips it; short enough that being wedged never reads as the game breaking.
+	/// </summary>
+	private const float StuckRescueTime = 1.25f;
+
+	private float _stuckTime;
 
 	/// <summary>
 	/// Which tile the car is standing on, or -1 in the air.
@@ -327,6 +358,14 @@ public partial class RacerController : Vehicle
 			FreezeMode = FreezeModeEnum.Kinematic;
 			Freeze = true;
 		}
+		else
+		{
+			// The simulated car watches for other racers arriving in its paintwork. Only the
+			// simulated one: a puppet never reacts to anything locally, so paying for contact
+			// reporting on it would buy nothing.
+			ContactMonitor = true;
+			MaxContactsReported = 8;
+		}
 
 		// Hand the camera to the local player only.
 		GetNodeOrNull<CameraRig>("CameraRig")?.SetActive(IsLocalPlayer);
@@ -369,6 +408,11 @@ public partial class RacerController : Vehicle
 
 		NetPosition = _recoveryPose.Origin;
 		NetRotation = _recoveryPose.Basis.GetRotationQuaternion();
+		NetVelocity = Vector3.Zero;
+
+		// Set back down stopped and *clear-headed* — a reset that kept the stun would put the
+		// car on the road with no grip and someone else's spin still fading out of it.
+		ClearImpactStun();
 
 		// Charges back, on the pad only. ResetNitro also cancels whatever boost was burning, which
 		// is what a car being set back down stopped should have anyway.
@@ -400,6 +444,31 @@ public partial class RacerController : Vehicle
 	}
 
 	/// <summary>
+	/// Rescue a car that physics has orphaned. The tell is unmistakable: no wheel touching
+	/// anything <i>and</i> not actually moving, held for over a second. A driving car is
+	/// grounded; a flying car is fast; a car that is neither is wedged in something — historically
+	/// the road itself, when a hard landing tunnelled the chassis through the collision skin and
+	/// left the ground rays staring at backfaces. <see cref="Vehicle"/> now sweeps its collision
+	/// (ContinuousCd) so that particular grave should be sealed, but this is the guarantee the
+	/// player actually feels: nothing the physics does can take the car away for good.
+	///
+	/// Beached counts too — belly on a barrier, all four corners in the air — and that is a
+	/// feature, not a coincidence: every state this catches is one the player cannot drive out of.
+	/// </summary>
+	private void UpdateStuckWatchdog(float delta)
+	{
+		bool stuck = IsVehicleReady && IsAirborne && Speed < StuckSpeedThreshold;
+		_stuckTime = stuck ? _stuckTime + delta : 0.0f;
+
+		if (_stuckTime < StuckRescueTime)
+			return;
+
+		_stuckTime = 0.0f;
+		GD.Print($"[Racer {OwnerPeerId}] Stuck (airborne, stationary {StuckRescueTime:0.##}s) — auto-respawn.");
+		Respawn();
+	}
+
+	/// <summary>
 	/// The pose channel. Built in code rather than authored into the scene so the property list
 	/// can't drift away from the fields it names — a typo'd path in a .tscn replicates nothing
 	/// and says nothing about it.
@@ -409,7 +478,7 @@ public partial class RacerController : Vehicle
 		var config = new SceneReplicationConfig();
 
 		// Relative to the synchronizer's root path, which defaults to its parent — this car.
-		foreach (string property in new[] { ":NetPosition", ":NetRotation", ":NetNitro" })
+		foreach (string property in new[] { ":NetPosition", ":NetRotation", ":NetVelocity", ":NetNitro" })
 		{
 			config.AddProperty(property);
 			config.PropertySetSpawn(property, true);
@@ -443,12 +512,111 @@ public partial class RacerController : Vehicle
 		base._PhysicsProcess(delta);
 
 		UpdateRecoveryPose((float)delta);
+		UpdateStuckWatchdog((float)delta);
 
 		if (IsNetworked)
 		{
 			NetPosition = GlobalPosition;
 			NetRotation = GlobalBasis.GetRotationQuaternion();
+			NetVelocity = LinearVelocity;
 			NetNitro = IsNitroActive;
+		}
+	}
+
+	/// <summary>
+	/// When each opposing car may next trigger an impulse, in ticks. See <see cref="Vehicle.ImpactCooldown"/>.
+	/// </summary>
+	private readonly System.Collections.Generic.Dictionary<ulong, ulong> _impactCooldownUntil = new();
+
+	public override void _IntegrateForces(PhysicsDirectBodyState3D state)
+	{
+		base._IntegrateForces(state);
+
+		if (!IsRemote && IsVehicleReady)
+			ProcessCarContacts(state);
+	}
+
+	/// <summary>
+	/// Car-to-car impact response — the takeout layer. See docs/vehicle-physics.md.
+	///
+	/// The solver's own contact response still runs and is what makes *leaning* on another car
+	/// work: a puppet advancing along its wire pose genuinely shoves this body. But the solver
+	/// sees a puppet as an unlimited mass with no velocity, so an actual collision comes out as
+	/// bouncing off scenery — no momentum exchange, no drama, and above all no consequence for
+	/// the car that got hit. This layer adds the movie on top: launch, pop, spin, stun.
+	///
+	/// <b>Each machine only ever touches its own car.</b> Both sides of a hit detect the same
+	/// contact — here against the other car's puppet, on the other machine against ours — and
+	/// each applies its own share of the reaction, computed from the same replicated data. No
+	/// authority changes hands, nothing is negotiated, and the two responses agree because the
+	/// rule is symmetric even though the shares are not: <see cref="Vehicle.ImpactRammerScale"/>
+	/// decides who was the victim, and the victim is the one who gets launched.
+	/// </summary>
+	private void ProcessCarContacts(PhysicsDirectBodyState3D state)
+	{
+		int contacts = state.GetContactCount();
+		if (contacts == 0)
+			return;
+
+		ulong now = Time.GetTicksMsec();
+
+		for (var i = 0; i < contacts; i++)
+		{
+			if (state.GetContactColliderObject(i) is not RacerController other)
+				continue;
+
+			// One impulse per opposing car per cooldown, or a grind along someone's door would
+			// re-fire the takeout every physics step.
+			ulong otherId = other.GetInstanceId();
+			if (_impactCooldownUntil.TryGetValue(otherId, out ulong until) && now < until)
+				continue;
+
+			// The direction this car gets pushed. The reported normal's sign convention is not
+			// worth trusting across physics backends; centre-to-centre settles which way is out.
+			Vector3 normal = state.GetContactLocalNormal(i);
+			if (normal.LengthSquared() < 0.5f)
+				continue;
+			if (normal.Dot(GlobalPosition - other.GlobalPosition) < 0.0f)
+				normal = -normal;
+
+			// Closing speed along the contact, from what each car is *really* doing — the wire
+			// velocity for a puppet, the simulation for anything simulated here.
+			Vector3 theirVelocity = other.EffectiveVelocity;
+			float closing = (theirVelocity - state.LinearVelocity).Dot(normal);
+			if (closing < ImpactMinSpeed)
+				continue;
+
+			// Who ran into whom. Their motion toward us versus our motion toward them decides
+			// how much of the reaction this car deserves: all of it if we were minding our own
+			// business, ImpactRammerScale of it if we did the ramming. Head-on lands in the
+			// middle and wrecks everybody, which is correct.
+			float theirShare = Mathf.Max(theirVelocity.Dot(normal), 0.0f);
+			float ourShare = Mathf.Max(-state.LinearVelocity.Dot(normal), 0.0f);
+			float victimFactor = theirShare + ourShare > 0.001f
+				? theirShare / (theirShare + ourShare)
+				: 0.5f;
+			float receive = Mathf.Lerp(ImpactRammerScale, 1.0f, victimFactor);
+
+			float severity = Mathf.Clamp(closing / ImpactFullSpeed, 0.0f, 1.0f) * receive;
+			_impactCooldownUntil[otherId] = now + (ulong)(ImpactCooldown * 1000.0f);
+
+			// The launch, and the pop that lifts it off the road — where the airborne rules
+			// (no grip, no drive, a projectile) take over selling it.
+			state.LinearVelocity += normal * (closing * ImpactBounce * receive)
+									+ Vector3.Up * (closing * ImpactPop * receive);
+
+			// The spin, signed by where the hit landed relative to the centre of mass — the
+			// same sign an off-centre impulse would earn from r × J, just paid at a rate that
+			// was chosen instead of inherited. Clip a rear quarter, watch a pirouette.
+			Vector3 contactPoint = state.GetContactLocalPosition(i);
+			Vector3 lever = contactPoint - GlobalTransform * CenterOfMass;
+			float spinSign = Mathf.Sign(lever.Cross(normal).Dot(Vector3.Up));
+			if (spinSign == 0.0f)
+				spinSign = 1.0f;
+
+			state.AngularVelocity += Vector3.Up * (spinSign * ImpactSpinRate * severity);
+
+			RegisterImpact(severity, contactPoint);
 		}
 	}
 

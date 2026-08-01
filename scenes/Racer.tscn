@@ -17,6 +17,7 @@
 [ext_resource type="Script" uid="uid://d1camux0pgphx" path="res://scripts/vehicles/WheelVisual.cs" id="15_wheelvis"]
 [ext_resource type="Script" uid="uid://c1l0rgq3nvu5a" path="res://scripts/vehicles/WheelSmoke.cs" id="16_smoke"]
 [ext_resource type="Script" uid="uid://cfghsx0ad4vav" path="res://scripts/racer/RacerChevron.cs" id="17_chevron"]
+[ext_resource type="Script" uid="uid://bl5yb71p0oet7" path="res://scripts/vehicles/AntennaWobble.cs" id="18_antenna"]
 
 [sub_resource type="BoxShape3D" id="Shape_body"]
 size = Vector3(1.2, 0.42, 2.25)
@@ -92,6 +93,11 @@ transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 0, 0, 0)
 [node name="NitroFlame" type="Node3D" parent="BodyRig" unique_id=1660429712 node_paths=PackedStringArray("VehicleNode")]
 script = ExtResource("14_nitroflame")
 VehicleNode = NodePath("../..")
+
+[node name="Antenna" type="Node3D" parent="BodyRig" unique_id=1749032654]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.85, 1.1)
+script = ExtResource("18_antenna")
+Stiffness = 100.0
 
 [node name="Collision" type="CollisionShape3D" parent="." unique_id=1227752201]
 transform = Transform3D(1.1, 0, 0, 0, 1.1, 0, 0, 0, 1.1, 0, 0.59, 0)
