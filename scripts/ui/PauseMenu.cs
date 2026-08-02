@@ -4,7 +4,8 @@ using MasterTrack.Networking;
 namespace MasterTrack.UI;
 
 /// <summary>
-/// The Escape menu: volume sliders, back to the game, or back to the main menu.
+/// The Escape menu: volume sliders, a keybinds page (see <c>PauseMenu.Keybinds.cs</c>),
+/// back to the game, or back to the main menu.
 ///
 /// Instanced last in each playable scene so its <c>_UnhandledInput</c> sees Escape before
 /// anything else does. Solo it pauses the whole tree; in a session it only overlays — a
@@ -60,6 +61,9 @@ public partial class PauseMenu : CanvasLayer
 
         GetNode<Button>("%ResumeButton").Pressed += Close;
         GetNode<Button>("%MenuButton").Pressed += OnMenuPressed;
+        GetNode<Button>("%QuitButton").Pressed += OnQuitPressed;
+
+        InitKeybinds(config);
     }
 
     public override void _UnhandledInput(InputEvent @event)
@@ -69,7 +73,9 @@ public partial class PauseMenu : CanvasLayer
 
         GetViewport().SetInputAsHandled();
 
-        if (Visible)
+        if (Visible && _bindsPage.Visible)
+            ShowBindsPage(false);
+        else if (Visible)
             Close();
         else
             Open();
@@ -88,6 +94,7 @@ public partial class PauseMenu : CanvasLayer
 
     private void Close()
     {
+        ShowBindsPage(false);
         GetTree().Paused = false;
         Visible = false;
     }
@@ -103,6 +110,18 @@ public partial class PauseMenu : CanvasLayer
 
         GetTree().Paused = false;
         GetTree().ChangeSceneToFile(MainMenuScenePath);
+    }
+
+    /// <summary>
+    /// Close the application. Same courtesy as the main-menu exit: leave the session first
+    /// so the peer sees a disconnect instead of a timeout.
+    /// </summary>
+    private void OnQuitPressed()
+    {
+        if (NetworkManager.Instance.IsNetworked)
+            NetworkManager.Instance.Disconnect();
+
+        GetTree().Quit();
     }
 
     private static void ApplyVolume(int busIndex, float linear)

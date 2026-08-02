@@ -1,8 +1,134 @@
-[gd_scene format=3 uid="uid://5vb3gdslh3u6"]
+[gd_scene load_steps=16 format=3 uid="uid://5vb3gdslh3u6"]
 
 [ext_resource type="Script" uid="uid://d0khse0mqmhk" path="res://scripts/ui/MainMenu.cs" id="1_menu"]
 
-[node name="Main" type="Control" unique_id=659739511]
+[sub_resource type="Gradient" id="Gradient_bg"]
+offsets = PackedFloat32Array(0, 0.62, 1)
+colors = PackedColorArray(0.1255, 0.1098, 0.1882, 1, 0.0902, 0.0784, 0.1451, 1, 0.0588, 0.051, 0.102, 1)
+
+[sub_resource type="GradientTexture2D" id="GradTex_bg"]
+gradient = SubResource("Gradient_bg")
+fill_to = Vector2(0, 1)
+
+[sub_resource type="Gradient" id="Gradient_floor"]
+offsets = PackedFloat32Array(0, 1)
+colors = PackedColorArray(0.235, 0.204, 0.353, 0.55, 0.078, 0.063, 0.133, 0.9)
+
+[sub_resource type="GradientTexture2D" id="GradTex_floor"]
+gradient = SubResource("Gradient_floor")
+fill_to = Vector2(0, 1)
+
+[sub_resource type="Gradient" id="Gradient_disc"]
+offsets = PackedFloat32Array(0, 0.55, 0.72)
+colors = PackedColorArray(1, 0.941, 0.784, 0.16, 1, 0.941, 0.784, 0.03, 1, 0.941, 0.784, 0)
+
+[sub_resource type="GradientTexture2D" id="GradTex_disc"]
+gradient = SubResource("Gradient_disc")
+fill = 1
+fill_from = Vector2(0.5, 0.5)
+fill_to = Vector2(0.5, 0)
+
+[sub_resource type="StyleBoxFlat" id="sb_rail"]
+bg_color = Color(0.0706, 0.0588, 0.1176, 1)
+border_width_right = 2
+border_color = Color(1, 1, 1, 0.06)
+
+[sub_resource type="StyleBoxFlat" id="sb_menu_normal"]
+content_margin_left = 18.0
+content_margin_top = 6.0
+content_margin_right = 12.0
+content_margin_bottom = 6.0
+bg_color = Color(1, 1, 1, 0)
+border_width_left = 6
+border_color = Color(0.98, 0.851, 0.2, 0)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[sub_resource type="StyleBoxFlat" id="sb_menu_hover"]
+content_margin_left = 18.0
+content_margin_top = 6.0
+content_margin_right = 12.0
+content_margin_bottom = 6.0
+bg_color = Color(1, 1, 1, 0.05)
+border_width_left = 6
+border_color = Color(0.98, 0.851, 0.2, 0)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[sub_resource type="StyleBoxFlat" id="sb_menu_focus"]
+content_margin_left = 18.0
+content_margin_top = 6.0
+content_margin_right = 12.0
+content_margin_bottom = 6.0
+bg_color = Color(0.98, 0.851, 0.2, 0.1)
+border_width_left = 6
+border_color = Color(0.98, 0.851, 0.2, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[sub_resource type="StyleBoxFlat" id="sb_edit"]
+content_margin_left = 12.0
+content_margin_top = 8.0
+content_margin_right = 12.0
+content_margin_bottom = 8.0
+bg_color = Color(1, 1, 1, 0.06)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(1, 1, 1, 0.1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[sub_resource type="StyleBoxFlat" id="sb_edit_focus"]
+content_margin_left = 12.0
+content_margin_top = 8.0
+content_margin_right = 12.0
+content_margin_bottom = 8.0
+bg_color = Color(1, 1, 1, 0.06)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.98, 0.851, 0.2, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[sub_resource type="StyleBoxFlat" id="sb_arrow"]
+bg_color = Color(1, 1, 1, 0.07)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(1, 1, 1, 0.18)
+corner_radius_top_left = 33
+corner_radius_top_right = 33
+corner_radius_bottom_right = 33
+corner_radius_bottom_left = 33
+
+[sub_resource type="StyleBoxFlat" id="sb_arrow_hover"]
+bg_color = Color(0.98, 0.851, 0.2, 0.25)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.98, 0.851, 0.2, 0.5)
+corner_radius_top_left = 33
+corner_radius_top_right = 33
+corner_radius_bottom_right = 33
+corner_radius_bottom_left = 33
+
+[node name="Main" type="Control"]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -11,115 +137,522 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_menu")
 
-[node name="Center" type="CenterContainer" parent="." unique_id=303739856]
+[node name="Bg" type="TextureRect" parent="."]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
+texture = SubResource("GradTex_bg")
+expand_mode = 1
 
-[node name="Panel" type="PanelContainer" parent="Center" unique_id=657794177]
+[node name="Layout" type="HBoxContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 0
+
+[node name="Rail" type="PanelContainer" parent="Layout"]
+custom_minimum_size = Vector2(500, 0)
 layout_mode = 2
+theme_override_styles/panel = SubResource("sb_rail")
 
-[node name="Margin" type="MarginContainer" parent="Center/Panel" unique_id=406368849]
+[node name="RailMargin" type="MarginContainer" parent="Layout/Rail"]
 layout_mode = 2
-theme_override_constants/margin_left = 24
-theme_override_constants/margin_top = 24
-theme_override_constants/margin_right = 24
-theme_override_constants/margin_bottom = 24
+theme_override_constants/margin_left = 36
+theme_override_constants/margin_top = 40
+theme_override_constants/margin_right = 36
+theme_override_constants/margin_bottom = 30
 
-[node name="VBox" type="VBoxContainer" parent="Center/Panel/Margin" unique_id=1281229835]
-layout_mode = 2
-theme_override_constants/separation = 10
-
-[node name="Title" type="Label" parent="Center/Panel/Margin/VBox" unique_id=1241470159]
-layout_mode = 2
-theme_override_font_sizes/font_size = 32
-text = "MASTER TRACK"
-horizontal_alignment = 1
-
-[node name="NameRow" type="HBoxContainer" parent="Center/Panel/Margin/VBox"]
+[node name="RailVBox" type="VBoxContainer" parent="Layout/Rail/RailMargin"]
 layout_mode = 2
 theme_override_constants/separation = 8
 
-[node name="NameLabel" type="Label" parent="Center/Panel/Margin/VBox/NameRow"]
+[node name="LogoTrack" type="Label" parent="Layout/Rail/RailMargin/RailVBox"]
 layout_mode = 2
-size_flags_horizontal = 3
-text = "Name"
+theme_override_colors/font_color = Color(0.9255, 0.9098, 0.9569, 1)
+theme_override_font_sizes/font_size = 44
+text = "TRACK"
 
-[node name="NameEdit" type="LineEdit" parent="Center/Panel/Margin/VBox/NameRow"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(160, 0)
+[node name="LogoTile" type="Label" parent="Layout/Rail/RailMargin/RailVBox"]
 layout_mode = 2
+theme_override_colors/font_color = Color(0.98, 0.851, 0.2, 1)
+theme_override_font_sizes/font_size = 44
+text = "TILE"
+
+[node name="RainbowBar" type="HBoxContainer" parent="Layout/Rail/RailMargin/RailVBox"]
+layout_mode = 2
+theme_override_constants/separation = 0
+
+[node name="R1" type="ColorRect" parent="Layout/Rail/RailMargin/RailVBox/RainbowBar"]
+custom_minimum_size = Vector2(14, 6)
+layout_mode = 2
+color = Color(0.94, 0.24, 0.24, 1)
+
+[node name="R2" type="ColorRect" parent="Layout/Rail/RailMargin/RailVBox/RainbowBar"]
+custom_minimum_size = Vector2(14, 6)
+layout_mode = 2
+color = Color(0.98, 0.55, 0.15, 1)
+
+[node name="R3" type="ColorRect" parent="Layout/Rail/RailMargin/RailVBox/RainbowBar"]
+custom_minimum_size = Vector2(14, 6)
+layout_mode = 2
+color = Color(0.98, 0.85, 0.2, 1)
+
+[node name="R4" type="ColorRect" parent="Layout/Rail/RailMargin/RailVBox/RainbowBar"]
+custom_minimum_size = Vector2(14, 6)
+layout_mode = 2
+color = Color(0.36, 0.82, 0.33, 1)
+
+[node name="R5" type="ColorRect" parent="Layout/Rail/RailMargin/RailVBox/RainbowBar"]
+custom_minimum_size = Vector2(14, 6)
+layout_mode = 2
+color = Color(0.25, 0.53, 0.95, 1)
+
+[node name="R6" type="ColorRect" parent="Layout/Rail/RailMargin/RailVBox/RainbowBar"]
+custom_minimum_size = Vector2(14, 6)
+layout_mode = 2
+color = Color(0.4, 0.35, 0.8, 1)
+
+[node name="R7" type="ColorRect" parent="Layout/Rail/RailMargin/RailVBox/RainbowBar"]
+custom_minimum_size = Vector2(14, 6)
+layout_mode = 2
+color = Color(0.7, 0.4, 0.9, 1)
+
+[node name="MenuGap" type="Control" parent="Layout/Rail/RailMargin/RailVBox"]
+custom_minimum_size = Vector2(0, 26)
+layout_mode = 2
+
+[node name="HostButton" type="Button" parent="Layout/Rail/RailMargin/RailVBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 72)
+layout_mode = 2
+theme_override_styles/focus = SubResource("sb_menu_focus")
+theme_override_styles/disabled = SubResource("sb_menu_normal")
+theme_override_styles/hover = SubResource("sb_menu_hover")
+theme_override_styles/pressed = SubResource("sb_menu_focus")
+theme_override_styles/normal = SubResource("sb_menu_normal")
+
+[node name="Box" type="MarginContainer" parent="Layout/Rail/RailMargin/RailVBox/HostButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_constants/margin_left = 18
+
+[node name="V" type="VBoxContainer" parent="Layout/Rail/RailMargin/RailVBox/HostButton/Box"]
+layout_mode = 2
+mouse_filter = 2
+alignment = 1
+theme_override_constants/separation = 0
+
+[node name="T" type="Label" parent="Layout/Rail/RailMargin/RailVBox/HostButton/Box/V"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9255, 0.9098, 0.9569, 1)
+theme_override_font_sizes/font_size = 26
+text = "HOST"
+
+[node name="D" type="Label" parent="Layout/Rail/RailMargin/RailVBox/HostButton/Box/V"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.4275, 0.3961, 0.5176, 1)
+theme_override_font_sizes/font_size = 15
+text = "Open a lobby, friends join you"
+
+[node name="JoinButton" type="Button" parent="Layout/Rail/RailMargin/RailVBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 72)
+layout_mode = 2
+theme_override_styles/focus = SubResource("sb_menu_focus")
+theme_override_styles/disabled = SubResource("sb_menu_normal")
+theme_override_styles/hover = SubResource("sb_menu_hover")
+theme_override_styles/pressed = SubResource("sb_menu_focus")
+theme_override_styles/normal = SubResource("sb_menu_normal")
+
+[node name="Box" type="MarginContainer" parent="Layout/Rail/RailMargin/RailVBox/JoinButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_constants/margin_left = 18
+
+[node name="V" type="VBoxContainer" parent="Layout/Rail/RailMargin/RailVBox/JoinButton/Box"]
+layout_mode = 2
+mouse_filter = 2
+alignment = 1
+theme_override_constants/separation = 0
+
+[node name="T" type="Label" parent="Layout/Rail/RailMargin/RailVBox/JoinButton/Box/V"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9255, 0.9098, 0.9569, 1)
+theme_override_font_sizes/font_size = 26
+text = "JOIN"
+
+[node name="D" type="Label" parent="Layout/Rail/RailMargin/RailVBox/JoinButton/Box/V"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.4275, 0.3961, 0.5176, 1)
+theme_override_font_sizes/font_size = 15
+text = "Paste a Steam ID or IP"
+
+[node name="SoloButton" type="Button" parent="Layout/Rail/RailMargin/RailVBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 72)
+layout_mode = 2
+theme_override_styles/focus = SubResource("sb_menu_focus")
+theme_override_styles/disabled = SubResource("sb_menu_normal")
+theme_override_styles/hover = SubResource("sb_menu_hover")
+theme_override_styles/pressed = SubResource("sb_menu_focus")
+theme_override_styles/normal = SubResource("sb_menu_normal")
+
+[node name="Box" type="MarginContainer" parent="Layout/Rail/RailMargin/RailVBox/SoloButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_constants/margin_left = 18
+
+[node name="V" type="VBoxContainer" parent="Layout/Rail/RailMargin/RailVBox/SoloButton/Box"]
+layout_mode = 2
+mouse_filter = 2
+alignment = 1
+theme_override_constants/separation = 0
+
+[node name="T" type="Label" parent="Layout/Rail/RailMargin/RailVBox/SoloButton/Box/V"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9255, 0.9098, 0.9569, 1)
+theme_override_font_sizes/font_size = 26
+text = "TEST DRIVE"
+
+[node name="D" type="Label" parent="Layout/Rail/RailMargin/RailVBox/SoloButton/Box/V"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.4275, 0.3961, 0.5176, 1)
+theme_override_font_sizes/font_size = 15
+text = "Solo — open playground"
+
+[node name="BuildButton" type="Button" parent="Layout/Rail/RailMargin/RailVBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 72)
+layout_mode = 2
+theme_override_styles/focus = SubResource("sb_menu_focus")
+theme_override_styles/disabled = SubResource("sb_menu_normal")
+theme_override_styles/hover = SubResource("sb_menu_hover")
+theme_override_styles/pressed = SubResource("sb_menu_focus")
+theme_override_styles/normal = SubResource("sb_menu_normal")
+
+[node name="Box" type="MarginContainer" parent="Layout/Rail/RailMargin/RailVBox/BuildButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_constants/margin_left = 18
+
+[node name="V" type="VBoxContainer" parent="Layout/Rail/RailMargin/RailVBox/BuildButton/Box"]
+layout_mode = 2
+mouse_filter = 2
+alignment = 1
+theme_override_constants/separation = 0
+
+[node name="T" type="Label" parent="Layout/Rail/RailMargin/RailVBox/BuildButton/Box/V"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9255, 0.9098, 0.9569, 1)
+theme_override_font_sizes/font_size = 26
+text = "BUILD MODE"
+
+[node name="D" type="Label" parent="Layout/Rail/RailMargin/RailVBox/BuildButton/Box/V"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.4275, 0.3961, 0.5176, 1)
+theme_override_font_sizes/font_size = 15
+text = "Solo — Track Master board"
+
+[node name="SentryButton" type="Button" parent="Layout/Rail/RailMargin/RailVBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 72)
+layout_mode = 2
+theme_override_styles/focus = SubResource("sb_menu_focus")
+theme_override_styles/disabled = SubResource("sb_menu_normal")
+theme_override_styles/hover = SubResource("sb_menu_hover")
+theme_override_styles/pressed = SubResource("sb_menu_focus")
+theme_override_styles/normal = SubResource("sb_menu_normal")
+
+[node name="Box" type="MarginContainer" parent="Layout/Rail/RailMargin/RailVBox/SentryButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_constants/margin_left = 18
+
+[node name="V" type="VBoxContainer" parent="Layout/Rail/RailMargin/RailVBox/SentryButton/Box"]
+layout_mode = 2
+mouse_filter = 2
+alignment = 1
+theme_override_constants/separation = 0
+
+[node name="T" type="Label" parent="Layout/Rail/RailMargin/RailVBox/SentryButton/Box/V"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9255, 0.9098, 0.9569, 1)
+theme_override_font_sizes/font_size = 26
+text = "SENTRY"
+
+[node name="D" type="Label" parent="Layout/Rail/RailMargin/RailVBox/SentryButton/Box/V"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.4275, 0.3961, 0.5176, 1)
+theme_override_font_sizes/font_size = 15
+text = "Solo — build, then defend"
+
+[node name="SessionGap" type="Control" parent="Layout/Rail/RailMargin/RailVBox"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="NameLabel" type="Label" parent="Layout/Rail/RailMargin/RailVBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.4275, 0.3961, 0.5176, 1)
+theme_override_font_sizes/font_size = 14
+text = "DRIVER NAME"
+
+[node name="NameEdit" type="LineEdit" parent="Layout/Rail/RailMargin/RailVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9255, 0.9098, 0.9569, 1)
+theme_override_colors/caret_color = Color(0.98, 0.851, 0.2, 1)
+theme_override_font_sizes/font_size = 19
+theme_override_styles/normal = SubResource("sb_edit")
+theme_override_styles/focus = SubResource("sb_edit_focus")
 max_length = 16
 placeholder_text = "Racer"
 
-[node name="SteamCheck" type="CheckBox" parent="Center/Panel/Margin/VBox"]
+[node name="IpLabel" type="Label" parent="Layout/Rail/RailMargin/RailVBox"]
 unique_name_in_owner = true
 layout_mode = 2
-text = "Use Steam (no VPN needed)"
-
-[node name="SteamIdLabel" type="Label" parent="Center/Panel/Margin/VBox"]
-unique_name_in_owner = true
-layout_mode = 2
-theme_override_font_sizes/font_size = 12
-text = ""
-horizontal_alignment = 1
-
-[node name="IpRow" type="HBoxContainer" parent="Center/Panel/Margin/VBox" unique_id=313505521]
-layout_mode = 2
-theme_override_constants/separation = 8
-
-[node name="IpLabel" type="Label" parent="Center/Panel/Margin/VBox/IpRow" unique_id=1468370662]
-unique_name_in_owner = true
-layout_mode = 2
-size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.4275, 0.3961, 0.5176, 1)
+theme_override_font_sizes/font_size = 14
 text = "Host IP"
 
-[node name="IpEdit" type="LineEdit" parent="Center/Panel/Margin/VBox/IpRow" unique_id=1668980981]
+[node name="IpRow" type="HBoxContainer" parent="Layout/Rail/RailMargin/RailVBox"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="IpEdit" type="LineEdit" parent="Layout/Rail/RailMargin/RailVBox/IpRow"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(160, 0)
-layout_mode = 2
-text = "127.0.0.1"
-
-[node name="PortRow" type="HBoxContainer" parent="Center/Panel/Margin/VBox" unique_id=1374334631]
-layout_mode = 2
-theme_override_constants/separation = 8
-
-[node name="PortLabel" type="Label" parent="Center/Panel/Margin/VBox/PortRow" unique_id=1555839441]
 layout_mode = 2
 size_flags_horizontal = 3
-text = "Port"
+theme_override_colors/font_color = Color(0.9255, 0.9098, 0.9569, 1)
+theme_override_colors/caret_color = Color(0.98, 0.851, 0.2, 1)
+theme_override_font_sizes/font_size = 19
+theme_override_styles/normal = SubResource("sb_edit")
+theme_override_styles/focus = SubResource("sb_edit_focus")
+text = "127.0.0.1"
 
-[node name="PortEdit" type="LineEdit" parent="Center/Panel/Margin/VBox/PortRow" unique_id=1922247094]
+[node name="PortEdit" type="LineEdit" parent="Layout/Rail/RailMargin/RailVBox/IpRow"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(160, 0)
+custom_minimum_size = Vector2(110, 0)
 layout_mode = 2
+theme_override_colors/font_color = Color(0.9255, 0.9098, 0.9569, 1)
+theme_override_colors/caret_color = Color(0.98, 0.851, 0.2, 1)
+theme_override_font_sizes/font_size = 19
+theme_override_styles/normal = SubResource("sb_edit")
+theme_override_styles/focus = SubResource("sb_edit_focus")
 text = "8910"
 
-[node name="HostButton" type="Button" parent="Center/Panel/Margin/VBox" unique_id=2087039390]
+[node name="SteamCheck" type="CheckBox" parent="Layout/Rail/RailMargin/RailVBox"]
 unique_name_in_owner = true
 layout_mode = 2
-text = "Host"
+theme_override_colors/font_color = Color(0.561, 0.5294, 0.6588, 1)
+theme_override_font_sizes/font_size = 15
+text = "Use Steam (no VPN needed)"
 
-[node name="JoinButton" type="Button" parent="Center/Panel/Margin/VBox" unique_id=1342171038]
+[node name="SteamIdLabel" type="Label" parent="Layout/Rail/RailMargin/RailVBox"]
 unique_name_in_owner = true
 layout_mode = 2
-text = "Join"
+theme_override_colors/font_color = Color(0.4275, 0.3961, 0.5176, 1)
+theme_override_font_sizes/font_size = 13
+text = ""
+autowrap_mode = 3
 
-[node name="SoloButton" type="Button" parent="Center/Panel/Margin/VBox" unique_id=75371500]
+[node name="StatusLabel" type="Label" parent="Layout/Rail/RailMargin/RailVBox"]
 unique_name_in_owner = true
 layout_mode = 2
-text = "Test Drive (Solo)"
-
-[node name="BuildButton" type="Button" parent="Center/Panel/Margin/VBox" unique_id=75371501]
-unique_name_in_owner = true
-layout_mode = 2
-text = "Build Mode (Solo)"
-
-[node name="StatusLabel" type="Label" parent="Center/Panel/Margin/VBox" unique_id=27891283]
-unique_name_in_owner = true
-layout_mode = 2
+theme_override_colors/font_color = Color(0.561, 0.5294, 0.6588, 1)
+theme_override_font_sizes/font_size = 15
 text = "Host or join to begin."
+autowrap_mode = 3
+
+[node name="Stage" type="Control" parent="Layout"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="SpotAnchor" type="Control" parent="Layout/Stage"]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+grow_horizontal = 2
+
+[node name="Spot" type="Polygon2D" parent="Layout/Stage/SpotAnchor"]
+polygon = PackedVector2Array(-110, 0, 110, 0, 430, 980, -430, 980)
+vertex_colors = PackedColorArray(1, 0.941, 0.784, 0.12, 1, 0.941, 0.784, 0.12, 1, 0.941, 0.784, 0, 1, 0.941, 0.784, 0)
+
+[node name="Floor" type="TextureRect" parent="Layout/Stage"]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 0.76
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 0
+texture = SubResource("GradTex_floor")
+expand_mode = 1
+
+[node name="Disc" type="TextureRect" parent="Layout/Stage"]
+layout_mode = 1
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -380.0
+offset_top = -210.0
+offset_right = 380.0
+offset_bottom = -60.0
+grow_horizontal = 2
+grow_vertical = 0
+texture = SubResource("GradTex_disc")
+expand_mode = 1
+
+[node name="CarImage" type="TextureRect" parent="Layout/Stage"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -320.0
+offset_top = -462.0
+offset_right = 320.0
+offset_bottom = -174.0
+grow_horizontal = 2
+grow_vertical = 0
+expand_mode = 1
+stretch_mode = 5
+
+[node name="Nameplate" type="VBoxContainer" parent="Layout/Stage"]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -400.0
+offset_top = 90.0
+offset_right = 400.0
+offset_bottom = 340.0
+grow_horizontal = 2
+theme_override_constants/separation = 8
+
+[node name="CarName" type="Label" parent="Layout/Stage/Nameplate"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9255, 0.9098, 0.9569, 1)
+theme_override_font_sizes/font_size = 56
+text = "C CARTOON"
 horizontal_alignment = 1
+
+[node name="CarSpec" type="Label" parent="Layout/Stage/Nameplate"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.561, 0.5294, 0.6588, 1)
+theme_override_font_sizes/font_size = 18
+text = "front rim 0.24 m · rear rim 0.36 m"
+horizontal_alignment = 1
+
+[node name="PillCenter" type="CenterContainer" parent="Layout/Stage/Nameplate"]
+layout_mode = 2
+
+[node name="ColorPill" type="Label" parent="Layout/Stage/Nameplate/PillCenter"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.98, 0.85, 0.2, 1)
+theme_override_font_sizes/font_size = 16
+text = "YELLOW · SLOT 3 OF 7"
+
+[node name="PrevButton" type="Button" parent="Layout/Stage"]
+unique_name_in_owner = true
+layout_mode = 1
+anchor_top = 0.46
+anchor_bottom = 0.46
+offset_left = 60.0
+offset_top = -33.0
+offset_right = 126.0
+offset_bottom = 33.0
+focus_mode = 0
+theme_override_font_sizes/font_size = 34
+theme_override_styles/hover = SubResource("sb_arrow_hover")
+theme_override_styles/pressed = SubResource("sb_arrow_hover")
+theme_override_styles/normal = SubResource("sb_arrow")
+text = "‹"
+
+[node name="NextButton" type="Button" parent="Layout/Stage"]
+unique_name_in_owner = true
+layout_mode = 1
+anchor_left = 1.0
+anchor_top = 0.46
+anchor_right = 1.0
+anchor_bottom = 0.46
+offset_left = -126.0
+offset_top = -33.0
+offset_right = -60.0
+offset_bottom = 33.0
+grow_horizontal = 0
+focus_mode = 0
+theme_override_font_sizes/font_size = 34
+theme_override_styles/hover = SubResource("sb_arrow_hover")
+theme_override_styles/pressed = SubResource("sb_arrow_hover")
+theme_override_styles/normal = SubResource("sb_arrow")
+text = "›"
+
+[node name="Thumbs" type="HBoxContainer" parent="Layout/Stage"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -430.0
+offset_top = -100.0
+offset_right = 430.0
+offset_bottom = -34.0
+grow_horizontal = 2
+grow_vertical = 0
+alignment = 1
+theme_override_constants/separation = 14
+
+[node name="Hint" type="Label" parent="Layout/Stage"]
+layout_mode = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -400.0
+offset_top = 28.0
+offset_right = -36.0
+offset_bottom = 54.0
+grow_horizontal = 0
+theme_override_colors/font_color = Color(0.4275, 0.3961, 0.5176, 1)
+theme_override_font_sizes/font_size = 15
+text = "‹ › PICK YOUR CAR"
+horizontal_alignment = 2

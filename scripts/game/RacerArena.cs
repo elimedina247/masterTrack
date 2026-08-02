@@ -40,6 +40,7 @@ public partial class RacerArena : Node3D
     private const string PositionKey = "x";
     private const string VariantKey = "v";
     private const string ColourKey = "c";
+    private const string AntennaKey = "a";
 
     /// <summary>The car to spawn. Falls back to <see cref="RacerScenePath"/> if left unset.</summary>
     [Export] public PackedScene? RacerScene { get; set; }
@@ -135,6 +136,7 @@ public partial class RacerArena : Node3D
             { PositionKey, SpawnPoint(slot, total) },
             { VariantKey, appearance.VariantIndex },
             { ColourKey, appearance.ColourIndex },
+            { AntennaKey, appearance.AntennaSpot },
         };
 
         // Goes through the spawner even when we are alone, so the local and networked paths are
@@ -163,7 +165,8 @@ public partial class RacerArena : Node3D
         RacerScene ??= GD.Load<PackedScene>(RacerScenePath);
         var car = RacerScene.Instantiate<RacerController>();
         car.PrepareForSpawn(dict[PeerKey].AsInt32(), dict[PositionKey].AsVector3(),
-                            new RacerAppearance(dict[VariantKey].AsInt32(), dict[ColourKey].AsInt32()));
+                            new RacerAppearance(dict[VariantKey].AsInt32(), dict[ColourKey].AsInt32(),
+                                                dict[AntennaKey].AsInt32()));
         return car;
     }
 

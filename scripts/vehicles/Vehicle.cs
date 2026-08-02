@@ -675,6 +675,24 @@ public partial class Vehicle : RigidBody3D
         set => DriftInput = value > 0.5f;
     }
 
+    // ---------------------------------------------------------------- Debuff hooks
+
+    /// <summary>
+    /// Outside interference with the tires, as a multiplier on grip — 1 is none. Written by the
+    /// racer layer's debuff upkeep every physics step. A hook rather than a force, because a
+    /// force fed to this car from outside gets gripped away by the very solve it is trying to
+    /// influence: anything that wants the car slippery has to say so <i>inside</i> the tire model.
+    /// </summary>
+    public float DebuffGripMultiplier = 1.0f;
+
+    /// <summary>
+    /// Speed added to the drive solve's target on top of <see cref="TopSpeed"/> and
+    /// <see cref="BoostSpeed"/>, in m/s. Written by the racer layer's debuff upkeep. Because top
+    /// speed is a target rather than an asymptote, raising it is instant and exact — the same
+    /// property the drift boost trades on.
+    /// </summary>
+    public float DebuffSpeedBonus;
+
     // ---------------------------------------------------------------- Reported state
 
     public bool IsVehicleReady { get; private set; }
@@ -1384,7 +1402,7 @@ public partial class Vehicle : RigidBody3D
 
         float desiredSpeed = CurrentGear == -1
             ? -BrakeAmount * ReverseTopSpeed * surface
-            : ThrottleAmount * (TopSpeed + BoostSpeed) * surface;
+            : ThrottleAmount * (TopSpeed + BoostSpeed + DebuffSpeedBonus) * surface;
 
         // The acceleration that would close the whole gap this step, and the force behind it.
         float accelForce = (desiredSpeed - currentForwardSpeed) / delta * Mass;
@@ -1453,6 +1471,10 @@ public partial class Vehicle : RigidBody3D
     private void ProcessGrip(float delta)
     {
         float grip = GripFactor.TryGetValue(SurfaceType, out float g) ? g : 0.9f;
+
+        // Debuffs speak here, before anything else scales it, so oil on tarmac and oil on grass
+        // are proportionally the same insult.
+        grip *= DebuffGripMultiplier;
 
         // On the drift's own ramp, so grip returns at the rate the car straightens rather than
         // snapping back the instant the button comes up.

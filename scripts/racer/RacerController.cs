@@ -41,6 +41,9 @@ public partial class RacerController : Vehicle
 	/// <summary>Which of the three models this car wears. See <see cref="CarVariants"/>.</summary>
 	[Export] public int VariantIndex { get; set; } = CarVariants.DefaultVariantIndex;
 
+	/// <summary>Where the whip antenna is mounted. See <see cref="CarVariants.AntennaSpots"/>.</summary>
+	[Export] public int AntennaSpot { get; set; } = CarVariants.DefaultAntennaSpot;
+
 	/// <summary>
 	/// The colour on its bodywork — this player's identity for the whole session. The Track
 	/// Master's chevron reads this off the car, so the board and the road always agree.
@@ -153,6 +156,22 @@ public partial class RacerController : Vehicle
 	/// </summary>
 	private const float StuckSpeedThreshold = 1.0f;
 
+	// ---- Kill plane ----
+	//
+	// The track is the only terrain there is, so anything this far below its lowest tile is in
+	// the void with nothing left to land on. Checked against the track's own floor rather than a
+	// fixed height because the track descends — a fixed plane would either kill cars on a diving
+	// section or let a fall off the start line run for half a minute.
+
+	/// <summary>How far below the lowest standing tile a car may fall before it is respawned,
+	/// in metres. A couple of seconds of falling: long enough to sell the drop, short enough
+	/// that nobody watches clouds go by.</summary>
+	private const float KillPlaneMargin = 40.0f;
+
+	/// <summary>The track whose floor is checked. Found once through the group.</summary>
+	private TrackController? _killTrack;
+	private bool _killTrackSearched;
+
 	/// <summary>
 	/// How long a car must be stuck before it is rescued, in seconds. Long enough that no live
 	/// state trips it; short enough that being wedged never reads as the game breaking.
@@ -258,6 +277,7 @@ public partial class RacerController : Vehicle
 		Position = position;
 
 		VariantIndex = appearance.VariantIndex;
+		AntennaSpot = appearance.AntennaSpot;
 		PaintColor = appearance.Paint;
 		ApplyVariant();
 
@@ -304,6 +324,10 @@ public partial class RacerController : Vehicle
 		SwapRim("BodyRig/WheelFRHub", "RimFR", variant.RimRightPath, variant.ModelledFrontRadius);
 		SwapRim("BodyRig/WheelRLHub", "RimRL", variant.RimLeftPath, variant.ModelledRearRadius);
 		SwapRim("BodyRig/WheelRRHub", "RimRR", variant.RimRightPath, variant.ModelledRearRadius);
+
+		// The antenna is authored at the back-centre spot; players may have picked another.
+		if (GetNodeOrNull<Node3D>("BodyRig/Antenna") is { } antenna)
+			antenna.Position = CarVariants.AntennaSpotAt(AntennaSpot);
 	}
 
 	/// <summary>
@@ -494,6 +518,29 @@ public partial class RacerController : Vehicle
 	}
 
 	/// <summary>
+	/// Respawn a car that has fallen past the bottom of the world. Runs only on the machine
+	/// simulating this car, like the stuck watchdog above it: <see cref="Respawn"/> is already
+	/// the authoritative local answer, and everyone else sees the result over the wire.
+	/// </summary>
+	private void UpdateKillPlane()
+	{
+		if (!_killTrackSearched)
+		{
+			_killTrackSearched = true;
+			_killTrack = GetTree().GetFirstNodeInGroup(TrackController.GroupName) as TrackController;
+		}
+
+		if (_killTrack == null || !IsInstanceValid(_killTrack))
+			return;
+
+		if (GlobalPosition.Y >= _killTrack.LowestTileY - KillPlaneMargin)
+			return;
+
+		GD.Print($"[Racer {OwnerPeerId}] Fell {KillPlaneMargin:0}m below the lowest tile — respawn.");
+		Respawn();
+	}
+
+	/// <summary>
 	/// The pose channel. Built in code rather than authored into the scene so the property list
 	/// can't drift away from the fields it names — a typo'd path in a .tscn replicates nothing
 	/// and says nothing about it.
@@ -522,6 +569,10 @@ public partial class RacerController : Vehicle
 
 	public override void _PhysicsProcess(double delta)
 	{
+		// Before the remote/local split: the sentry's debuffs mark every copy of a car (the
+		// aura has to glow on every screen), and the method sorts out which copy does physics.
+		UpdateDebuffs((float)delta);
+
 		// A remote car isn't driven, it's told. Running the vehicle simulation as well would
 		// just be a second opinion for the network to keep overruling.
 		if (IsRemote)
@@ -531,13 +582,18 @@ public partial class RacerController : Vehicle
 		}
 
 		// Only the owning peer reads input for its own car, and only while it is being driven.
+		// The debuffs get the last word on what the driver "said" — see ApplyInputDebuffs.
 		if (IsLocalPlayer && AcceptsInput)
+		{
 			VehicleInputState.Sample(Actions).ApplyTo(this);
+			ApplyInputDebuffs();
+		}
 
 		base._PhysicsProcess(delta);
 
 		UpdateRecoveryPose((float)delta);
 		UpdateStuckWatchdog((float)delta);
+		UpdateKillPlane();
 
 		if (IsNetworked)
 		{
@@ -608,7 +664,11 @@ public partial class RacerController : Vehicle
 			// velocity for a puppet, the simulation for anything simulated here.
 			Vector3 theirVelocity = other.EffectiveVelocity;
 			float closing = (theirVelocity - state.LinearVelocity).Dot(normal);
-			if (closing < ImpactMinSpeed)
+
+			// A bouncy car launches on any touch — the minimum-speed gate is exactly the thing
+			// the debuff exists to ignore.
+			bool bouncy = other.IsBouncyActive;
+			if (closing < ImpactMinSpeed && !bouncy)
 				continue;
 
 			// Who ran into whom. Their motion toward us versus our motion toward them decides
@@ -622,13 +682,23 @@ public partial class RacerController : Vehicle
 				: 0.5f;
 			float receive = Mathf.Lerp(ImpactRammerScale, 1.0f, victimFactor);
 
+			// Touching a bumper: you are always the victim, the hit is never soft, and it is
+			// scaled up on top. The bouncy car itself feels nothing extra — it is the wall.
+			float bounceScale = 1.0f;
+			if (bouncy)
+			{
+				closing = Mathf.Max(closing, BouncyLaunchSpeed);
+				receive = 1.0f;
+				bounceScale = BouncyBounceScale;
+			}
+
 			float severity = Mathf.Clamp(closing / ImpactFullSpeed, 0.0f, 1.0f) * receive;
 			_impactCooldownUntil[otherId] = now + (ulong)(ImpactCooldown * 1000.0f);
 
 			// The launch, and the pop that lifts it off the road — where the airborne rules
 			// (no grip, no drive, a projectile) take over selling it.
-			state.LinearVelocity += normal * (closing * ImpactBounce * receive)
-									+ Vector3.Up * (closing * ImpactPop * receive);
+			state.LinearVelocity += normal * (closing * ImpactBounce * receive * bounceScale)
+									+ Vector3.Up * (closing * ImpactPop * receive * bounceScale);
 
 			// The spin, signed by where the hit landed relative to the centre of mass — the
 			// same sign an off-centre impulse would earn from r × J, just paid at a rate that

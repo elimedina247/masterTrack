@@ -46,8 +46,10 @@ namespace MasterTrack.TrackMaster;
 ///
 /// The board also carries a live marker per racer. From board altitude a car is a few pixels of
 /// grey, which is no use to someone whose whole job is judging whether the track is beating
-/// them — so each one gets a coloured chevron pointing the way it's travelling, drawn over
-/// everything and held at a constant on-screen size however far the camera is zoomed out.
+/// them — so each one gets its name floated over it, drawn over everything and held at a
+/// constant on-screen size however far the camera is zoomed out. The arrowhead itself comes
+/// from the car: every remote car already wears a <see cref="RacerChevron"/>, and the board
+/// sees it the same way the road does.
 /// </summary>
 public partial class TrackMasterController : Node3D
 {
@@ -60,6 +62,14 @@ public partial class TrackMasterController : Node3D
 
 		/// <summary>Flown by hand — WASD to move, hold the look button to aim.</summary>
 		FreeRoam,
+
+		/// <summary>
+		/// Rides over the middle of the racers — the average of where they all are, top down,
+		/// re-centred every frame as they spread and bunch. The sentry's view: their targets
+		/// are cars, not the end of the track, and this keeps the whole pack in frame without
+		/// flying anything. Skipped by the toggle while there are no cars to centre on.
+		/// </summary>
+		Pack,
 	}
 
 	/// <summary>The track to build onto. Required.</summary>
@@ -382,10 +392,10 @@ public partial class TrackMasterController : Node3D
 		if (!FreeBuild && Hand.Tick((float)delta, IsPlaceable))
 			EmitSignal(SignalName.HandChanged);
 
-		if (CameraMode == BoardCameraMode.Follow)
-			UpdateFollow((float)delta);
-		else
+		if (CameraMode == BoardCameraMode.FreeRoam)
 			UpdateFreeRoam((float)delta);
+		else
+			UpdateFollow((float)delta);
 
 		UpdateRacerMarkers((float)delta);
 	}
@@ -439,6 +449,29 @@ public partial class TrackMasterController : Node3D
 		}
 	}
 
+	/// <summary>
+	/// The middle of everybody: the average of every live car's position, which is what the
+	/// Pack camera hovers over. The average includes height, so a pack riding an elevated
+	/// stretch keeps the same apparent zoom as one at sea level. Falls back to the head of the
+	/// track when nobody is racing — the one honest answer a board with no cars on it has.
+	/// </summary>
+	private Vector3 PackCenter()
+	{
+		Vector3 sum = Vector3.Zero;
+		int count = 0;
+
+		foreach (RacerMarker marker in _markers)
+		{
+			if (!IsInstanceValid(marker.Racer) || !marker.Racer.IsInsideTree())
+				continue;
+
+			sum += marker.Racer.GlobalPosition;
+			count++;
+		}
+
+		return count > 0 ? sum / count : Track!.HeadWorldPosition;
+	}
+
 	private bool HasMarkerFor(RacerController racer)
 	{
 		foreach (RacerMarker marker in _markers)
@@ -463,57 +496,24 @@ public partial class TrackMasterController : Node3D
 
 		marker.Root.Position = marker.Racer.GlobalPosition + new Vector3(0.0f, MarkerHeight, 0.0f);
 
-		// Yaw off the car's forward axis flattened onto the board, rather than its euler Y —
-		// a car that has rolled onto its roof reports euler angles that spin the marker around
-		// while the car is still pointing the same way down the track.
-		Vector3 forward = -marker.Racer.GlobalBasis.Z;
-		var flat = new Vector2(forward.X, forward.Z);
-		if (flat.LengthSquared() > 0.0001f)
-			marker.Root.Rotation = new Vector3(0.0f, Mathf.Atan2(-flat.X, -flat.Y), 0.0f);
-
-		// Constant on-screen size: at the closest zoom a fixed-size marker swamps the tile it's
-		// on, and at the furthest it disappears into a pixel.
+		// No aiming: the label is billboarded, and the direction of travel is the car's own
+		// RacerChevron's job. Constant on-screen size still matters — at the closest zoom a
+		// fixed-size name swamps the tile it's on, and at the furthest it disappears.
 		float distance = _camera.GlobalPosition.DistanceTo(marker.Root.GlobalPosition);
 		marker.Root.Scale = Vector3.One * Mathf.Clamp(distance / CameraHeight, 0.35f, 3.0f);
 	}
 
 	/// <summary>
-	/// A chevron pointing along local -Z, the way the car is going, with the racer's name over
-	/// it. Drawn with depth testing off on purpose — a marker that hides behind a tile wall or
-	/// a descending tile goes missing exactly when the Track Master is aiming something at it.
+	/// The racer's name, and nothing else. The car already carries its own arrowhead — the
+	/// <see cref="RacerChevron"/> triangle every remote car wears, which the board sees the same
+	/// way the road does — so a second arrow here was the same information drawn twice, on top
+	/// of itself. What the chevron cannot say is <i>who</i>, and that is the half the board
+	/// keeps: the name, in the player's colour, drawn with depth testing off so it never goes
+	/// missing behind a wall exactly when the Track Master is aiming something at it.
 	/// </summary>
 	private static Node3D BuildRacerMarker(Color color, string label)
 	{
 		var root = new Node3D { Name = "RacerMarker" };
-
-		var material = new StandardMaterial3D
-		{
-			AlbedoColor = color,
-			ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
-			NoDepthTest = true,
-		};
-
-		const float length = TrackTile.Size * 0.22f;
-		const float width = TrackTile.Size * 0.055f;
-		const float thickness = 0.4f;
-
-		root.AddChild(new MeshInstance3D
-		{
-			Mesh = new BoxMesh { Size = new Vector3(width, thickness, length), Material = material },
-			Position = new Vector3(0.0f, 0.0f, length * 0.25f),
-		});
-		root.AddChild(new MeshInstance3D
-		{
-			Mesh = new BoxMesh { Size = new Vector3(width, thickness, length * 0.6f), Material = material },
-			Position = new Vector3(-length * 0.19f, 0.0f, -length * 0.42f),
-			RotationDegrees = new Vector3(0.0f, -38.0f, 0.0f),
-		});
-		root.AddChild(new MeshInstance3D
-		{
-			Mesh = new BoxMesh { Size = new Vector3(width, thickness, length * 0.6f), Material = material },
-			Position = new Vector3(length * 0.19f, 0.0f, -length * 0.42f),
-			RotationDegrees = new Vector3(0.0f, 38.0f, 0.0f),
-		});
 
 		root.AddChild(new Label3D
 		{
@@ -533,11 +533,24 @@ public partial class TrackMasterController : Node3D
 
 	// ---- Camera modes ----
 
-	/// <summary>Flip between riding the end of the track and flying by hand.</summary>
+	/// <summary>
+	/// Step to the next camera mode: track, pack, free roam, round again. Pack only offers
+	/// itself while somebody is racing — over an empty board it is just Follow with extra steps.
+	/// </summary>
 	public void ToggleCameraMode()
-		=> SetCameraMode(CameraMode == BoardCameraMode.Follow
-						 ? BoardCameraMode.FreeRoam
-						 : BoardCameraMode.Follow);
+	{
+		BoardCameraMode next = CameraMode switch
+		{
+			BoardCameraMode.Follow => BoardCameraMode.Pack,
+			BoardCameraMode.Pack => BoardCameraMode.FreeRoam,
+			_ => BoardCameraMode.Follow,
+		};
+
+		if (next == BoardCameraMode.Pack && _markers.Count == 0)
+			next = BoardCameraMode.FreeRoam;
+
+		SetCameraMode(next);
+	}
 
 	public void SetCameraMode(BoardCameraMode mode)
 	{
@@ -563,7 +576,8 @@ public partial class TrackMasterController : Node3D
 	}
 
 	/// <summary>
-	/// Ride over the end of the track. Eased rather than pinned, so a placed tile pulls the
+	/// Ride over the point this mode cares about — the end of the track, or the middle of the
+	/// pack. Eased rather than pinned, so a placed tile (or a pack spreading out) pulls the
 	/// board along instead of teleporting it out from under the Track Master's eyes.
 	/// </summary>
 	private void UpdateFollow(float delta)
@@ -571,10 +585,14 @@ public partial class TrackMasterController : Node3D
 		if (Track == null)
 			return;
 
+		Vector3 focus = CameraMode == BoardCameraMode.Pack
+			? PackCenter()
+			: Track.HeadWorldPosition;
+
 		float t = 1.0f - Mathf.Exp(-FollowSpeed * delta);
 
 		_camera.Position = _camera.Position.Lerp(
-			Track.HeadWorldPosition + new Vector3(0, _boardHeight, 0), t);
+			focus + new Vector3(0, _boardHeight, 0), t);
 
 		// Per-angle rather than a plain lerp: coming back from free roam the yaw can be several
 		// turns from zero, and a straight lerp would unwind all of it the long way round.
@@ -611,6 +629,10 @@ public partial class TrackMasterController : Node3D
 	public override void _UnhandledInput(InputEvent @event)
 	{
 		if (Track == null)
+			return;
+
+		// An armed sentry action owns the mouse buttons until it fires or is cancelled.
+		if (HandleSentryInput(@event))
 			return;
 
 		if (@event.IsActionPressed("builder_undo"))

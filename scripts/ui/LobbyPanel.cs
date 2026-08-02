@@ -37,6 +37,12 @@ public partial class LobbyPanel : Control
     /// <summary>What everyone else sees in its place: the length, but not a control.</summary>
     private Label _raceLengthLabel = null!;
 
+    /// <summary>The host's game mode picker. Same deal as the race length.</summary>
+    private OptionButton _mode = null!;
+
+    /// <summary>The mode as everyone else sees it: a fact, not a control.</summary>
+    private Label _modeLabel = null!;
+
     /// <summary>Clients that trigger an automatic Start; 0 for the normal button. See MainMenu.</summary>
     private int _autoStartClients;
 
@@ -79,6 +85,7 @@ public partial class LobbyPanel : Control
         box.AddChild(_players);
 
         BuildRaceLength(box);
+        BuildGameMode(box);
 
         _hint = AddLabel(box, 18);
 
@@ -104,6 +111,7 @@ public partial class LobbyPanel : Control
         GameManager.Instance.AppearanceAssigned += OnAppearanceAssigned;
         GameManager.Instance.PlayerNameChanged += OnPlayerNameChanged;
         GameManager.Instance.RaceLengthChanged += OnRaceLengthChanged;
+        GameManager.Instance.GameModeChanged += OnGameModeChanged;
 
         Refresh();
     }
@@ -149,6 +157,44 @@ public partial class LobbyPanel : Control
     private void OnRaceLengthChanged(int tiles) => Refresh();
 
     /// <summary>
+    /// Which game is being played: the classic live build, or building it all first and turning
+    /// sentry. Shaped exactly like the race length row — the host picks, everyone else reads —
+    /// and for the same reason: nobody should find out which game it was after it started.
+    /// </summary>
+    private void BuildGameMode(Node parent)
+    {
+        var row = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.End };
+        row.AddThemeConstantOverride("separation", 8);
+        parent.AddChild(row);
+
+        Label caption = AddLabel(row, 18);
+        caption.Text = "Mode";
+
+        _modeLabel = AddLabel(row, 18);
+
+        _mode = new OptionButton
+        {
+            // Same reason as the race length picker: the host is driving on the space bar.
+            FocusMode = FocusModeEnum.None,
+        };
+        _mode.AddThemeFontSizeOverride("font_size", 18);
+
+        _mode.AddItem(ModeName(GameMode.LiveBuild), (int)GameMode.LiveBuild);
+        _mode.AddItem(ModeName(GameMode.Sentry), (int)GameMode.Sentry);
+
+        _mode.ItemSelected += OnModePicked;
+        row.AddChild(_mode);
+    }
+
+    private static string ModeName(GameMode mode) =>
+        mode == GameMode.Sentry ? "Build then Sentry" : "Live build";
+
+    private void OnModePicked(long index)
+        => GameManager.Instance.SetGameMode((GameMode)_mode.GetItemId((int)index));
+
+    private void OnGameModeChanged(int mode) => Refresh();
+
+    /// <summary>
     /// Autoloads outlive this scene, and a C# <c>+=</c> handler is a managed delegate Godot
     /// cannot tie to a node's lifetime — so it has to be taken back by hand or the next signal
     /// lands on a disposed control.
@@ -162,9 +208,10 @@ public partial class LobbyPanel : Control
         GameManager.Instance.AppearanceAssigned -= OnAppearanceAssigned;
         GameManager.Instance.PlayerNameChanged -= OnPlayerNameChanged;
         GameManager.Instance.RaceLengthChanged -= OnRaceLengthChanged;
+        GameManager.Instance.GameModeChanged -= OnGameModeChanged;
     }
 
-    private void OnAppearanceAssigned(int peerId, int variant, int colour) => Refresh();
+    private void OnAppearanceAssigned(int peerId, int variant, int colour, int antenna) => Refresh();
 
     private void OnPlayerNameChanged(int peerId, string name) => Refresh();
 
@@ -216,6 +263,20 @@ public partial class LobbyPanel : Control
                 continue;
 
             _raceLength.Selected = i;
+            break;
+        }
+
+        GameMode mode = GameManager.Instance.Mode;
+        _mode.Visible = isHost;
+        _modeLabel.Visible = !isHost;
+        _modeLabel.Text = ModeName(mode);
+
+        for (int i = 0; i < _mode.ItemCount; i++)
+        {
+            if (_mode.GetItemId(i) != (int)mode)
+                continue;
+
+            _mode.Selected = i;
             break;
         }
 

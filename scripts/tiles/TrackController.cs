@@ -135,6 +135,21 @@ public partial class TrackController : Node3D
     /// </summary>
     [Export] public bool AllowUndo { get; set; }
 
+    /// <summary>
+    /// Group every track joins, so a car can find the world's floor without being handed a node
+    /// path — the same reason racers join <see cref="RacerController.GroupName"/>.
+    /// </summary>
+    public const string GroupName = "tracks";
+
+    /// <summary>
+    /// Road height of the lowest tile still standing, in metres. The world's floor as far as
+    /// falling goes: below this (less a margin) there is nothing left to land on, and the kill
+    /// plane the cars check themselves against hangs off it — see
+    /// <see cref="RacerController"/>. Tracked rather than fixed because the track is the only
+    /// terrain there is, and it descends.
+    /// </summary>
+    public float LowestTileY { get; private set; }
+
     public TrackGrid Grid { get; } = new();
 
     /// <summary>
@@ -177,8 +192,24 @@ public partial class TrackController : Node3D
     /// <summary>Whether somebody has already crossed the line. The race is only won once.</summary>
     private bool _finished;
 
+    /// <summary>Whether the track has been declared finished regardless of the tile count.</summary>
+    private bool _locked;
+
     /// <summary>Whether the Track Master has spent every tile the race was given.</summary>
-    public bool AtTileLimit => TileLimit > 0 && _placed.Count >= TileLimit;
+    public bool AtTileLimit => _locked || (TileLimit > 0 && _placed.Count >= TileLimit);
+
+    /// <summary>
+    /// Declare the track finished as it stands. Sentry mode calls this on every peer when the
+    /// race phase opens: the builder may have stopped short of the tile budget — the Done button
+    /// and the build clock both end a build early — and from that moment the bar at the head is
+    /// the real finish and no further tile may land. Riding on <see cref="AtTileLimit"/> means
+    /// the server-side placement check refuses late tiles with no extra rule anywhere.
+    /// </summary>
+    public void LockTrack()
+    {
+        _locked = true;
+        UpdateFinishLine();
+    }
 
     /// <summary>Tiles the Track Master has left to lay, or -1 if the race has no limit.</summary>
     public int TilesRemaining => TileLimit > 0 ? Mathf.Max(0, TileLimit - _placed.Count) : -1;
@@ -200,6 +231,7 @@ public partial class TrackController : Node3D
 
     public override void _Ready()
     {
+        AddToGroup(GroupName);
         BuildStartingTrack();
 
         // Built after the starting straight so it has a head to sit on. Only the race has a finish
@@ -228,7 +260,28 @@ public partial class TrackController : Node3D
         GD.Print($"[Track] Start line at {StartPosition} facing {StartDirection.DisplayName()}; "
                  + $"{StartingStraightLength} starting tile(s), head now {Grid.HeadAnchor.Position}.");
 
+        UpdateLowestTile();
         EmitSignal(SignalName.TrackHeadChanged);
+    }
+
+    /// <summary>
+    /// Re-derive the floor from the tiles still standing. A full scan on every change rather
+    /// than an incremental min, because removal — undo, or the tail crumbling away — can take
+    /// the lowest tile with it, and un-minimising needs the scan anyway. The track tops out
+    /// around a hundred tiles; this is nothing.
+    /// </summary>
+    private void UpdateLowestTile()
+    {
+        float lowest = StartAnchor.Position.Y;
+
+        for (int i = Grid.OldestLiveIndex; i < Grid.Count; i++)
+        {
+            PlacedTile tile = Grid.Tiles[i];
+            lowest = Mathf.Min(lowest, Mathf.Min(tile.EntryAnchor.Position.Y,
+                                                 tile.ExitAnchor.Position.Y));
+        }
+
+        LowestTileY = lowest;
     }
 
     /// <summary>
@@ -362,6 +415,7 @@ public partial class TrackController : Node3D
         // peer's copy of them in step without a word being said about either.
         UpdateFinishLine();
         CondemnStaleTiles();
+        UpdateLowestTile();
 
         EmitSignal(SignalName.TilePlaced, tile.Index, (int)tile.Data.Hazard, catalogIndex);
         EmitSignal(SignalName.TrackHeadChanged);
@@ -494,6 +548,10 @@ public partial class TrackController : Node3D
     {
         Grid.RetireThrough(trackIndex);
         GetNodeOrNull(TileNodeName(trackIndex))?.QueueFree();
+
+        // The floor may just have crumbled: a race that dived early and climbed late has its
+        // lowest road at the back, and the kill plane must rise as that road stops existing.
+        UpdateLowestTile();
     }
 
     // ---- Undo ----
@@ -590,6 +648,7 @@ public partial class TrackController : Node3D
         _condemnedThrough = Mathf.Min(_condemnedThrough, Grid.Count - 1);
 
         UpdateFinishLine();
+        UpdateLowestTile();
         EmitSignal(SignalName.TrackHeadChanged);
     }
 

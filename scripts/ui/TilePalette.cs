@@ -536,13 +536,26 @@ public partial class TilePalette : Control
 
     private void OnCameraModeChanged(int mode)
     {
-        bool follow = (TrackMasterController.BoardCameraMode)mode
-                      == TrackMasterController.BoardCameraMode.Follow;
+        switch ((TrackMasterController.BoardCameraMode)mode)
+        {
+            case TrackMasterController.BoardCameraMode.Follow:
+                _cameraButton.Text = "Camera: Following track";
+                _cameraButton.TooltipText =
+                    "Riding the end of the track. Mouse wheel zooms.\nClick to hover over the racers instead.";
+                break;
 
-        _cameraButton.Text = follow ? "Camera: Following track" : "Camera: Free roam";
-        _cameraButton.TooltipText = follow
-            ? "Riding the end of the track. Mouse wheel zooms.\nClick to fly the camera yourself."
-            : "WASD to fly, hold right mouse to look, wheel for speed.\nClick to go back to following the track.";
+            case TrackMasterController.BoardCameraMode.Pack:
+                _cameraButton.Text = "Camera: Following racers";
+                _cameraButton.TooltipText =
+                    "Hovering over the middle of the pack. Mouse wheel zooms.\nClick to fly the camera yourself.";
+                break;
+
+            default:
+                _cameraButton.Text = "Camera: Free roam";
+                _cameraButton.TooltipText =
+                    "WASD to fly, hold right mouse to look, wheel for speed.\nClick to go back to following the track.";
+                break;
+        }
     }
 
     private static StyleBoxFlat Panel(Color color)

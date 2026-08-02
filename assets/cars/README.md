@@ -77,6 +77,11 @@ In `scenes/Racer.tscn`:
    | A_Wedge | 0.28 | 0.28 |
    | B_Bubble | 0.30 | 0.30 |
    | C_Cartoon | 0.24 | **0.36** |
+   | D_Cartoon | 0.24 | **0.36** |
+   | E_Hachi / F_Hachi / G_Panda | 0.29 | 0.29 |
+
+   D/E/F/G were exported by hand from `car_variants.blend` (see the export settings above), not
+   by `car_blockout.py`. D borrows C's rim files; E, F and G share the `E_Hachi_Rim_*` pair.
 
    The rig currently has both at **0.24**. C's staggered rake is a real change to the physics, not
    just a look.

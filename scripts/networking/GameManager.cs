@@ -5,14 +5,17 @@ using System.Collections.Generic;
 namespace MasterTrack.Networking;
 
 /// <summary>
-/// What one player's car looks like: which of the three models, and which rainbow colour. Dealt
-/// once at join time and kept for the whole session, so your car is the same in the lobby and in
-/// the match — the colour is how people tell each other apart.
+/// What one player's car looks like: which model, which rainbow colour, and where the antenna
+/// sits. Settled at join time and kept for the whole session, so your car is the same in the
+/// lobby and in the match — the colour is how people tell each other apart. The model and the
+/// antenna are the player's own pick from the main menu; the colour is a pick too, but only
+/// granted if nobody in the session is already wearing it.
 /// </summary>
-public readonly record struct RacerAppearance(int VariantIndex, int ColourIndex)
+public readonly record struct RacerAppearance(int VariantIndex, int ColourIndex,
+                                              int AntennaSpot = CarVariants.DefaultAntennaSpot)
 {
-    /// <summary>Colour index meaning "nobody dealt this car a colour" — solo play, and the
-    /// unowned car the board builds ahead of.</summary>
+    /// <summary>Colour index meaning "nobody dealt this car a colour" — solo play, the unowned
+    /// car the board builds ahead of, and a menu pick of "auto".</summary>
     public const int NoColour = -1;
 
     public static RacerAppearance Unassigned =>
@@ -38,6 +41,31 @@ public enum GameState
     InRound,
     RoundOver,
     MatchOver,
+}
+
+/// <summary>Which shape of match the host has picked for the session.</summary>
+public enum GameMode
+{
+    /// <summary>The classic game: the track is dealt and laid while the racers are already driving on it.</summary>
+    LiveBuild,
+
+    /// <summary>
+    /// The Track Master builds the whole track first, then turns sentry: they spend a fixed
+    /// points budget on sabotage — debuffs on cars, missiles at the road — while the racers run
+    /// what they built. See <see cref="MatchPhase"/> for where a match of this shape currently is.
+    /// </summary>
+    Sentry,
+}
+
+/// <summary>
+/// Where a <see cref="GameMode.Sentry"/> match currently is. Always <see cref="None"/> in Live
+/// Build, which has no phases — building and racing are the same stretch of time there.
+/// </summary>
+public enum MatchPhase
+{
+    None,
+    Building,
+    Racing,
 }
 
 /// <summary>
@@ -68,14 +96,23 @@ public partial class GameManager : Node
     /// <summary>Fired on every peer as the scene-ready count climbs, for a "waiting" message.</summary>
     [Signal] public delegate void SceneReadyProgressEventHandler(int ready, int total);
 
-    /// <summary>A peer's car model and colour are now known on this machine.</summary>
-    [Signal] public delegate void AppearanceAssignedEventHandler(int peerId, int variant, int colour);
+    /// <summary>A peer's car model, colour and antenna spot are now known on this machine.</summary>
+    [Signal] public delegate void AppearanceAssignedEventHandler(int peerId, int variant, int colour, int antenna);
 
     /// <summary>A peer's name is now known on this machine.</summary>
     [Signal] public delegate void PlayerNameChangedEventHandler(int peerId, string name);
 
     /// <summary>The race length has been set or re-published. Known on every peer.</summary>
     [Signal] public delegate void RaceLengthChangedEventHandler(int tiles);
+
+    /// <summary>The host picked a game mode. Known on every peer, like the race length.</summary>
+    [Signal] public delegate void GameModeChangedEventHandler(int mode);
+
+    /// <summary>
+    /// A Sentry match moved between phases. Fired on every peer. <c>seconds</c> is how long the
+    /// new phase runs before the server moves it along on its own, or 0 for open-ended.
+    /// </summary>
+    [Signal] public delegate void MatchPhaseChangedEventHandler(int phase, float seconds);
 
     /// <summary>Somebody crossed the line. Fired on every peer, with the winner's peer id.</summary>
     [Signal] public delegate void MatchWonEventHandler(int peerId);
@@ -104,6 +141,35 @@ public partial class GameManager : Node
     /// set its own would disagree with the server about when the Track Master had run dry.
     /// </summary>
     public int RaceLength { get; private set; } = DefaultRaceLength;
+
+    // ---- Game mode and match phase ----
+    //
+    // The mode is a lobby decision, owned by the host and told to everyone the way the race
+    // length is. The phase is a match decision, owned by the server: in Sentry mode the match is
+    // two distinct stretches of time — everyone waiting while the track is built, then everyone
+    // racing while the builder snipes — and every peer has to agree which one it is in, because
+    // cars only exist in the second.
+
+    /// <summary>Which shape of match the host picked. Replicated; see <see cref="SetGameMode"/>.</summary>
+    public GameMode Mode { get; private set; } = GameMode.LiveBuild;
+
+    /// <summary>Where a Sentry match currently is. <see cref="MatchPhase.None"/> outside one.</summary>
+    public MatchPhase Phase { get; private set; } = MatchPhase.None;
+
+    // The build clock. A flat floor plus a per-tile allowance, because the builder's job scales
+    // with the race length the host picked: a 50-tile track deserves more wall time than a
+    // 10-tile one, but neither deserves forever — the timer is what stops a builder stalling
+    // with everyone else sitting in a spectator camera.
+    private const float BuildSecondsBase = 60.0f;
+    private const float BuildSecondsPerTile = 6.0f;
+
+    /// <summary>When the build phase ends, on this machine's clock. Set from the phase RPC.</summary>
+    private ulong _buildEndsAtMsec;
+
+    /// <summary>Seconds of build time left, for countdown labels. 0 outside the build phase.</summary>
+    public float BuildSecondsLeft => Phase == MatchPhase.Building
+        ? Mathf.Max(0.0f, (_buildEndsAtMsec - (float)Time.GetTicksMsec()) / 1000.0f)
+        : 0.0f;
 
     /// <summary>Who won the current match, or 0 if it is still being raced.</summary>
     public int WinnerPeerId { get; private set; }
@@ -134,6 +200,15 @@ public partial class GameManager : Node
     /// Sent to the server once connected; the server hands it to everyone else.
     /// </summary>
     public string LocalPlayerName { get; set; } = "";
+
+    /// <summary>
+    /// The car this machine wants: model and antenna are always honoured, the colour only if
+    /// nobody in the session is wearing it (<see cref="RacerAppearance.NoColour"/> = no
+    /// preference, deal me one). Kept up to date by the garage pane in the main menu, and — like
+    /// <see cref="LocalPlayerName"/> — sent to the server once connected. Solo play reads it
+    /// directly through <see cref="AppearanceOf"/>.
+    /// </summary>
+    public RacerAppearance LocalPreference { get; set; } = RacerAppearance.Unassigned;
 
     /// <summary>Longest name accepted, so nobody can push the lobby list off the screen.</summary>
     public const int MaxNameLength = 16;
@@ -166,6 +241,10 @@ public partial class GameManager : Node
     public override void _Ready()
     {
         Instance = this;
+
+        // _Process is only the build clock, and only the server's. Off until a build phase starts.
+        SetProcess(false);
+
         ApplyCommandLineRole();
 
         // A peer that drops while we are waiting on it must not strand everyone else in the
@@ -191,15 +270,22 @@ public partial class GameManager : Node
             EvaluateSceneReady();
     }
 
-    // ---- Appearance: which car, which colour ----
+    // ---- Appearance: which car, which colour, where the antenna sits ----
     //
-    // Dealt on join rather than at match start, because everyone is already driving around the
+    // Settled on join rather than at match start, because everyone is already driving around the
     // lobby by then and a car that changed colour on the way into the match would undo the one
     // thing the colour is for. The builder holds a colour for the whole wait too — they are only
     // singled out when the host presses Start — which is why the palette has to cover the lobby
     // rather than just the racers.
+    //
+    // The model, colour and antenna are picked in the main menu, but the server still owns the
+    // result: a client's pick arrives as a request (like its name does), gets sanitised, and the
+    // colour is only granted if it is free — the colour is the half that has to stay unique.
+    // A newcomer is dealt a random hand the moment they connect and their request lands a moment
+    // later, re-dealing them before their car exists: both RPCs ride the same reliable ordered
+    // channel, and the request is sent before the client even starts loading the lobby scene.
 
-    /// <summary>Server only. Fresh session: nobody has a colour yet, and we take the first.</summary>
+    /// <summary>Server only. Fresh session: nobody has a colour yet, and we take our pick.</summary>
     private void OnServerCreated()
     {
         Appearances.Clear();
@@ -209,7 +295,7 @@ public partial class GameManager : Node
         for (int i = 0; i < CarVariants.Palette.Length; i++)
             _freeColours.Add(i);
 
-        AssignAppearance(Multiplayer.GetUniqueId());
+        AssignAppearance(Multiplayer.GetUniqueId(), LocalPreference);
         PublishLocalName();
     }
 
@@ -225,7 +311,7 @@ public partial class GameManager : Node
         {
             if (kvp.Key != peerId)
                 RpcId(peerId, MethodName.NotifyAppearanceAssigned, kvp.Key,
-                      kvp.Value.VariantIndex, kvp.Value.ColourIndex);
+                      kvp.Value.VariantIndex, kvp.Value.ColourIndex, kvp.Value.AntennaSpot);
         }
 
         foreach (var kvp in Names)
@@ -235,8 +321,167 @@ public partial class GameManager : Node
         }
 
         // The lobby shows the race length to everybody, not only to the host who set it, so a
-        // newcomer has to be told what was decided before they arrived.
+        // newcomer has to be told what was decided before they arrived. Same for the mode.
         RpcId(peerId, MethodName.NotifyRaceLength, RaceLength);
+        RpcId(peerId, MethodName.NotifyGameMode, (int)Mode);
+    }
+
+    // ---- Game mode ----
+
+    /// <summary>
+    /// Host only. Pick the shape of the next match, and tell everyone. Called from the lobby,
+    /// the same way <see cref="SetRaceLength"/> is.
+    /// </summary>
+    public void SetGameMode(GameMode mode)
+    {
+        if (NetworkManager.Instance.IsNetworked && !NetworkManager.Instance.IsHost)
+        {
+            GD.PushWarning("[GameManager] Only the host sets the game mode; ignored.");
+            return;
+        }
+
+        if (mode == Mode)
+            return;
+
+        Mode = mode;
+        GD.Print($"[GameManager] Game mode set to {Mode}.");
+
+        if (NetworkManager.Instance.IsNetworked)
+            Rpc(MethodName.NotifyGameMode, (int)Mode);
+
+        EmitSignal(SignalName.GameModeChanged, (int)Mode);
+    }
+
+    [Rpc(MultiplayerApi.RpcMode.Authority, CallLocal = false, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    private void NotifyGameMode(int mode)
+    {
+        Mode = (GameMode)mode;
+        EmitSignal(SignalName.GameModeChanged, mode);
+    }
+
+    // ---- Match phase (Sentry mode) ----
+
+    /// <summary>
+    /// Server only. Open the build phase: the Track Master lays the whole track while everyone
+    /// else watches, against a clock sized to the race length. Called by the match scene once
+    /// every peer is in it — the same moment Live Build would have spawned the cars.
+    /// </summary>
+    public void BeginBuildPhase()
+    {
+        if (NetworkManager.Instance.IsNetworked && !NetworkManager.Instance.IsHost)
+            return;
+
+        if (Mode != GameMode.Sentry || Phase != MatchPhase.None)
+            return;
+
+        float seconds = BuildSecondsBase + RaceLength * BuildSecondsPerTile;
+        GD.Print($"[GameManager] Build phase open: {seconds:0}s for {RaceLength} tiles.");
+
+        SetPhase(MatchPhase.Building, seconds);
+        SetProcess(true);
+    }
+
+    /// <summary>
+    /// Server only. Close the build phase and let the race begin. Reached three ways — the
+    /// builder's Done button, the build clock running out, or the tile budget being spent —
+    /// and idempotent, because two of those can land on the same frame.
+    /// </summary>
+    public void BeginRacePhase()
+    {
+        if (NetworkManager.Instance.IsNetworked && !NetworkManager.Instance.IsHost)
+            return;
+
+        if (Phase != MatchPhase.Building)
+            return;
+
+        SetProcess(false);
+        GD.Print("[GameManager] Build phase over; the race is on.");
+        SetPhase(MatchPhase.Racing, 0.0f);
+    }
+
+    /// <summary>The build clock. Only ever running on the server, and only while building.</summary>
+    public override void _Process(double delta)
+    {
+        if (Phase != MatchPhase.Building)
+        {
+            SetProcess(false);
+            return;
+        }
+
+        if (BuildSecondsLeft <= 0.0f)
+            BeginRacePhase();
+    }
+
+    /// <summary>
+    /// The builder says the track is finished. Anyone may call; the server checks the asker
+    /// really is the Track Master before ending the phase.
+    /// </summary>
+    public void RequestFinishBuilding()
+    {
+        if (!NetworkManager.Instance.IsNetworked)
+        {
+            BeginRacePhase();
+            return;
+        }
+
+        if (NetworkManager.Instance.IsHost)
+        {
+            ServerFinishBuilding(Multiplayer.GetUniqueId());
+            return;
+        }
+
+        RpcId(1, MethodName.ServerRequestFinishBuilding);
+    }
+
+    [Rpc(MultiplayerApi.RpcMode.AnyPeer, CallLocal = false, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    private void ServerRequestFinishBuilding() => ServerFinishBuilding(Multiplayer.GetRemoteSenderId());
+
+    private void ServerFinishBuilding(int senderId)
+    {
+        if (!NetworkManager.Instance.IsHost)
+            return;
+
+        if (senderId != TrackMasterPeerId)
+        {
+            GD.PushWarning($"[GameManager] Peer {senderId} tried to end the build phase but is not the builder.");
+            return;
+        }
+
+        BeginRacePhase();
+    }
+
+    /// <summary>
+    /// Local, no broadcast: forget the phase. Called by the match scene on its way out, because
+    /// the phase must never outlive the match it describes — the graceful path is reset by
+    /// <see cref="EndMatch"/>'s broadcast, but a solo Escape or a dropped connection leaves this
+    /// machine's copy stranded wherever it was, and <see cref="BeginBuildPhase"/> refuses to
+    /// open over a phase that never closed.
+    /// </summary>
+    public void ResetPhase()
+    {
+        SetProcess(false);
+        Phase = MatchPhase.None;
+    }
+
+    private void SetPhase(MatchPhase phase, float seconds)
+    {
+        if (NetworkManager.Instance.IsNetworked)
+            Rpc(MethodName.NotifyMatchPhase, (int)phase, seconds);
+
+        NotifyMatchPhase((int)phase, seconds);
+    }
+
+    [Rpc(MultiplayerApi.RpcMode.Authority, CallLocal = false, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    private void NotifyMatchPhase(int phase, float seconds)
+    {
+        Phase = (MatchPhase)phase;
+
+        // Each peer runs the countdown on its own clock from here. The start is what is shared;
+        // a few network milliseconds of disagreement about the deadline hurts nothing, because
+        // only the server's copy actually ends the phase.
+        _buildEndsAtMsec = Time.GetTicksMsec() + (ulong)(Mathf.Max(seconds, 0.0f) * 1000.0f);
+
+        EmitSignal(SignalName.MatchPhaseChanged, phase, seconds);
     }
 
     // ---- Race length ----
@@ -321,24 +566,74 @@ public partial class GameManager : Node
         EmitSignal(SignalName.MatchWon, peerId);
     }
 
-    private void AssignAppearance(int peerId)
+    /// <summary>
+    /// Server only. Deal a peer its car — its own picks where a preference is known, random
+    /// where it is not. Model and antenna are taken as asked; the colour goes through
+    /// <see cref="TakeColour"/>, which only grants a pick that is still free.
+    /// </summary>
+    private void AssignAppearance(int peerId, RacerAppearance? preference = null)
     {
         if (Appearances.ContainsKey(peerId))
             return;
 
-        // Model with replacement, colour without: three models cannot cover seven people, but
-        // the colours can, and the colour is the half that has to be unique.
-        var appearance = new RacerAppearance(GD.RandRange(0, CarVariants.All.Count - 1), TakeColour());
+        // Model with replacement, colour without: models may repeat across the lobby, but
+        // the colours cannot, and the colour is the half that has to be unique.
+        int variant = preference is { } p
+            ? Mathf.PosMod(p.VariantIndex, CarVariants.All.Count)
+            : GD.RandRange(0, CarVariants.All.Count - 1);
+        int antenna = Mathf.PosMod(preference?.AntennaSpot ?? CarVariants.DefaultAntennaSpot,
+                                   CarVariants.AntennaSpots.Length);
+
+        var appearance = new RacerAppearance(variant,
+            TakeColour(preference?.ColourIndex ?? RacerAppearance.NoColour), antenna);
         Appearances[peerId] = appearance;
 
         GD.Print($"[GameManager] Peer {peerId} gets {CarVariants.At(appearance.VariantIndex).Name} " +
                  $"in {appearance.ColourName}.");
 
-        Rpc(MethodName.NotifyAppearanceAssigned, peerId, appearance.VariantIndex, appearance.ColourIndex);
-        NotifyAppearanceAssigned(peerId, appearance.VariantIndex, appearance.ColourIndex);
+        Rpc(MethodName.NotifyAppearanceAssigned, peerId,
+            appearance.VariantIndex, appearance.ColourIndex, appearance.AntennaSpot);
+        NotifyAppearanceAssigned(peerId,
+            appearance.VariantIndex, appearance.ColourIndex, appearance.AntennaSpot);
     }
 
-    private int TakeColour()
+    /// <summary>Call once connected. The host's pick is applied when its server comes up; a
+    /// client sends its pick to the server, the way <see cref="PublishLocalName"/> does.</summary>
+    public void PublishLocalPreference()
+    {
+        if (!NetworkManager.Instance.IsNetworked || NetworkManager.Instance.IsHost)
+            return;
+
+        RacerAppearance p = LocalPreference;
+        RpcId(1, MethodName.ServerRequestAppearance, p.VariantIndex, p.ColourIndex, p.AntennaSpot);
+    }
+
+    [Rpc(MultiplayerApi.RpcMode.AnyPeer, CallLocal = false, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    private void ServerRequestAppearance(int variant, int colour, int antenna)
+    {
+        int peerId = Multiplayer.GetRemoteSenderId();
+        if (!NetworkManager.Instance.IsHost)
+            return;
+
+        // The peer was dealt a random hand the moment it connected; this is its actual pick
+        // arriving, so re-deal. Indices are sanitised here, on the authority, because they came
+        // from a client — same treatment its name gets.
+        if (Appearances.Remove(peerId, out RacerAppearance dealt))
+            _freeColours.Add(dealt.ColourIndex);
+
+        int wantedColour = colour == RacerAppearance.NoColour
+            ? RacerAppearance.NoColour
+            : Mathf.PosMod(colour, CarVariants.Palette.Length);
+
+        AssignAppearance(peerId, new RacerAppearance(variant, wantedColour, antenna));
+    }
+
+    /// <summary>
+    /// Take a colour from the pool: the asked-for one if it is still free, any free one
+    /// otherwise. Asking for a colour somebody is wearing quietly gets you a different one —
+    /// first to join keeps it, because the colour is an identity and identities don't transfer.
+    /// </summary>
+    private int TakeColour(int preferred)
     {
         // NetworkManager.MaxPlayers is set so this cannot happen. Saying so anyway, because a
         // pool that runs dry silently hands two people the same identity.
@@ -348,6 +643,9 @@ public partial class GameManager : Node
             return GD.RandRange(0, CarVariants.Palette.Length - 1);
         }
 
+        if (preferred != RacerAppearance.NoColour && _freeColours.Remove(preferred))
+            return preferred;
+
         int index = GD.RandRange(0, _freeColours.Count - 1);
         int colour = _freeColours[index];
         _freeColours.RemoveAt(index);
@@ -355,15 +653,25 @@ public partial class GameManager : Node
     }
 
     [Rpc(MultiplayerApi.RpcMode.Authority, CallLocal = false, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
-    private void NotifyAppearanceAssigned(int peerId, int variant, int colour)
+    private void NotifyAppearanceAssigned(int peerId, int variant, int colour, int antenna)
     {
-        Appearances[peerId] = new RacerAppearance(variant, colour);
-        EmitSignal(SignalName.AppearanceAssigned, peerId, variant, colour);
+        Appearances[peerId] = new RacerAppearance(variant, colour, antenna);
+        EmitSignal(SignalName.AppearanceAssigned, peerId, variant, colour, antenna);
     }
 
-    /// <summary>What a peer's car looks like, or the stock paint if nobody has dealt them one.</summary>
-    public RacerAppearance AppearanceOf(int peerId) =>
-        Appearances.TryGetValue(peerId, out RacerAppearance a) ? a : RacerAppearance.Unassigned;
+    /// <summary>
+    /// What a peer's car looks like. Solo there is no session to deal anything, so your own car
+    /// wears your menu picks directly; anyone genuinely unknown gets the stock car.
+    /// </summary>
+    public RacerAppearance AppearanceOf(int peerId)
+    {
+        if (Appearances.TryGetValue(peerId, out RacerAppearance a))
+            return a;
+
+        return !NetworkManager.Instance.IsNetworked && peerId == Multiplayer.GetUniqueId()
+            ? LocalPreference
+            : RacerAppearance.Unassigned;
+    }
 
     // ---- Names ----
     //
@@ -428,18 +736,33 @@ public partial class GameManager : Node
     {
         foreach (string arg in OS.GetCmdlineUserArgs())
         {
-            if (!arg.StartsWith("--role=", System.StringComparison.OrdinalIgnoreCase))
-                continue;
+            if (arg.StartsWith("--role=", System.StringComparison.OrdinalIgnoreCase))
+            {
+                string value = arg["--role=".Length..];
+                if (value.Equals("trackmaster", System.StringComparison.OrdinalIgnoreCase))
+                    SoloRole = PlayerRole.TrackMaster;
+                else if (value.Equals("racer", System.StringComparison.OrdinalIgnoreCase))
+                    SoloRole = PlayerRole.Racer;
+                else
+                    GD.PushWarning($"[GameManager] Unknown --role value '{value}'. Use trackmaster or racer.");
 
-            string value = arg["--role=".Length..];
-            if (value.Equals("trackmaster", System.StringComparison.OrdinalIgnoreCase))
-                SoloRole = PlayerRole.TrackMaster;
-            else if (value.Equals("racer", System.StringComparison.OrdinalIgnoreCase))
-                SoloRole = PlayerRole.Racer;
-            else
-                GD.PushWarning($"[GameManager] Unknown --role value '{value}'. Use trackmaster or racer.");
+                GD.Print($"[GameManager] Solo role set from command line: {SoloRole}.");
+            }
 
-            GD.Print($"[GameManager] Solo role set from command line: {SoloRole}.");
+            // The same door for the mode, so a solo Sentry build can be opened straight from an
+            // editor run: godot res://scenes/Game.tscn -- --role=trackmaster --mode=sentry
+            if (arg.StartsWith("--mode=", System.StringComparison.OrdinalIgnoreCase))
+            {
+                string value = arg["--mode=".Length..];
+                if (value.Equals("sentry", System.StringComparison.OrdinalIgnoreCase))
+                    Mode = GameMode.Sentry;
+                else if (value.Equals("livebuild", System.StringComparison.OrdinalIgnoreCase))
+                    Mode = GameMode.LiveBuild;
+                else
+                    GD.PushWarning($"[GameManager] Unknown --mode value '{value}'. Use sentry or livebuild.");
+
+                GD.Print($"[GameManager] Game mode set from command line: {Mode}.");
+            }
         }
     }
 
@@ -503,6 +826,12 @@ public partial class GameManager : Node
         TrackMasterPeerId = 0;
         RoundNumber = 0;
         WinnerPeerId = 0;
+
+        // A Sentry match that ends mid-phase must not leave the phase (or its clock) running
+        // into the lobby — the next match checks Phase == None before it will open a build.
+        SetProcess(false);
+        if (Phase != MatchPhase.None)
+            SetPhase(MatchPhase.None, 0.0f);
 
         GD.Print("[GameManager] Match ended; returning to the lobby.");
         SetState(GameState.Lobby);

@@ -18,6 +18,7 @@
 [ext_resource type="PackedScene" path="res://scenes/ui/PauseMenu.tscn" id="16_pause"]
 [ext_resource type="Script" path="res://scripts/ui/Speedometer.cs" id="17_speedo"]
 [ext_resource type="Script" path="res://scripts/ui/NitroBar.cs" id="18_nitro"]
+[ext_resource type="Script" path="res://scripts/ui/RallyCopilot.cs" id="19_copilot"]
 
 [sub_resource type="Environment" id="Env"]
 background_mode = 2
@@ -149,6 +150,17 @@ mouse_filter = 2
 script = ExtResource("15_feed")
 Track = NodePath("../../Track")
 TopOffset = 440
+
+[node name="RallyCopilot" type="Control" parent="HUD" node_paths=PackedStringArray("Track")]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("19_copilot")
+Track = NodePath("../../Track")
 
 [node name="TilePalette" type="Control" parent="HUD" unique_id=1214353398 node_paths=PackedStringArray("Builder")]
 visible = false

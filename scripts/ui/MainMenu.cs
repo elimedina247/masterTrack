@@ -30,6 +30,7 @@ public partial class MainMenu : Control
     private Button _joinButton = null!;
     private Button _soloButton = null!;
     private Button _buildButton = null!;
+    private Button _sentryButton = null!;
     private Label _statusLabel = null!;
     private CheckBox _steamCheck = null!;
     private Label _steamIdLabel = null!;
@@ -56,6 +57,11 @@ public partial class MainMenu : Control
         _joinButton.Pressed += OnJoinPressed;
         _soloButton.Pressed += OnSoloPressed;
         _buildButton.Pressed += OnBuildPressed;
+        _sentryButton = GetNode<Button>("%SentryButton");
+        _sentryButton.Pressed += OnSentryPressed;
+
+        // The garage pane on the right — see MainMenu.Showcase.cs.
+        SetupShowcase();
 
         // A fresh menu means no active session; the local player owns the mouse.
         Input.MouseMode = Input.MouseModeEnum.Visible;
@@ -84,6 +90,8 @@ public partial class MainMenu : Control
         net.ConnectedToServer -= OnConnectedToServer;
         net.ConnectionFailed -= OnConnectionFailed;
         net.ServerDisconnected -= OnServerDisconnected;
+
+        TearDownShowcase();
     }
 
     /// <summary>
@@ -219,10 +227,22 @@ public partial class MainMenu : Control
         GetTree().ChangeSceneToFile(LobbyScenePath);
     }
 
-    /// <summary>Jump straight to the Track Master's board, so the builder can be worked on alone.</summary>
+    /// <summary>Jump straight to the Track Master's board, so the builder can be worked on alone.
+    /// Sets the mode explicitly: the manager is an autoload, so a Sentry run earlier in the same
+    /// session would otherwise leak its mode into this one.</summary>
     private void OnBuildPressed()
     {
         GameManager.Instance.SoloRole = PlayerRole.TrackMaster;
+        GameManager.Instance.SetGameMode(GameMode.LiveBuild);
+        GetTree().ChangeSceneToFile(GameScenePath);
+    }
+
+    /// <summary>The same solo board, but the whole Sentry match: build against the clock, press
+    /// Start the race, and try the weapons on the unowned pad car.</summary>
+    private void OnSentryPressed()
+    {
+        GameManager.Instance.SoloRole = PlayerRole.TrackMaster;
+        GameManager.Instance.SetGameMode(GameMode.Sentry);
         GetTree().ChangeSceneToFile(GameScenePath);
     }
 
@@ -237,8 +257,11 @@ public partial class MainMenu : Control
 
     private void OnConnectedToServer()
     {
-        // Before the scene change, so it is on its way while the lobby is still loading.
+        // Before the scene change, so both are on their way while the lobby is still loading —
+        // the garage pick in particular has to beat this client's scene-ready report to the
+        // server, or the car would spawn wearing the random deal instead.
         GameManager.Instance.PublishLocalName();
+        GameManager.Instance.PublishLocalPreference();
         GetTree().ChangeSceneToFile(LobbyScenePath);
     }
 
@@ -264,6 +287,7 @@ public partial class MainMenu : Control
         _joinButton.Disabled = true;
         _soloButton.Disabled = true;
         _buildButton.Disabled = true;
+        _sentryButton.Disabled = true;
     }
 
     private void UnlockLobbyButtons()
@@ -272,5 +296,6 @@ public partial class MainMenu : Control
         _joinButton.Disabled = false;
         _soloButton.Disabled = false;
         _buildButton.Disabled = false;
+        _sentryButton.Disabled = false;
     }
 }

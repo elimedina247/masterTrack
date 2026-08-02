@@ -4,7 +4,7 @@ using System.Collections.Generic;
 namespace MasterTrack.Racer;
 
 /// <summary>
-/// The three car models and the seven colours they come in — everything that decides what a
+/// The car models and the seven colours they come in — everything that decides what a
 /// player's car <i>looks</i> like, and nothing about how it drives.
 ///
 /// Kept in one place because three separate things read it: the car builds itself from it, the
@@ -38,6 +38,21 @@ public static class CarVariants
         new Variant("B_Bubble", $"{BodyDir}B_Bubble_Body.fbx",
                     $"{RimDir}B_Bubble_Rim_L.fbx", $"{RimDir}B_Bubble_Rim_R.fbx", 0.30f, 0.30f),
         new Variant("C_Cartoon", $"{BodyDir}C_Cartoon_Body.fbx",
+                    $"{RimDir}C_Cartoon_Rim_L.fbx", $"{RimDir}C_Cartoon_Rim_R.fbx", 0.24f, 0.36f),
+        // D is the Cartoon body with a shifted canopy; its wheels are the Cartoon's, so it
+        // borrows those rims. E/F/G share the hachi wheelbase and one rim pair the same way.
+        new Variant("D_Cartoon", $"{BodyDir}D_Cartoon_Body.fbx",
+                    $"{RimDir}C_Cartoon_Rim_L.fbx", $"{RimDir}C_Cartoon_Rim_R.fbx", 0.24f, 0.36f),
+        new Variant("E_Hachi", $"{BodyDir}E_Hachi_Body.fbx",
+                    $"{RimDir}E_Hachi_Rim_L.fbx", $"{RimDir}E_Hachi_Rim_R.fbx", 0.29f, 0.29f),
+        new Variant("F_Hachi", $"{BodyDir}F_Hachi_Body.fbx",
+                    $"{RimDir}E_Hachi_Rim_L.fbx", $"{RimDir}E_Hachi_Rim_R.fbx", 0.29f, 0.29f),
+        new Variant("G_Panda", $"{BodyDir}G_Panda_Body.fbx",
+                    $"{RimDir}E_Hachi_Rim_L.fbx", $"{RimDir}E_Hachi_Rim_R.fbx", 0.29f, 0.29f),
+        // H is a hand-built hatchback: C_Cartoon's shell reworked with a longer nose, a fastback
+        // cabin and a low wide wing. Its wheels are untouched from C, so it takes C's rims and
+        // C's staggered radii — see tools/export_car_variant.py for how it leaves the blend.
+        new Variant("H_Hatch", $"{BodyDir}H_Hatch_Body.fbx",
                     $"{RimDir}C_Cartoon_Rim_L.fbx", $"{RimDir}C_Cartoon_Rim_R.fbx", 0.24f, 0.36f),
     };
 
@@ -73,9 +88,29 @@ public static class CarVariants
     /// <summary>The variant <c>Racer.tscn</c> is authored with, and what an unassigned car keeps.</summary>
     public const int DefaultVariantIndex = 2;
 
+    /// <summary>
+    /// Where the whip antenna may be mounted, in <c>BodyRig</c> space (right is +X, forward is
+    /// -Z). Back centre is where <c>Racer.tscn</c> authors it; the other two land on the roof and
+    /// the right-hand hood corner. One set of points for every body — the shells differ enough
+    /// that these are compromises, tuned by eye rather than measured off any one model.
+    /// </summary>
+    public static readonly Vector3[] AntennaSpots =
+    {
+        new(0.0f, 0.85f, 1.1f),   // back centre — the classic RC look
+        new(0.0f, 0.95f, 0.0f),   // centre of the roof
+        new(0.45f, 0.75f, -0.9f), // front right, on the hood corner
+    };
+
+    public static readonly string[] AntennaSpotNames = { "Back", "Center", "Front Right" };
+
+    /// <summary>Matches where <c>Racer.tscn</c> places the antenna, so "no choice" changes nothing.</summary>
+    public const int DefaultAntennaSpot = 0;
+
     public static Variant At(int index) => All[Mathf.PosMod(index, All.Count)];
 
     public static Color ColourAt(int index) => Palette[Mathf.PosMod(index, Palette.Length)];
 
     public static string ColourNameAt(int index) => PaletteNames[Mathf.PosMod(index, PaletteNames.Length)];
+
+    public static Vector3 AntennaSpotAt(int index) => AntennaSpots[Mathf.PosMod(index, AntennaSpots.Length)];
 }

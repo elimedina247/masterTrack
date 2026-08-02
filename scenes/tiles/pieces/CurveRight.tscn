@@ -1,7 +1,7 @@
-[gd_scene format=4]
+[gd_scene format=4 uid="uid://dfkdjg56m25t5"]
 
-[ext_resource type="Script" path="res://scripts/tiles/tool/TrackPiece.cs" id="1_piece"]
-[ext_resource type="Script" path="res://scripts/tiles/tool/BankedRoad.cs" id="2_bank"]
+[ext_resource type="Script" uid="uid://crov4aijvusum" path="res://scripts/tiles/tool/TrackPiece.cs" id="1_piece"]
+[ext_resource type="Script" uid="uid://ey6sp1p7l4w8" path="res://scripts/tiles/tool/BankedRoad.cs" id="2_bank"]
 [ext_resource type="Material" path="res://resources/tiles/banked_road.tres" id="3_road"]
 
 [sub_resource type="Curve3D" id="Curve3D_dd5c5"]
@@ -55,10 +55,11 @@ use_collision = true
 script = ExtResource("2_bank")
 FlatFraction = 0.1
 MaxBankDegrees = 75.0
+SampleInterval = 1.0
 SurfaceMaterial = ExtResource("3_road")
 
-[node name="BakedMesh" type="MeshInstance3D" parent="." unique_id=672438405]
+[node name="BakedMesh" type="MeshInstance3D" parent="." unique_id=2101932819]
 mesh = SubResource("ArrayMesh_dd5c5")
 
-[node name="BakedCollision" type="CollisionShape3D" parent="." unique_id=1804904167]
+[node name="BakedCollision" type="CollisionShape3D" parent="." unique_id=88904324]
 shape = SubResource("ConcavePolygonShape3D_7tbaf")

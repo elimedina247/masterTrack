@@ -1,6 +1,7 @@
 using Godot;
 using MasterTrack.Networking;
 using MasterTrack.Racer;
+using MasterTrack.Sentry;
 using MasterTrack.Tiles;
 using MasterTrack.TrackMaster;
 using MasterTrack.UI;
@@ -31,9 +32,26 @@ public partial class Game : Node3D
     private VehicleHud? _hud;
     private VehicleDebugOverlay? _debug;
     private TilePalette? _palette;
+    private RallyCopilot? _copilot;
     private Label? _waiting;
 
     private PlayerRole _localRole;
+
+    // ---- Sentry mode furniture. All null in Live Build, and only ever some of them at once:
+    //      the spectator camera is a racer thing, the sentry bar a builder thing. ----
+
+    private SentryManager? _sentry;
+    private BuildSpectatorCamera? _spectator;
+    private BuildPhasePanel? _buildPanel;
+    private SentryBar? _sentryBar;
+
+    /// <summary>Deal clock during a Sentry build, in seconds. Faster than a live match's: there
+    /// is no race to pace the track against, only people waiting for it to be finished.</summary>
+    private const float SentryBuildDealInterval = 1.5f;
+
+    private static bool SentryMode => GameManager.Instance.Mode == GameMode.Sentry;
+
+    private bool IsServer => !NetworkManager.Instance.IsNetworked || Multiplayer.IsServer();
 
     public override void _Ready()
     {
@@ -43,6 +61,7 @@ public partial class Game : Node3D
         _hud = GetNodeOrNull<VehicleHud>("HUD/VehicleHud");
         _debug = GetNodeOrNull<VehicleDebugOverlay>("HUD/VehicleDebug");
         _palette = GetNodeOrNull<TilePalette>("HUD/TilePalette");
+        _copilot = GetNodeOrNull<RallyCopilot>("HUD/RallyCopilot");
         _waiting = GetNodeOrNull<Label>("HUD/WaitingLabel");
         if (_waiting != null)
             _waiting.Visible = false;
@@ -60,6 +79,24 @@ public partial class Game : Node3D
 
         ApplyRole();
 
+        if (SentryMode)
+        {
+            // The whole track gets built and then stood on: this mode's pressure is the sentry's
+            // points, not the road crumbling away. Set before any tile can land.
+            _track.TrackTrailLength = 0;
+
+            // The RPC endpoint for sentry actions. Added in _Ready on every peer under the same
+            // name, which is what gives the RPCs a matching path everywhere.
+            _sentry = new SentryManager { Name = "SentryManager" };
+            AddChild(_sentry);
+            _sentry.DebuffApplied += OnDebuffApplied;
+
+            GameManager.Instance.MatchPhaseChanged += OnMatchPhaseChanged;
+
+            // The spectator camera has done its job the moment this machine's car exists.
+            _arena.LocalCarSpawned += OnLocalCarSpawned;
+        }
+
         // Pay every piece's one-time costs now, while the scene is still settling, rather than
         // the first time the Track Master plays each card mid-race.
         WarmPieceCaches();
@@ -74,7 +111,13 @@ public partial class Game : Node3D
 
         if (!networked)
         {
-            SpawnSolo();
+            // A solo Sentry build (--role=trackmaster --mode=sentry) runs the phases for real:
+            // no car until the build is done. Any other solo combination plays as it always has.
+            if (SentryMode && _localRole == PlayerRole.TrackMaster)
+                GameManager.Instance.BeginBuildPhase();
+            else
+                SpawnSolo();
+
             // One frame later, report the final render state so we can see what happened.
             CallDeferred(nameof(ReportRenderState));
             return;
@@ -109,6 +152,11 @@ public partial class Game : Node3D
         GameManager.Instance.SceneReadyProgress -= OnSceneReadyProgress;
         GameManager.Instance.GameStateChanged -= OnGameStateChanged;
         GameManager.Instance.MatchWon -= OnMatchWon;
+        GameManager.Instance.MatchPhaseChanged -= OnMatchPhaseChanged;
+
+        // The phase describes this match, and this match is over on this machine whatever the
+        // reason — see ResetPhase for why it cannot be left to the graceful path alone.
+        GameManager.Instance.ResetPhase();
     }
 
     /// <summary>
@@ -172,11 +220,147 @@ public partial class Game : Node3D
         _waiting.Visible = true;
     }
 
-    /// <summary>Every peer is in the scene, so spawned cars will reach all of them.</summary>
+    /// <summary>
+    /// Every peer is in the scene, so nodes spawned from here on will reach all of them. In Live
+    /// Build that means cars, now; in Sentry mode it means the build phase can open — the cars
+    /// wait until it closes.
+    /// </summary>
     private void OnAllPeersReady()
     {
         GameManager.Instance.AllPeersReady -= OnAllPeersReady;
-        CallDeferred(nameof(SpawnNetworkedRacers));
+
+        if (SentryMode)
+            GameManager.Instance.BeginBuildPhase();
+        else
+            CallDeferred(nameof(SpawnNetworkedRacers));
+    }
+
+    // ---- Sentry mode: the two phases ----
+
+    private void OnMatchPhaseChanged(int phase, float seconds)
+    {
+        switch ((MatchPhase)phase)
+        {
+            case MatchPhase.Building:
+                EnterBuildPhase();
+                break;
+
+            case MatchPhase.Racing:
+                EnterRacePhase();
+                break;
+        }
+    }
+
+    /// <summary>
+    /// The track gets built while everyone watches. The builder's board is already up (that is
+    /// what <see cref="ApplyRole"/> does); this adds the countdown overlay for both roles, the
+    /// eagle-eye camera for the racers, and a quicker deal for the builder.
+    /// </summary>
+    private void EnterBuildPhase()
+    {
+        bool isBuilder = _localRole == PlayerRole.TrackMaster;
+
+        _buildPanel = new BuildPhasePanel { Name = "BuildPhasePanel", ShowDoneButton = isBuilder };
+        GetNode("HUD").AddChild(_buildPanel);
+
+        if (isBuilder)
+        {
+            _builder.Hand.DealInterval = SentryBuildDealInterval;
+            return;
+        }
+
+        _spectator = new BuildSpectatorCamera { Name = "BuildSpectator", Track = _track };
+        AddChild(_spectator);
+    }
+
+    /// <summary>
+    /// The build is over: the track locks as it stands, the cars arrive, and the builder turns
+    /// sentry. Runs on every peer; the spawn itself is the server's alone, as always.
+    /// </summary>
+    private void EnterRacePhase()
+    {
+        _buildPanel?.QueueFree();
+        _buildPanel = null;
+
+        // Every peer locks its own copy off the same broadcast — the bar at the head is the
+        // finish now, and the server's placement check starts refusing tiles by itself.
+        _track.LockTrack();
+
+        if (IsServer)
+        {
+            if (NetworkManager.Instance.IsNetworked)
+                SpawnNetworkedRacers();
+            else
+                SpawnSolo();
+        }
+
+        if (_localRole != PlayerRole.TrackMaster || _sentry == null)
+            return;
+
+        // The hand is history — the sentry bar takes the palette's spot on the screen.
+        _palette?.Hide();
+        _builder.ClearPreview();
+
+        _builder.EnableSentry(_sentry);
+        _sentryBar = new SentryBar { Name = "SentryBar", Board = _builder, Sentry = _sentry };
+        GetNode("HUD").AddChild(_sentryBar);
+    }
+
+    /// <summary>This machine's car exists; the build-phase spectator camera is done.</summary>
+    private void OnLocalCarSpawned(RacerController car)
+    {
+        _spectator?.QueueFree();
+        _spectator = null;
+    }
+
+    /// <summary>
+    /// A debuff landed on somebody. If that somebody is this machine's player — or everybody,
+    /// which a peer id of 0 means — shout it through the copilot, the voice that already warns
+    /// about the road. The delayed debuffs shout <i>before</i> they hit: the broadcast lands at
+    /// the start of the fuse, so "INCOMING" plus the aura is the reaction window, and a name for
+    /// what follows is the difference between "the sentry got me" and "the game broke".
+    /// </summary>
+    private void OnDebuffApplied(int peerId, int kind)
+    {
+        if (peerId != 0 && peerId != Multiplayer.GetUniqueId())
+            return;
+
+        // The winner banner owns the screen once a match is decided.
+        if (GameManager.Instance.WinnerPeerId != 0)
+            return;
+
+        var action = (SentryActionKind)kind;
+        bool fused = action is SentryActionKind.RunawayBooster
+                     or SentryActionKind.CrossedWires
+                     or SentryActionKind.MoonGravity;
+
+        string name = SentryActions.NameOf(action);
+        string shout = fused
+            ? $"INCOMING: {name.TrimEnd('!').ToUpperInvariant()}!"
+            : name;
+
+        if (_copilot != null)
+        {
+            // Clip key is the enum name — drop e.g. crossedwires.wav into the callout folder
+            // and the warning gains a voice.
+            _copilot.CallOut(shout,
+                fused ? new Color(1.0f, 0.25f, 0.2f) : new Color(1.0f, 0.6f, 0.1f),
+                action.ToString());
+            return;
+        }
+
+        if (_waiting == null)
+            return;
+
+        _waiting.Text = shout;
+        _waiting.Visible = true;
+
+        GetTree().CreateTimer(2.5f).Timeout += () =>
+        {
+            if (IsInstanceValid(_waiting) && _waiting.Text == shout
+                && GameManager.Instance.WinnerPeerId == 0)
+                _waiting.Visible = false;
+        };
     }
 
     /// <summary>
@@ -246,6 +430,15 @@ public partial class Game : Node3D
     {
         if (NetworkManager.Instance.IsNetworked && !Multiplayer.IsServer())
             return;
+
+        // A Sentry build has nobody on the road to warn. What a placement can do instead is
+        // finish the build: the budget's last tile is the builder's Done button pressed for them.
+        if (SentryMode)
+        {
+            if (GameManager.Instance.Phase == MatchPhase.Building && _track.AtTileLimit)
+                GameManager.Instance.BeginRacePhase();
+            return;
+        }
 
         int warnIndex = trackIndex - RacerController.WarningLookahead;
         if (warnIndex < 0)
