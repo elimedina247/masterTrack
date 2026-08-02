@@ -104,11 +104,16 @@ public partial class PhysicsTestArea : Node3D
 			return;
 		}
 
+		// Every peer sets its own car up for the pad, whichever machine spawned it. The host is
+		// the only one that ever calls Spawn, so hooking the spawn itself would leave a client's
+		// car — which arrives by replication — never adopted, and its reset key never handing
+		// nitro back.
+		_arena.LocalCarSpawned += AdoptLocalCar;
+
 		if (!NetworkManager.Instance.IsNetworked)
 		{
 			// Solo Test Drive: one car, ours, in the middle of the pad.
 			_arena.Spawn(Multiplayer.GetUniqueId(), 0, 1);
-			AdoptLocalCar();
 			return;
 		}
 
@@ -147,7 +152,6 @@ public partial class PhysicsTestArea : Node3D
 
 		_slots[peerId] = NextFreeSlot();
 		_arena.Spawn(peerId, _slots[peerId], RingSlots);
-		AdoptLocalCar();
 
 		// Placements are broadcast as they happen, so a peer that arrived after the track was
 		// built has seen none of them. Without this they get a bare start tile to drive through

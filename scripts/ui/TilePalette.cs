@@ -49,12 +49,17 @@ public partial class TilePalette : Control
     {
         public required PanelContainer Card { get; init; }
         public required ColorRect Swatch { get; init; }
+        public required TextureRect Thumb { get; init; }
         public required ProgressBar Cooldown { get; init; }
         public required Label Name { get; init; }
         public required Label Hazard { get; init; }
     }
 
     private readonly List<SlotView> _slots = new();
+
+    /// <summary>Each catalog tile's rendered portrait, by catalog index, filled in as
+    /// <see cref="TileThumbnails"/> works through the pieces.</summary>
+    private readonly Dictionary<int, Texture2D> _thumbs = new();
     private Label _status = null!;
     private Button _cameraButton = null!;
 
@@ -81,6 +86,10 @@ public partial class TilePalette : Control
     private static readonly Color CardHover = new(0.20f, 0.22f, 0.27f, 0.95f);
     private static readonly Color EmptySwatch = new(0.09f, 0.10f, 0.12f, 0.9f);
 
+    /// <summary>What sits behind a card's portrait: near the card colour but a step darker, so
+    /// the model reads as an object on the card rather than floating in it.</summary>
+    private static readonly Color ThumbBackdrop = new(0.07f, 0.08f, 0.10f, 0.95f);
+
     private static readonly Color StatusIdle = new(0.86f, 0.88f, 0.92f);
     private static readonly Color StatusValid = new(0.55f, 0.95f, 0.60f);
     private static readonly Color StatusInvalid = new(0.95f, 0.60f, 0.55f);
@@ -94,6 +103,16 @@ public partial class TilePalette : Control
         BuildCameraToggle();
         BuildRemainingCounter();
         BuildTray();
+
+        // The cards come up wearing their accent swatches and trade them for these portraits as
+        // each one is rendered — the tray never waits on the camera.
+        var thumbnails = new TileThumbnails();
+        AddChild(thumbnails);
+        thumbnails.RenderCatalog((index, texture) =>
+        {
+            _thumbs[index] = texture;
+            RefreshSlots();
+        });
 
         if (Builder == null)
         {
@@ -119,6 +138,10 @@ public partial class TilePalette : Control
     /// </summary>
     public override void _ExitTree()
     {
+        // Dropped eagerly rather than left to the GC: a wrapper for an engine resource still
+        // alive at .NET shutdown is this project's known exit crash.
+        _thumbs.Clear();
+
         // A racer's copy of this scene frees the builder and the tray in the same frame, and which
         // of the two goes first is not ours to know — so the builder has to be checked for as
         // carefully as the track it is being asked about.
@@ -233,10 +256,14 @@ public partial class TilePalette : Control
         AddChild(_cameraButton);
     }
 
-    /// <summary>Height of one card, and so of one row of the tray, in pixels.</summary>
-    private const int CardHeight = 96;
+    /// <summary>Height of one card, and so of one row of the tray, in pixels. Grown from 96 when
+    /// the swatch became a portrait — a 3D model needs more room than a stripe of colour.</summary>
+    private const int CardHeight = 108;
 
     private const int CardWidth = 132;
+
+    /// <summary>Height of the picture area at the top of a card, in pixels.</summary>
+    private const int ThumbHeight = 52;
 
     private void BuildTray()
     {
@@ -316,16 +343,27 @@ public partial class TilePalette : Control
 
         var swatch = new ColorRect
         {
-            CustomMinimumSize = new Vector2(0, 40),
+            CustomMinimumSize = new Vector2(0, ThumbHeight),
             MouseFilter = MouseFilterEnum.Ignore,
         };
         box.AddChild(swatch);
 
-        // Sits where the swatch does, so a slot either shows a tile's colour or the wait for
+        // The tile's portrait, over the swatch: the shot is transparent, so the swatch is its
+        // backdrop — and until the shot is rendered it is the whole picture, as it always was.
+        var thumb = new TextureRect
+        {
+            ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
+            StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered,
+            MouseFilter = MouseFilterEnum.Ignore,
+        };
+        thumb.SetAnchorsPreset(LayoutPreset.FullRect);
+        swatch.AddChild(thumb);
+
+        // Sits where the swatch does, so a slot either shows a tile's picture or the wait for
         // one — never both, and never a jump in the row's height as it switches.
         var cooldown = new ProgressBar
         {
-            CustomMinimumSize = new Vector2(0, 40),
+            CustomMinimumSize = new Vector2(0, ThumbHeight),
             MinValue = 0.0,
             MaxValue = 1.0,
             ShowPercentage = false,
@@ -357,6 +395,7 @@ public partial class TilePalette : Control
         {
             Card = card,
             Swatch = swatch,
+            Thumb = thumb,
             Cooldown = cooldown,
             Name = name,
             Hazard = hazard,
@@ -379,7 +418,8 @@ public partial class TilePalette : Control
         for (int i = 0; i < _slots.Count; i++)
         {
             SlotView view = _slots[i];
-            TileDefinition? definition = TileCatalog.At(Builder.CatalogIndexAt(i));
+            int index = Builder.CatalogIndexAt(i);
+            TileDefinition? definition = TileCatalog.At(index);
 
             bool isCooldown = i == cooldownSlot;
             view.Cooldown.Visible = isCooldown;
@@ -387,7 +427,11 @@ public partial class TilePalette : Control
 
             if (definition != null)
             {
-                view.Swatch.Color = definition.Accent;
+                // The portrait when it has been rendered, the accent until then. Behind a
+                // portrait the swatch goes dark — it is a backdrop now, not the message.
+                bool hasShot = _thumbs.TryGetValue(index, out Texture2D? shot);
+                view.Thumb.Texture = hasShot ? shot : null;
+                view.Swatch.Color = hasShot ? ThumbBackdrop : definition.Accent;
                 view.Name.Text = definition.DisplayName;
                 view.Hazard.Text = definition.Hazard == TileHazard.Straight
                     ? "no hazard"
@@ -398,6 +442,7 @@ public partial class TilePalette : Control
 
             // Empty. The one at the end of the row is the tile being dealt; the rest are just
             // room the Track Master hasn't been given anything for yet.
+            view.Thumb.Texture = null;
             view.Swatch.Color = EmptySwatch;
             view.Name.Text = isCooldown ? "next tile" : "";
             view.Hazard.Text = "";

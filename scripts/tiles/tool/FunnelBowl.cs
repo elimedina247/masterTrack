@@ -50,16 +50,43 @@ public partial class FunnelBowl : CsgMesh3D
 	[Export(PropertyHint.Range, "1,3,0.05")]
 	public float ProfilePower { get; set; } = 1.8f;
 
+	/// <summary>
+	/// Swap the power-law funnel for the lower quarter of a sphere — the Globe of Death. The
+	/// wall arrives at dead vertical exactly at the rim, which no power ever reaches, so a rider
+	/// with the speed can circle level on the wall itself and everything slower spirals the
+	/// curve down to the hole. <see cref="RimHeight"/> and <see cref="ProfilePower"/> are
+	/// ignored: a sphere's bowl is as tall as its geometry says — the rim sits
+	/// <c>sqrt(RimRadius² − HoleRadius²)</c> above the hole lip. The shell offsets radially
+	/// from the sphere's centre rather than straight down, because a vertical wall dropped
+	/// vertically is a shell of zero thickness.
+	/// </summary>
+	[Export]
+	public bool Spherical { get; set; }
+
+	/// <summary>
+	/// Degrees the spherical wall continues past vertical — the Globe of Death's hood. The rim
+	/// curls inward over the wall by this much, so a rider fired in hot rides up into a ceiling
+	/// that returns them to the wall instead of a lip that lets them fly the bowl entirely.
+	/// Spherical only; the funnel profile has no vertical to pass.
+	/// </summary>
+	[Export(PropertyHint.Range, "0,60,1")]
+	public float RimOverhangDegrees { get; set; }
+
 	/// <summary>Shell thickness, straight down from the surface.</summary>
 	[Export(PropertyHint.Range, "0.5,10,0.1")]
 	public float Thickness { get; set; } = 1.8f;
 
-	/// <summary>Facets around the bowl. Enough that a car sweeping the wall never feels a joint.</summary>
-	[Export(PropertyHint.Range, "16,128,1")]
+	/// <summary>
+	/// Facets around the bowl. The budget that matters is scallop depth, not angle: the ground
+	/// rays ignore facet normals by design, so the ride only feels the sagitta —
+	/// <c>R·(1 − cos(180°/segments))</c>. Keep it under a couple of centimetres at the bowl's
+	/// radius and the suspension reads the wall as continuous.
+	/// </summary>
+	[Export(PropertyHint.Range, "16,256,1")]
 	public int RadialSegments { get; set; } = 64;
 
-	/// <summary>Rings from hole to rim.</summary>
-	[Export(PropertyHint.Range, "4,32,1")]
+	/// <summary>Rings from hole to rim. Same scallop budget as <see cref="RadialSegments"/>.</summary>
+	[Export(PropertyHint.Range, "4,64,1")]
 	public int ProfileSteps { get; set; } = 12;
 
 	[Export]
@@ -93,6 +120,8 @@ public partial class FunnelBowl : CsgMesh3D
 		hash.Add(HoleRadius);
 		hash.Add(HoleHeight);
 		hash.Add(ProfilePower);
+		hash.Add(Spherical);
+		hash.Add(RimOverhangDegrees);
 		hash.Add(Thickness);
 		hash.Add(RadialSegments);
 		hash.Add(ProfileSteps);
@@ -114,15 +143,46 @@ public partial class FunnelBowl : CsgMesh3D
 		var radius = new float[steps + 1];
 		var height = new float[steps + 1];
 
+		// The sphere's hole sits at this polar angle; stepping the profile by angle rather than
+		// radius keeps the facets even where the wall stands up.
+		float holeAngle = Mathf.Asin(Mathf.Clamp(HoleRadius / RimRadius, 0.0f, 1.0f));
+
 		for (var i = 0; i <= steps; i++)
 		{
 			float t = (float)i / steps;
-			radius[i] = Mathf.Lerp(HoleRadius, RimRadius, t);
-			height[i] = HoleHeight + (RimHeight - HoleHeight) * Mathf.Pow(t, ProfilePower);
+
+			if (Spherical)
+			{
+				float rimAngle = Mathf.Pi * 0.5f + Mathf.DegToRad(RimOverhangDegrees);
+				float angle = Mathf.Lerp(holeAngle, rimAngle, t);
+				radius[i] = RimRadius * Mathf.Sin(angle);
+				height[i] = HoleHeight + RimRadius * (Mathf.Cos(holeAngle) - Mathf.Cos(angle));
+			}
+			else
+			{
+				radius[i] = Mathf.Lerp(HoleRadius, RimRadius, t);
+				height[i] = HoleHeight + (RimHeight - HoleHeight) * Mathf.Pow(t, ProfilePower);
+			}
 		}
 
-		var triangles = new List<Vector3>();
+		var shell = new MeshBucket { Smooth = true, Material = SurfaceMaterial };
 		Vector3 drop = Vector3.Down * Thickness;
+
+		// The underside: straight down for the funnel, radially out from the sphere's centre for
+		// the globe — a vertical wall dropped vertically would be a zero-thickness shell.
+		var sphereCentre = new Vector3(0.0f, HoleHeight + RimRadius * Mathf.Cos(holeAngle), 0.0f);
+		float shellScale = (RimRadius + Thickness) / RimRadius;
+
+		Vector3 Outer(Vector3 point)
+			=> Spherical ? sphereCentre + (point - sphereCentre) * shellScale : point + drop;
+
+		// The color panels a road counts off in metres become pie wedges here: UV.x grows with
+		// the angle around the bowl, scaled so a whole even number of shader panels closes the
+		// circle — mid-bowl each wedge is about one panel long. Spinning through a funnel is
+		// exactly where the eye loses its bearings, and the wedges are the fix.
+		float midCircumference = Mathf.Tau * (HoleRadius + RimRadius) * 0.5f;
+		int wedges = Mathf.Max(2, 2 * Mathf.RoundToInt(midCircumference / 27.0f / 2.0f));
+		float panelSpan = wedges * 27.0f;
 
 		// Each direction is computed once and the last facet wraps back to spokes[0], so the
 		// closing seam reuses bit-identical floats. Computed fresh (cos of tau is a hair under
@@ -140,25 +200,34 @@ public partial class FunnelBowl : CsgMesh3D
 			Vector2 nearRing = spokes[s];
 			Vector2 farRing = spokes[(s + 1) % around];
 
+			// Not wrapped: the last facet's far edge is panelSpan, not zero, so the wedge
+			// pattern arrives back at the seam exactly where it left.
+			var nearUv = new Vector2(panelSpan * s / around, 0.0f);
+			var farUv = new Vector2(panelSpan * (s + 1) / around, 0.0f);
+
 			Vector3 At(int i, Vector2 ring)
 				=> new(radius[i] * ring.X, height[i], radius[i] * ring.Y);
 
 			for (var i = 0; i < steps; i++)
 			{
 				// Top surface, then the underside wound the other way.
-				SolidMesh.Quad(triangles, At(i, nearRing), At(i, farRing),
-							   At(i + 1, farRing), At(i + 1, nearRing));
-				SolidMesh.Quad(triangles, At(i, nearRing) + drop, At(i + 1, nearRing) + drop,
-							   At(i + 1, farRing) + drop, At(i, farRing) + drop);
+				SolidMesh.Quad(shell, At(i, nearRing), At(i, farRing),
+							   At(i + 1, farRing), At(i + 1, nearRing),
+							   nearUv, farUv, farUv, nearUv);
+				SolidMesh.Quad(shell, Outer(At(i, nearRing)), Outer(At(i + 1, nearRing)),
+							   Outer(At(i + 1, farRing)), Outer(At(i, farRing)),
+							   nearUv, nearUv, farUv, farUv);
 			}
 
 			// The rim's outer edge and the hole's inner lip close the shell into a solid ring.
-			SolidMesh.Quad(triangles, At(steps, nearRing), At(steps, farRing),
-						   At(steps, farRing) + drop, At(steps, nearRing) + drop);
-			SolidMesh.Quad(triangles, At(0, nearRing), At(0, nearRing) + drop,
-						   At(0, farRing) + drop, At(0, farRing));
+			SolidMesh.Quad(shell, At(steps, nearRing), At(steps, farRing),
+						   Outer(At(steps, farRing)), Outer(At(steps, nearRing)),
+						   nearUv, farUv, farUv, nearUv);
+			SolidMesh.Quad(shell, At(0, nearRing), Outer(At(0, nearRing)),
+						   Outer(At(0, farRing)), At(0, farRing),
+						   nearUv, nearUv, farUv, farUv);
 		}
 
-		Mesh = SolidMesh.Commit(triangles, SurfaceMaterial);
+		Mesh = SolidMesh.Commit(new List<MeshBucket> { shell });
 	}
 }

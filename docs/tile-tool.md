@@ -151,17 +151,25 @@ Color means change, and it is applied **where the road asks for it, not per tile
 is grey at rest — entries, exits, flat lanes — so the racers follow grey and read color as a
 promise about the stretch it is painted on:
 
-- **Blue is bank wall.** `BankedRoad` writes each surface point's sideways lean into UV.x as it
+- **Blue is bank wall.** `BankedRoad` writes each surface point's sideways lean into UV.y as it
   sweeps, and `banked_road.tres` switches the shader's `use_uv_turn` on to paint the turning
   blue from that channel — leaning past ~8°, grown to full over a few degrees more, per pixel.
   So an S-bend is grey through its entry, exit and inner lane with exactly its outer walls in
   blue, the boundary is one clean contour rather than a facet staircase, and the blue grows and
   fades with the wall because it *is* the wall. The bowl and the tubes wear blue whole — those
   nodes are the feature head to toe.
-- **Green is pitch**, painted per-pixel by the shared `road_surface.gdshader`: any driveable
-  face pitched past ~8° blends to the slope color by ~14°. A ramp's incline is green while its
-  approach and run-off are grey, on every piece, with nothing to author — the pitch is read off
-  the surface normal.
+- **Green is climb**, painted per-pixel by the shared `road_surface.gdshader`: a driveable
+  face pitched past ~8° *along the direction of travel* blends to the slope color by ~14°. A
+  ramp's incline is green while its approach and run-off are grey, on every piece, with
+  nothing to author — the pitch comes off the surface normal, and the travel direction comes
+  off the UV distance channel, which is what keeps shoulder bevels and bank walls (tilted
+  *across* the road) out of the green.
+- **The grey itself carries the rhythm**: two greys alternating in 27 m panels down the road,
+  driven by UV.x metres. Each generator scales its span onto a whole number of panels so
+  every piece starts and ends on a panel boundary and the rhythm reads as continuous across
+  seams; the bowl counts its panels as pie wedges around the funnel instead. This is the
+  scale-and-speed reference that keeps a huge surface from disorienting — turn it off per
+  material with `use_uv_panels`.
 - **Red marks danger, and only danger** — accents on things you can hit or fall into: the
   bottleneck's walls, the slalom's pylons, the wave's baffles, the jump's gap markers, the
   split's divider. Nothing decorative is red, so red never cries wolf.

@@ -139,20 +139,21 @@ public partial class PhysicsTestArea
 	}
 
 	/// <summary>
-	/// Set a freshly spawned car up for the proving ground, and put it into whichever mode is
-	/// already running.
+	/// Set this machine's freshly spawned car up for the proving ground, and put it into whichever
+	/// mode is already running. Wired to <see cref="RacerArena.LocalCarSpawned"/>, which fires on
+	/// every peer for its own car — a client's car arrives by replication, so this is the only
+	/// moment the client ever sees it spawn.
 	///
 	/// Cars arrive late — in a session, whenever their peer reports in — so the mode was decided
 	/// before there was a car to decide it for. Without this a host who went to the board while
 	/// waiting for their car gets one that spawns still listening to the keyboard, and flying the
 	/// board on WASD drives it around the pad off-screen.
 	/// </summary>
-	private void AdoptLocalCar()
+	private void AdoptLocalCar(RacerController car)
 	{
 		// The pad is for trying things, so the reset key hands the nitro back with the car. A match
 		// leaves this off — see RacerController.RefillNitroOnReset.
-		if (LocalCar() is { } car)
-			car.RefillNitroOnReset = true;
+		car.RefillNitroOnReset = true;
 
 		SetBuildMode(_building);
 	}

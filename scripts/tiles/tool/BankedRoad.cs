@@ -196,15 +196,19 @@ public partial class BankedRoad : CsgMesh3D
 		return null;
 	}
 
+	/// <summary>Metres per color panel — must agree with the shader's <c>panel_length</c>, which
+	/// is how the same rhythm continues across pieces that get their UVs from CSGPolygon3D.</summary>
+	private const float PanelMeters = 27.0f;
+
 	public void Rebuild()
 	{
-		if (BuildSurface(out int strips, out float[][]? leans) is not { } rows || leans == null)
+		if (BuildSurface(out int strips, out Vector2[][]? uvs) is not { } rows || uvs == null)
 		{
 			Mesh = null;
 			return;
 		}
 
-		Mesh = Solidify(rows, strips, leans);
+		Mesh = Solidify(rows, strips, uvs);
 	}
 
 	/// <summary>
@@ -220,14 +224,17 @@ public partial class BankedRoad : CsgMesh3D
 		=> BuildSurface(out strips, out _);
 
 	/// <summary>
-	/// The rows, plus each surface point's lateral lean — how far the road there tips sideways
-	/// out of level, 0 to 1 over 90 degrees, which the mesh writes into UV.x for the shader's
-	/// turning color. Per vertex rather than per facet, so the road-to-wall boundary interpolates
-	/// smoothly across the quads instead of stepping at their edges.
+	/// The rows, plus each surface point's UV — everything the color shader reads off the road.
+	///
+	/// UV.x is metres along the spine, scaled so the piece spans a whole number of color panels:
+	/// the two-tone rhythm then starts and ends exactly on a seam, which is what lets it read as
+	/// continuous when pieces are chained. UV.y is the point's lateral lean — how far the road
+	/// there tips sideways out of level, 0 to 1 over 90 degrees, for the turning color. Per
+	/// vertex rather than per facet, so both boundaries interpolate smoothly across the quads.
 	/// </summary>
-	private Vector3[][]? BuildSurface(out int strips, out float[][]? leans)
+	private Vector3[][]? BuildSurface(out int strips, out Vector2[][]? uvs)
 	{
-		leans = null;
+		uvs = null;
 		strips = FlatStrips + BankStrips;
 
 		if (Spine()?.Curve is not { PointCount: >= 2 } curve
@@ -303,7 +310,12 @@ public partial class BankedRoad : CsgMesh3D
 			strengths[k] *= SeamEase(length * k / rings, length);
 
 		var rows = new Vector3[rings + 1][];
-		leans = new float[rings + 1][];
+		uvs = new Vector2[rings + 1][];
+
+		// The whole piece stretched (or squeezed) onto a whole number of panels, so the last
+		// panel closes exactly at the exit seam. Nearest count rather than floor: a piece is
+		// never off by more than half a panel from true 27 m rhythm, and every seam is clean.
+		float panelSpan = Mathf.Max(1, Mathf.RoundToInt(length / PanelMeters)) * PanelMeters;
 
 		for (var k = 0; k <= rings; k++)
 		{
@@ -317,7 +329,7 @@ public partial class BankedRoad : CsgMesh3D
 			if (right.LengthSquared() < 1e-6f)
 			{
 				rows[k] = rows[Mathf.Max(0, k - 1)] ?? new Vector3[strips + 1];
-				leans[k] = leans[Mathf.Max(0, k - 1)] ?? new float[strips + 1];
+				uvs[k] = uvs[Mathf.Max(0, k - 1)] ?? new Vector2[strips + 1];
 				continue;
 			}
 
@@ -330,8 +342,10 @@ public partial class BankedRoad : CsgMesh3D
 			float side = strength >= 0.0f ? 1.0f : -1.0f;
 			float amount = Mathf.Abs(strength);
 
+			float along = offset / length * panelSpan;
+
 			var row = new Vector3[strips + 1];
-			var lean = new float[strips + 1];
+			var uvRow = new Vector2[strips + 1];
 
 			for (var m = 0; m <= strips; m++)
 			{
@@ -340,22 +354,22 @@ public partial class BankedRoad : CsgMesh3D
 
 				// The lifts scale with the ring's strength, so the surface's actual sideways
 				// tip here is the profile's gradient scaled the same way. As a fraction of a
-				// quarter turn, because that is the encoding UV.x carries to the shader.
-				lean[m] = Mathf.Atan(gradient[m] * amount) / (Mathf.Pi * 0.5f);
+				// quarter turn, because that is the encoding UV.y carries to the shader.
+				uvRow[m] = new Vector2(along, Mathf.Atan(gradient[m] * amount) / (Mathf.Pi * 0.5f));
 			}
 
 			// Rows always run inner to outer, which flips side to side through an S-bend. The
 			// mesh needs a consistent lateral order, so flip the row back when the bend is
 			// right-handed — at the crossover the bank is zero and both orders are the same
-			// points, so nothing jumps. The leans ride along, or they would dress the wrong side.
+			// points, so nothing jumps. The UVs ride along, or they would dress the wrong side.
 			if (side < 0.0f)
 			{
 				System.Array.Reverse(row);
-				System.Array.Reverse(lean);
+				System.Array.Reverse(uvRow);
 			}
 
 			rows[k] = row;
-			leans[k] = lean;
+			uvs[k] = uvRow;
 		}
 
 		return rows;
@@ -459,12 +473,12 @@ public partial class BankedRoad : CsgMesh3D
 	/// CSG only trusts a closed mesh, and a bake is only as good as what CSG was given.
 	///
 	/// Two buckets, split by shading rather than by color: the driveable top is smooth, with each
-	/// vertex's lateral lean in UV.x so the shader can dress the developed wall in the turning
-	/// color along one clean contour; everything else — underside, edge walls, caps — is flat
-	/// facets, which keeps their steepness out of the top's rim normals and leaves the black
-	/// outline crisp. Both wear <see cref="SurfaceMaterial"/>; the shader tells them apart.
+	/// vertex's UV carrying panel distance and lateral lean so the shader can dress the road
+	/// along clean contours; everything else — underside, edge walls, caps — is flat facets,
+	/// which keeps their steepness out of the top's rim normals and leaves the black outline
+	/// crisp. Both wear <see cref="SurfaceMaterial"/>; the shader tells them apart.
 	/// </summary>
-	private ArrayMesh Solidify(Vector3[][] rows, int strips, float[][] leans)
+	private ArrayMesh Solidify(Vector3[][] rows, int strips, Vector2[][] uvs)
 	{
 		var top = new MeshBucket { Smooth = true, Material = SurfaceMaterial };
 		var shell = new MeshBucket { Smooth = false, Material = SurfaceMaterial };
@@ -472,8 +486,6 @@ public partial class BankedRoad : CsgMesh3D
 
 		void Quad(MeshBucket bucket, Vector3 a, Vector3 b, Vector3 c, Vector3 d)
 			=> SolidMesh.Quad(bucket.Triangles, a, b, c, d);
-
-		Vector2 Lean(float lean) => new(lean, 0.0f);
 
 		for (var k = 0; k < rows.Length - 1; k++)
 		{
@@ -486,8 +498,7 @@ public partial class BankedRoad : CsgMesh3D
 				// edges and caps close the ring.
 				SolidMesh.Quad(top,
 							   near[m], far[m], far[m + 1], near[m + 1],
-							   Lean(leans[k][m]), Lean(leans[k + 1][m]),
-							   Lean(leans[k + 1][m + 1]), Lean(leans[k][m + 1]));
+							   uvs[k][m], uvs[k + 1][m], uvs[k + 1][m + 1], uvs[k][m + 1]);
 				Quad(shell, near[m] + drop, near[m + 1] + drop, far[m + 1] + drop, far[m] + drop);
 			}
 

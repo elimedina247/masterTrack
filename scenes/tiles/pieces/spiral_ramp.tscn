@@ -87,8 +87,8 @@ path_u_distance = 1.0
 path_joined = false
 material = ExtResource("2_road")
 
-[node name="BakedMesh" type="MeshInstance3D" parent="." unique_id=1200509115]
+[node name="BakedMesh" type="MeshInstance3D" parent="." unique_id=1320003196]
 mesh = SubResource("ArrayMesh_psg6v")
 
-[node name="BakedCollision" type="CollisionShape3D" parent="." unique_id=1453593179]
+[node name="BakedCollision" type="CollisionShape3D" parent="." unique_id=1334791259]
 shape = SubResource("ConcavePolygonShape3D_ey6ho")

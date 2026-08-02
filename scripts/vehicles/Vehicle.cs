@@ -611,6 +611,40 @@ public partial class Vehicle : RigidBody3D
     [Export(PropertyHint.Range, "0,1,0.01")]
     public float StunDriveLoss { get; set; } = 0.6f;
 
+    // ---------------------------------------------------------------- Wall riding
+
+    /// <summary>
+    /// How walls answer to load and gravity, in two rules that both fade in past
+    /// <see cref="WallTiltDeadZone"/> so flat road and gentle ramps never feel them: the grip
+    /// cap falls toward <see cref="WallFriction"/> × the springs' actual pressing load — speed
+    /// through a wall's curve is what buys the budget to stay on it, and a slow car's budget
+    /// falls under gravity's pull and slides down the slope — and a
+    /// <see cref="WallSagSpeed"/> of downhill drift is exempt from the grip solve entirely,
+    /// the part of gravity the tires are not allowed to answer, which is what the driver is
+    /// steering up against. Both live <i>inside</i> ProcessGrip: a force merely added on top
+    /// would be read as sideways velocity next step and cancelled like any other.
+    /// </summary>
+    [ExportGroup("Wall Riding")]
+    [Export(PropertyHint.Range, "0,1,0.01")]
+    public float WallTiltDeadZone { get; set; } = 0.15f;
+
+    /// <summary>
+    /// The friction coefficient on walls: the grip cap is this × the springs' pressing load
+    /// once the car is tilted past the dead zone. 1.0 puts the stick-to-a-vertical-wall
+    /// threshold at <c>v² / r = g</c> — about 25 m/s on the globe's 65 m orbit. The flat-road
+    /// cap is untouched: this only ever *lowers* the budget.
+    /// </summary>
+    [Export(PropertyHint.Range, "0.25,3,0.05")]
+    public float WallFriction { get; set; } = 1.0f;
+
+    /// <summary>
+    /// Downhill drift the grip solve is forbidden to cancel at full tilt, in m/s. The wall's
+    /// constant tax: hold the wheel straight and the car walks down the slope this fast; the
+    /// lap line is held by steering up against it. 0 makes walls sticky again once fast.
+    /// </summary>
+    [Export(PropertyHint.Range, "0,15,0.5")]
+    public float WallSagSpeed { get; set; } = 4.0f;
+
     // ---------------------------------------------------------------- Inputs
 
     /// <summary>0..1 throttle. Written by the controller every physics step.</summary>
@@ -847,6 +881,19 @@ public partial class Vehicle : RigidBody3D
         Mass = VehicleMass;
         CenterOfMassMode = CenterOfMassModeEnum.Custom;
         CenterOfMass = new Vector3(0.0f, CenterOfMassHeight, 0.0f);
+
+        // The collision box carries no friction, ever. Grip lives entirely in ProcessGrip; the
+        // engine's contact friction was a second tire model that only woke up when the box
+        // touched the road — which is exactly the hard landings, where its bite scales with the
+        // landing's normal impulse and it deleted most of a jump's forward speed. The normal
+        // impulse itself is untouched, so walls still stop the car and landings still stop the
+        // fall; the contact just no longer grabs sideways. A material set on the scene wins, so
+        // a special car can still opt back into engine friction.
+        if (PhysicsMaterialOverride == null)
+        {
+            _frictionlessMaterial ??= new PhysicsMaterial { Friction = 0.0f };
+            PhysicsMaterialOverride = _frictionlessMaterial;
+        }
 
         // Swept rather than teleported through each step. At 120 Hz a car at MaxFallSpeed moves
         // 0.54 m per step and the chassis box is 0.46 m tall, so a hard landing can put the whole
@@ -1397,9 +1444,11 @@ public partial class Vehicle : RigidBody3D
     /// this step, then apply a percentage of it.
     ///
     /// At 1.0 the car cannot slide at all. At 0.9 × <see cref="DriftGripMultiplier"/> on tarmac it
-    /// keeps most of its sideways speed and slews. There is no slip curve, no load sensitivity and
-    /// no friction budget shared with acceleration — which means grip does not sag at speed, and a
-    /// drift holds for exactly as long as the player holds it.
+    /// keeps most of its sideways speed and slews. There is no slip curve and no friction budget
+    /// shared with acceleration — grip does not sag at speed on level road, and a drift holds for
+    /// exactly as long as the player holds it. The one load-sensitive part is the wall rules:
+    /// past <see cref="WallTiltDeadZone"/> the cap answers to the springs' pressing load and a
+    /// slice of downhill drift goes uncancelled — see the Wall Riding exports.
     /// </summary>
     private void ProcessGrip(float delta)
     {
@@ -1421,6 +1470,21 @@ public partial class Vehicle : RigidBody3D
 
         CurrentGrip = grip;
 
+        // The load that gates the wall cap, low-passed. Raw spring force is spiky — the
+        // damper term jumps at every bump and facet joint, and the chassis bobs — and a cap
+        // that flutters with it is a stick-slip machine: budget dips, the rear steps out, the
+        // catch spike snatches the slide back, and the drive force poured in while the nose was
+        // off the velocity arrives as a forward lurch. A ~0.2 s average keeps the meaning
+        // (sustained lightness still starves the tire) and loses the flicker. Updated before
+        // the airborne early-out so it decays toward zero off the ground and a landing builds
+        // its budget back over the same fifth of a second instead of snatching.
+        float load = 0.0f;
+        foreach (GroundRay ray in WheelArray)
+            load += Mathf.Max(0.0f, ray.SpringForce);
+
+        _smoothedLoad = Mathf.Lerp(_smoothedLoad, load,
+                                   1.0f - Mathf.Exp(-delta / LoadSmoothingSeconds));
+
         // **Nothing acts sideways in the air.** This force points along the car's own X axis, so
         // any of it left running while airborne would mean rotating the car changed which
         // direction its velocity got scrubbed in — turning an orientation control into a
@@ -1429,7 +1493,7 @@ public partial class Vehicle : RigidBody3D
             return;
 
         Vector3 side = GlobalTransform.Basis.X;
-        float instantSideAccel = -side.Dot(LinearVelocity) / delta;
+        float sideVelocity = side.Dot(LinearVelocity);
 
         // Clamped, because the solve above is a *time constant*, not a force: it asks for whatever
         // it takes to cancel the sideways velocity this step, so the faster the car is thrown
@@ -1438,8 +1502,47 @@ public partial class Vehicle : RigidBody3D
         // Scaled by contact as well: two corners on the road can hold half of what four can, so a
         // car touching down on one wheel slides further before it hooks up.
         float cap = MaxGripForce * GroundFraction;
+
+        // Walls answer to load and gravity. Past the dead zone the cap falls toward
+        // WallFriction × what the springs actually press with — so speed through a wall's curve
+        // is what pays for staying on it — and a slice of downhill velocity is subtracted from
+        // what the solve may cancel, so gravity keeps pulling and the driver keeps steering up.
+        // Both scale with tilt: flat road never feels either.
+        float tilt = 1.0f - Mathf.Clamp(GlobalTransform.Basis.Y.Dot(-GravityDirection),
+                                        0.0f, 1.0f);
+        float range = Mathf.Max(1.0f - WallTiltDeadZone, 0.001f);
+        float tiltStrength = Mathf.Clamp((tilt - WallTiltDeadZone) / range, 0.0f, 1.0f);
+
+        if (tiltStrength > 0.0f)
+        {
+            cap = Mathf.Min(cap, Mathf.Lerp(cap, _smoothedLoad * WallFriction, tiltStrength));
+
+            sideVelocity -= side.Dot(GravityDirection) * WallSagSpeed * tiltStrength;
+        }
+
+        float instantSideAccel = -sideVelocity / delta;
         float sideForce = Mathf.Clamp(instantSideAccel * Mass * grip, -cap, cap);
         ApplyCentralForce(side * sideForce);
+    }
+
+    /// <summary>Time constant of the load average that gates LoadedGrip's cap, in seconds.</summary>
+    private const float LoadSmoothingSeconds = 0.2f;
+
+    /// <summary>The springs' pressing load, low-passed over <see cref="LoadSmoothingSeconds"/>.</summary>
+    private float _smoothedLoad;
+
+    /// <summary>The body's friction-0 material, made in <see cref="Initialize"/> and freed in
+    /// <see cref="_ExitTree"/>.</summary>
+    private PhysicsMaterial? _frictionlessMaterial;
+
+    public override void _ExitTree()
+    {
+        // Freed eagerly rather than left to the .NET shutdown sweep — a C# resource wrapper
+        // still alive at exit is what intermittently crashes the process on quit.
+        if (PhysicsMaterialOverride == _frictionlessMaterial)
+            PhysicsMaterialOverride = null;
+        _frictionlessMaterial?.Dispose();
+        _frictionlessMaterial = null;
     }
 
     // ---------------------------------------------------------------- Steering

@@ -128,8 +128,21 @@ public partial class RacerController : Vehicle
 	/// <summary>Ground rays that must be touching something for a pose to count as recoverable.</summary>
 	private const int RecoveryGroundedWheels = 3;
 
-	/// <summary>The last place this car was upright on solid ground. Where a reset puts it back.</summary>
-	private Transform3D _recoveryPose;
+	/// <summary>
+	/// How many recorded poses deep the recovery memory goes. A reset uses the <i>oldest</i>, not
+	/// the newest: the last pose before a fall is routinely the lip of the road itself — wheels
+	/// down, upright, and half a metre from the drop — and putting the car back there just feeds
+	/// it to the same edge again, with no new pose ever recorded on the way down to break the
+	/// loop. Four samples at <see cref="RecoveryPoseInterval"/> reaches about a second back up
+	/// the road, which is far enough from the edge to actually drive away from.
+	/// </summary>
+	private const int RecoveryPoseDepth = 4;
+
+	/// <summary>
+	/// The last few places this car was upright on solid ground, oldest first. A reset puts it
+	/// back at the front of the queue — see <see cref="RecoveryPoseDepth"/> for why not the back.
+	/// </summary>
+	private readonly System.Collections.Generic.Queue<Transform3D> _recoveryPoses = new();
 
 	private float _recoveryCountdown;
 
@@ -371,7 +384,7 @@ public partial class RacerController : Vehicle
 		GetNodeOrNull<CameraRig>("CameraRig")?.SetActive(IsLocalPlayer);
 
 		// Somewhere to go back to before we have ever been anywhere.
-		_recoveryPose = GlobalTransform;
+		_recoveryPoses.Enqueue(GlobalTransform);
 	}
 
 	public override void _UnhandledInput(InputEvent @event)
@@ -401,13 +414,21 @@ public partial class RacerController : Vehicle
 	/// </summary>
 	public void Respawn()
 	{
+		Transform3D pose = _recoveryPoses.Count > 0 ? _recoveryPoses.Peek() : GlobalTransform;
+
 		Rid rid = GetRid();
-		PhysicsServer3D.BodySetState(rid, PhysicsServer3D.BodyState.Transform, _recoveryPose);
+		PhysicsServer3D.BodySetState(rid, PhysicsServer3D.BodyState.Transform, pose);
 		PhysicsServer3D.BodySetState(rid, PhysicsServer3D.BodyState.LinearVelocity, Vector3.Zero);
 		PhysicsServer3D.BodySetState(rid, PhysicsServer3D.BodyState.AngularVelocity, Vector3.Zero);
 
-		NetPosition = _recoveryPose.Origin;
-		NetRotation = _recoveryPose.Basis.GetRotationQuaternion();
+		// The history starts over from here. The newer entries lead back toward whatever went
+		// wrong, so a second reset before any new ground is covered should land *here* again,
+		// not walk forward through the queue toward the edge.
+		_recoveryPoses.Clear();
+		_recoveryPoses.Enqueue(pose);
+
+		NetPosition = pose.Origin;
+		NetRotation = pose.Basis.GetRotationQuaternion();
 		NetVelocity = Vector3.Zero;
 
 		// Set back down stopped and *clear-headed* — a reset that kept the stun would put the
@@ -439,8 +460,12 @@ public partial class RacerController : Vehicle
 		if (!IsVehicleReady || GlobalBasis.Y.Dot(Vector3.Up) < RecoveryUprightDot)
 			return;
 
-		if (GroundedRayCount >= RecoveryGroundedWheels)
-			_recoveryPose = GlobalTransform;
+		if (GroundedRayCount < RecoveryGroundedWheels)
+			return;
+
+		_recoveryPoses.Enqueue(GlobalTransform);
+		while (_recoveryPoses.Count > RecoveryPoseDepth)
+			_recoveryPoses.Dequeue();
 	}
 
 	/// <summary>

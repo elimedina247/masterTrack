@@ -17,6 +17,7 @@
 [ext_resource type="Script" uid="uid://c8jmpay1cn5al" path="res://scripts/ui/TrackFeed.cs" id="15_feed"]
 [ext_resource type="PackedScene" path="res://scenes/ui/PauseMenu.tscn" id="16_pause"]
 [ext_resource type="Script" path="res://scripts/ui/Speedometer.cs" id="17_speedo"]
+[ext_resource type="Script" path="res://scripts/ui/NitroBar.cs" id="18_nitro"]
 
 [sub_resource type="Environment" id="Env"]
 background_mode = 2
@@ -103,6 +104,19 @@ offset_bottom = -16.0
 grow_vertical = 0
 mouse_filter = 2
 script = ExtResource("17_speedo")
+
+[node name="NitroBar" type="Control" parent="HUD"]
+layout_mode = 3
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 16.0
+offset_top = -290.0
+offset_right = 376.0
+offset_bottom = -262.0
+grow_vertical = 0
+mouse_filter = 2
+script = ExtResource("18_nitro")
 
 [node name="VehicleDebug" type="Control" parent="HUD" unique_id=2078078617]
 layout_mode = 3

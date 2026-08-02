@@ -116,6 +116,12 @@ public partial class WheelVisual : Node3D
 
         float steer = Steers ? vehicle.SteeringInput * Mathf.DegToRad(VisualSteerAngle) : 0.0f;
 
+        // The physics yaws the nose toward the stick in either gear, but a real car tracing that
+        // same arc in reverse has its front wheels turned the other way — mirror them so the pose
+        // matches the path.
+        if (vehicle.CurrentGear < 0)
+            steer = -steer;
+
         // Rolled from how far the wheel actually moved through the world, so it stays right for a
         // car somebody else is driving — those are frozen puppets whose pose is assigned rather
         // than integrated, and whose LinearVelocity is therefore permanently zero.

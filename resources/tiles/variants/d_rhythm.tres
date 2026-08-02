@@ -1,0 +1,9 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://resources/tiles/variants/straight_variant.gdshader" id="1_shader"]
+
+[resource]
+shader = ExtResource("1_shader")
+shader_parameter/shoulder_color = Color(0.22, 0.23, 0.26, 1)
+shader_parameter/edge_lines = true
+shader_parameter/rungs = true

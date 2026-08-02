@@ -61,10 +61,8 @@ public partial class Speedometer : Control, IVehicleObserver
     private static readonly Color OverRed = new("E8253D");
     private static readonly Color BlockOff = new("F0E9EC");
     private static readonly Color Ink = new("3A2E39");
-    private static readonly Color PanelWhite = new(1.0f, 0.99f, 0.97f, 0.82f);
     private static readonly Color ReadoutText = new(1.0f, 0.99f, 0.97f);
 
-    private StyleBoxFlat _panelBox = null!;
     private StyleBoxFlat _segmentBox = null!;
     private StyleBoxFlat _pillBox = null!;
     private Font _font = null!;
@@ -86,11 +84,6 @@ public partial class Speedometer : Control, IVehicleObserver
 
         _font = ThemeDB.Singleton.FallbackFont;
 
-        _panelBox = new StyleBoxFlat
-        {
-            BgColor = PanelWhite,
-            BorderColor = new Color(Ink, 0.12f),
-        };
         _segmentBox = new StyleBoxFlat();
         _pillBox = new StyleBoxFlat { BgColor = Ink };
     }
@@ -101,10 +94,9 @@ public partial class Speedometer : Control, IVehicleObserver
     /// </summary>
     public override void _ExitTree()
     {
-        _panelBox?.Dispose();
         _segmentBox?.Dispose();
         _pillBox?.Dispose();
-        _panelBox = _segmentBox = _pillBox = null!;
+        _segmentBox = _pillBox = null!;
     }
 
     public override void _Process(double delta)
@@ -151,18 +143,9 @@ public partial class Speedometer : Control, IVehicleObserver
         Vector2 origin = (Size - new Vector2(DesignW, DesignH) * s) * 0.5f;
         Vector2 P(float x, float y) => origin + (new Vector2(x, y) + _dialJitter) * s;
 
-        DrawPanel(s, P);
         DrawBlocks(s, P);
         DrawNeedle(s, P);
         DrawReadout(s, P);
-    }
-
-    private void DrawPanel(float s, System.Func<float, float, Vector2> P)
-    {
-        _panelBox.SetCornerRadiusAll(Mathf.RoundToInt(26.0f * s));
-        _panelBox.SetBorderWidthAll(Mathf.Max(1, Mathf.RoundToInt(2.0f * s)));
-
-        DrawStyleBox(_panelBox, new Rect2(P(0.0f, 0.0f), new Vector2(DesignW, DesignH) * s));
     }
 
     private void DrawBlocks(float s, System.Func<float, float, Vector2> P)
@@ -212,7 +195,7 @@ public partial class Speedometer : Control, IVehicleObserver
         DrawLine(Vector2.Zero, tip, Ink, 7.0f * s, antialiased: true);
         DrawCircle(tip, 10.0f * s, Coral);
         DrawArc(tip, 10.0f * s, 0.0f, Mathf.Tau, 32, Ink, 3.0f * s, antialiased: true);
-        DrawCircle(Vector2.Zero, 11.0f * s, PanelWhite with { A = 1.0f });
+        DrawCircle(Vector2.Zero, 11.0f * s, ReadoutText);
         DrawArc(Vector2.Zero, 11.0f * s, 0.0f, Mathf.Tau, 32, Ink, 4.0f * s, antialiased: true);
 
         DrawSetTransform(Vector2.Zero);

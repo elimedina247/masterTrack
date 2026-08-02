@@ -70,6 +70,13 @@ public partial class RacerArena : Node3D
     /// </summary>
     [Export] public Node? Hud { get; set; }
 
+    /// <summary>
+    /// This machine's own car has spawned and knows who it belongs to. Fired on every peer for
+    /// its own car — including the ones that arrive by replication, which the scene above never
+    /// sees spawned and could otherwise only find by polling.
+    /// </summary>
+    [Signal] public delegate void LocalCarSpawnedEventHandler(RacerController car);
+
     /// <summary>The node cars are parented to. What the spawner replicates into.</summary>
     public Node3D Racers { get; private set; } = null!;
 
@@ -206,6 +213,7 @@ public partial class RacerArena : Node3D
                 return;
 
             BindHud(car);
+            EmitSignal(SignalName.LocalCarSpawned, car);
         }).CallDeferred();
     }
 

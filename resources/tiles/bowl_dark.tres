@@ -1,0 +1,14 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://resources/tiles/road_surface.gdshader" id="1_shader"]
+
+[resource]
+shader = ExtResource("1_shader")
+shader_parameter/albedo = Color(0.1, 0.36, 0.66, 1)
+shader_parameter/slope_color = Color(0.1, 0.36, 0.66, 1)
+shader_parameter/turn_color = Color(0.1, 0.36, 0.66, 1)
+shader_parameter/edge_color = Color(0.05, 0.05, 0.06, 1)
+shader_parameter/use_uv_panels = true
+shader_parameter/panel_color = Color(0.08, 0.3, 0.56, 1)
+shader_parameter/slope_start_degrees = 89.0
+shader_parameter/slope_full_degrees = 90.0

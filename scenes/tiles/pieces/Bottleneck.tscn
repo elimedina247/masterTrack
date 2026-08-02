@@ -86,8 +86,8 @@ transform = Transform3D(0.873, 0, -0.4877, 0, 1, 0, 0.4877, 0, 0.873, 17.5, 2.5,
 size = Vector3(3, 5, 42)
 material = ExtResource("3_accent")
 
-[node name="BakedMesh" type="MeshInstance3D" parent="." unique_id=801376517]
+[node name="BakedMesh" type="MeshInstance3D" parent="." unique_id=1365914333]
 mesh = SubResource("ArrayMesh_uihyi")
 
-[node name="BakedCollision" type="CollisionShape3D" parent="." unique_id=872420002]
+[node name="BakedCollision" type="CollisionShape3D" parent="." unique_id=1746148856]
 shape = SubResource("ConcavePolygonShape3D_mrs2q")
