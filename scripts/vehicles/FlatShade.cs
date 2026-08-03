@@ -8,6 +8,13 @@ namespace MasterTrack.Vehicles;
 /// smooth-shaded, with roughness and metallic values that catch the light — and next to a track
 /// made of flat facets it reads as a prop from a different game.
 ///
+/// Since the cel pass landed this builds ShaderMaterials on the cars' cel shader — the same
+/// banded light() the road runs, same band count, same shadow floor — so one sun draws the cars
+/// and the track in one style. Two shaders, chosen by whether the authored surface carried real
+/// transparency: bodywork must stay in the opaque pass (writing ALPHA at all would cost it its
+/// depth, its normals and therefore its outline), and only genuine glass pays the transparent
+/// price.
+///
 /// Per surface rather than a single <c>material_override</c>: an override replaces every surface
 /// with one material, which would paint the windows and the lights the same colour as the body.
 /// Each surface keeps its own albedo, so the model keeps its livery; only the way light lands on
@@ -69,11 +76,17 @@ public partial class FlatShade : Node
 		if (mesh.Mesh == null)
 			return;
 
+		// Cached by ResourceLoader, so these loads are lookups after the first car. Held as
+		// locals rather than statics on purpose — a static Godot resource reference alive at
+		// .NET shutdown is disposed after native teardown, which can crash the process on exit.
+		var body = GD.Load<Shader>("res://resources/cars/cel_car.gdshader");
+		var glass = GD.Load<Shader>("res://resources/cars/cel_car_glass.gdshader");
+
 		for (int surface = 0; surface < mesh.Mesh.GetSurfaceCount(); surface++)
 		{
 			// The material as authored on the mesh, not the active one. This runs more than once
 			// on the same car — once when this node readies, again once the car knows its colour —
-			// and the active material after the first pass is the flat one built below, which
+			// and the active material after the first pass is the cel one built below, which
 			// carries no name. Reading the mesh keeps every pass working from the original, so
 			// the paint surface is still findable and restyling stays idempotent.
 			var source = (mesh.Mesh.SurfaceGetMaterial(surface)
@@ -85,28 +98,22 @@ public partial class FlatShade : Node
 			bool isPaint = paint.HasValue
 			               && source?.ResourceName.EndsWith(PaintSuffix, System.StringComparison.Ordinal) == true;
 
-			var flat = new StandardMaterial3D
+			// The queue decision: authored transparency goes to the glass shader and keeps its
+			// see-through; everything else is bodywork and must stay opaque so it writes the
+			// depth and normals the outline pass reads.
+			bool transparent = source != null
+			                   && source.Transparency != BaseMaterial3D.TransparencyEnum.Disabled;
+
+			var cel = new ShaderMaterial { Shader = transparent ? glass : body };
+			cel.SetShaderParameter("albedo", isPaint ? paint!.Value : source?.AlbedoColor ?? Colors.White);
+
+			if (source?.AlbedoTexture is { } texture)
 			{
-				// Everything that says what this surface *is* comes across unchanged.
-				AlbedoColor = isPaint ? paint!.Value : source?.AlbedoColor ?? Colors.White,
-				AlbedoTexture = source?.AlbedoTexture,
+				cel.SetShaderParameter("albedo_texture", texture);
+				cel.SetShaderParameter("use_texture", true);
+			}
 
-				// Transparency and culling carry over too, or the windscreen turns into bodywork
-				// and anything modelled as a single-sided sheet turns inside out.
-				Transparency = source?.Transparency ?? BaseMaterial3D.TransparencyEnum.Disabled,
-				CullMode = source?.CullMode ?? BaseMaterial3D.CullModeEnum.Back,
-
-				// Everything that says how light behaves is replaced. Same three decisions the
-				// track's own materials make in TrackTile.Finish, for the same reason: per-vertex
-				// light is what the hardware this look comes from did, and a specular highlight
-				// sliding across a curve is the most modern-looking thing a renderer does.
-				ShadingMode = BaseMaterial3D.ShadingModeEnum.PerVertex,
-				SpecularMode = BaseMaterial3D.SpecularModeEnum.Disabled,
-				Metallic = 0.0f,
-				Roughness = 1.0f,
-			};
-
-			mesh.SetSurfaceOverrideMaterial(surface, flat);
+			mesh.SetSurfaceOverrideMaterial(surface, cel);
 		}
 	}
 }

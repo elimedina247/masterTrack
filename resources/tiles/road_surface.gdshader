@@ -54,6 +54,19 @@ uniform float panel_length = 27.0;
 uniform float edge_start_degrees : hint_range(0.0, 90.0) = 68.0;
 uniform float edge_full_degrees : hint_range(0.0, 90.0) = 78.0;
 
+// Racetrack kerbs, painted on the shoulder chamfer every swept piece already carries: the 3 m
+// face between the road edge and the slab side, which nothing had ever painted. Off by default
+// because meshes whose steep faces are the feature (the bowl) would stripe themselves with it.
+uniform bool use_kerbs = false;
+uniform vec4 kerb_color_a : source_color = vec4(0.88, 0.16, 0.18, 1.0);
+uniform vec4 kerb_color_b : source_color = vec4(0.95, 0.95, 0.95, 1.0);
+uniform float kerb_length = 7.0;
+
+// The cel half of the look: light() rounds N.L onto this many bands, floored so shadow is a
+// darker colour rather than an absence of light.
+uniform float light_bands = 3.0;
+uniform float shadow_floor : hint_range(0.0, 1.0) = 0.35;
+
 void fragment() {
 	vec3 world_normal = normalize((INV_VIEW_MATRIX * vec4(NORMAL, 0.0)).xyz);
 	float tilt = degrees(acos(clamp(world_normal.y, -1.0, 1.0)));
@@ -71,6 +84,8 @@ void fragment() {
 	}
 
 	float slope = smoothstep(slope_start_degrees, slope_full_degrees, tilt);
+	float align = 1.0;
+	float lean_across = 0.0;
 
 	// Green means CLIMB, and a tilted face is only a climb if it pitches along the direction
 	// of travel. That direction is readable right here: UV.x is metres along the road, so the
@@ -78,27 +93,81 @@ void fragment() {
 	// bank's rise tips the normal sideways to that and earns no green; a ramp tips it along
 	// and keeps all of it. Meshes with no distance channel (UV.x flat) fall back to plain
 	// tilt — the guard keeps them at align = 1.
-	if (use_uv_panels && slope > 0.0) {
-		vec3 along = (INV_VIEW_MATRIX
-					  * vec4(dFdx(VERTEX) * dFdx(UV.x) + dFdy(VERTEX) * dFdy(UV.x), 0.0)).xyz;
+	if (use_uv_panels) {
+		// The world direction in which UV.x grows, as the TRUE surface gradient — the raw
+		// derivative sum e1*u1 + e2*u2 is only the gradient when the screen-to-surface mapping
+		// is conformal, i.e. when the surface faces the camera squarely. Under foreshortening
+		// the raw sum skews toward the compressed screen axis, the travel direction rotates
+		// with the CAMERA, and everything gated on it changes with the view: kerb stripes
+		// smearing across a whole ramp face from a side angle was this, exactly. Solving the
+		// 2x2 metric makes the gradient exact and the answer view-independent.
+		vec3 e1 = dFdx(VERTEX);
+		vec3 e2 = dFdy(VERTEX);
+		float u1 = dFdx(UV.x);
+		float u2 = dFdy(UV.x);
+
+		float g11 = dot(e1, e1);
+		float g12 = dot(e1, e2);
+		float g22 = dot(e2, e2);
+		float det = max(g11 * g22 - g12 * g12, 1e-12);
+
+		vec3 gradient = ((g22 * u1 - g12 * u2) * e1 + (g11 * u2 - g12 * u1) * e2) / det;
+		vec3 along = (INV_VIEW_MATRIX * vec4(gradient, 0.0)).xyz;
 		vec2 travel = vec2(along.x, along.z);
 		vec2 downhill = vec2(world_normal.x, world_normal.z);
 
-		if (length(travel) > 1e-6 && length(downhill) > 1e-4) {
-			float align = abs(dot(normalize(travel), normalize(downhill)));
-			slope *= smoothstep(0.35, 0.7, align);
+		if (length(travel) > 1e-6) {
+			vec2 t = normalize(travel);
+
+			// The ABSOLUTE sideways component of the surface normal, in units of sin(lean).
+			// Deliberately not normalised against the total tilt: a shoulder chamfer leans
+			// sideways by the same ~22 degrees whether the road beside it is flat or climbing
+			// a wall, but its share of the total tilt shrinks as the climb grows — which is
+			// exactly how the kerbs lost to the climb green partway up every steep ramp.
+			lean_across = abs(downhill.x * t.y - downhill.y * t.x);
+
+			if (length(downhill) > 1e-4)
+				align = abs(dot(t, normalize(downhill)));
 		}
+
+		slope *= smoothstep(0.35, 0.7, align);
 	}
+
+	// Kerbs: a face that leans ACROSS the direction of travel, found by that absolute lateral
+	// lean. Striped by UV.x metres, so the pattern runs continuously across seams like
+	// everything else on this road. Developed bank wall leans across too, but it is wall, not
+	// shoulder, and keeps its blue.
+	float shoulder = 0.0;
+	if (use_kerbs && use_uv_panels) {
+		// The band sits just under the chamfer's own lean — sin(21.8 deg) = 0.37 on every swept
+		// piece — and ABOVE the smoothed-normal interpolation that ramps across the face's edge
+		// triangles. Open the band lower (it was 0.14-0.24) and that interpolation zone wears
+		// half-strength kerb over the climb green: red over green is a smear of yellow streaks
+		// up both edges of every steep ramp.
+		shoulder = smoothstep(0.28, 0.35, lean_across)
+				   * (1.0 - smoothstep(edge_start_degrees, edge_full_degrees, tilt));
+		if (use_uv_turn)
+			shoulder *= 1.0 - smoothstep(1.0, turn_start_degrees, UV.y * 90.0);
+
+		vec3 kerb = mix(kerb_color_a.rgb, kerb_color_b.rgb,
+						step(0.5, fract(UV.x / (kerb_length * 2.0))));
+		color = mix(color, kerb, shoulder);
+	}
+
+	// Where the kerb painted, the vertical vocabulary stands down entirely — the fight between
+	// the two on a steep ramp's shoulder is a coin toss otherwise, and a kerb that flickers to
+	// green partway up the climb reads as a bug rather than as either colour.
+	slope *= 1.0 - shoulder;
 
 	if (use_uv_turn) {
 		float lean = UV.y * 90.0;
 
 		// A leaning facet's tilt is its lean, so without this the slope green fires all
 		// along the base of every bank wall before the blue reaches full strength — a
-		// bright green skirt under every turn. Where the mesh says the tilt is lateral,
-		// the vertical vocabulary stands down and the wall fades from road straight to
-		// turning color.
-		slope *= 1.0 - smoothstep(turn_start_degrees * 0.5, turn_start_degrees, lean);
+		// bright green skirt under every turn. It has to stand down from the FIRST degree
+		// of lean: starting at half the turn threshold still let a skirt through at the
+		// wall's base, visible on every hairpin.
+		slope *= 1.0 - smoothstep(1.0, turn_start_degrees, lean);
 
 		color = mix(color, slope_color.rgb, slope);
 		color = mix(color, turn_color.rgb,
@@ -115,4 +184,14 @@ void fragment() {
 	// The flat arcade look the StandardMaterial3D versions had: no highlights.
 	ROUGHNESS = 1.0;
 	SPECULAR = 0.0;
+}
+
+// The Zineth half of the look: N.L rounded onto a few bands, floored so shadow is a darker
+// colour rather than an absence of light. Together with the flat SPECULAR 0 above, this is what
+// makes the road read as drawn rather than rendered — and the cars' cel shader makes the same
+// two decisions with the same numbers, so one sun draws the whole frame in one style.
+void light() {
+	float ndl = clamp(dot(normalize(NORMAL), normalize(LIGHT)), 0.0, 1.0);
+	float stepped = floor(ndl * light_bands + 0.5) / light_bands;
+	DIFFUSE_LIGHT += mix(shadow_floor, 1.0, stepped) * ATTENUATION * LIGHT_COLOR;
 }

@@ -17,6 +17,14 @@ namespace MasterTrack.Tiles;
 /// builds its own geometry — one definition, and anything that wants the effect gets it by having
 /// one as a child. It emits once, on demand, and takes itself away when the last puff dies.
 ///
+/// <b>The ring is baked into the emission textures rather than fired by hand.</b> It used to walk
+/// the perimeter calling <c>EmitParticle</c>, which is what <see cref="Vehicles.WheelSmoke"/> does
+/// and works there — but the smoke emits from a node that has been in the tree for minutes, and this
+/// one has to emit in the same frame it is created, on an emitter the renderer has never processed.
+/// Nothing came out. A one-shot burst off a point-and-normal texture is the path every ordinary
+/// Godot explosion takes, so it does not depend on that timing at all: the perimeter is a texture,
+/// and <see cref="Burst"/> is one flag.
+///
 /// Not replicated. Every peer builds an identical burst off its own copy of the landing, which is
 /// the rule the whole sentry kit lives by; nothing here adds a packet.
 /// </summary>
@@ -48,6 +56,17 @@ public partial class TileLandingDust : GpuParticles3D
 
 	[Export] public float OutwardSpeedMax { get; set; } = 16.0f;
 
+	/// <summary>
+	/// How far the throw is tilted up out of the horizontal, as a fraction of the outward push. A
+	/// touch, and only a touch: dust off an impact goes <i>out</i>, and dust that went up would be
+	/// a chimney standing on the road.
+	/// </summary>
+	private const float UpwardLean = 0.3f;
+
+	/// <summary>Degrees of scatter around each puff's outward direction, so the ring is a burst
+	/// rather than a hundred and twenty parallel lines.</summary>
+	private const float ThrowSpread = 12.0f;
+
 	private float _age;
 	private bool _fired;
 	private ParticleProcessMaterial _process = null!;
@@ -56,22 +75,30 @@ public partial class TileLandingDust : GpuParticles3D
 	private GradientTexture2D _puffTexture = null!;
 	private GradientTexture1D _ramp = null!;
 	private CurveTexture _scale = null!;
+	private Image _ringPointImage = null!;
+	private Image _ringNormalImage = null!;
+	private ImageTexture _ringPoints = null!;
+	private ImageTexture _ringNormals = null!;
 
 	public override void _Ready()
 	{
 		Lifetime = DustLifetime;
 
-		// The whole burst goes out in one frame, so the buffer only has to hold it once. A little
-		// headroom so the last puffs aren't recycling the first ones.
-		Amount = PuffCount + 8;
+		// A landing is one event, so the burst is one shot at full explosiveness: every puff in the
+		// ring leaves in the same frame the tile stops, and the emitter is done. Amount is exactly
+		// the ring — with a one-shot burst nothing is recycling, so there is no headroom to keep.
+		Amount = Mathf.Max(1, PuffCount);
+		OneShot = true;
+		Explosiveness = 1.0f;
 
 		// World space: the dust is knocked off the road and stays where it was knocked off. In
-		// local space it would ride the tile, which is the one thing it must not do — see Burst,
-		// where the same choice decides what space the emission is in.
+		// local space it would ride the tile, which is the one thing it must not do. The emission
+		// points below are still authored in tile space — Godot folds the emitter's transform onto
+		// them as each puff spawns, which is what the old hand-rolled burst did with ToGlobal.
 		LocalCoords = false;
 
-		// Manual emission only. Left true, this would pour dust out of the tile's centre from the
-		// moment it existed.
+		// Held until the impact. Left true, the ring would go off the moment the node existed —
+		// which is a frame before the tile has finished falling onto it.
 		Emitting = false;
 
 		// A burst spans the whole tile, so the node's own bounds say nothing useful about where
@@ -81,6 +108,7 @@ public partial class TileLandingDust : GpuParticles3D
 		VisibilityAabb = new Aabb(new Vector3(-reach, -6.0f, -reach),
 								  new Vector3(reach * 2.0f, 30.0f, reach * 2.0f));
 
+		BuildRing();
 		ProcessMaterial = BuildProcessMaterial();
 		DrawPass1 = BuildPuffMesh();
 
@@ -98,33 +126,59 @@ public partial class TileLandingDust : GpuParticles3D
 
 		_fired = true;
 		SetProcess(true);
-
-		float width = RingSize.X;
-		float length = RingSize.Y;
-		float perimeter = 2.0f * (width + length);
-
-		if (perimeter <= 0.0f || PuffCount <= 0)
-			return;
-
-		for (var i = 0; i < PuffCount; i++)
-		{
-			// Evenly spaced with a jitter under one step, so the ring is dense the whole way round
-			// without the puffs landing in a visible row of dots.
-			float along = Mathf.PosMod((i + GD.Randf() * 0.8f) / PuffCount * perimeter, perimeter);
-			(Vector3 point, Vector3 outward) = WalkPerimeter(along, width, length);
-
-			EmitPuff(point, outward);
-		}
+		Emitting = true;
 	}
 
 	public override void _Process(double delta)
 	{
 		_age += (float)delta;
 
-		// Nothing to fade: the last puff to go out dies a lifetime after the burst, and then the
+		// Nothing to fade: every puff goes out together and dies a lifetime later, and then the
 		// node has no reason to exist.
 		if (_age >= DustLifetime + 0.3f)
 			QueueFree();
+	}
+
+	/// <summary>
+	/// Bake the perimeter into the pair of textures the emitter spawns from: where each puff starts,
+	/// and which way it is thrown.
+	///
+	/// One texel per puff, <see cref="Image.Format.Rgbf"/> so a direction can hold its sign, and
+	/// authored in tile space for the reason given at <see cref="GpuParticles3D.LocalCoords"/>. The
+	/// jitter is rolled in here rather than per particle, which costs nothing that shows: every
+	/// landing builds its own dust node, so no two rings are the same ring.
+	/// </summary>
+	private void BuildRing()
+	{
+		int count = Mathf.Max(1, PuffCount);
+		float width = Mathf.Max(0.01f, RingSize.X);
+		float length = Mathf.Max(0.01f, RingSize.Y);
+		float perimeter = 2.0f * (width + length);
+
+		_ringPointImage = Image.CreateEmpty(count, 1, false, Image.Format.Rgbf);
+		_ringNormalImage = Image.CreateEmpty(count, 1, false, Image.Format.Rgbf);
+
+		for (var i = 0; i < count; i++)
+		{
+			// Evenly spaced with a jitter under one step, so the ring is dense the whole way round
+			// without the puffs landing in a visible row of dots.
+			float along = Mathf.PosMod((i + GD.Randf() * 0.8f) / count * perimeter, perimeter);
+			(Vector3 point, Vector3 outward) = WalkPerimeter(along, width, length);
+
+			// A little spread either side of the edge, so the ring has thickness rather than being
+			// a wire, and a little height so it doesn't read as a flat decal.
+			Vector3 spawn = point
+							+ outward * (GD.Randf() * 3.0f - 1.0f)
+							+ Vector3.Up * (GD.Randf() * 1.5f);
+
+			Vector3 thrown = (outward + Vector3.Up * UpwardLean).Normalized();
+
+			_ringPointImage.SetPixel(i, 0, new Color(spawn.X, spawn.Y, spawn.Z));
+			_ringNormalImage.SetPixel(i, 0, new Color(thrown.X, thrown.Y, thrown.Z));
+		}
+
+		_ringPoints = ImageTexture.CreateFromImage(_ringPointImage);
+		_ringNormals = ImageTexture.CreateFromImage(_ringNormalImage);
 	}
 
 	/// <summary>
@@ -154,32 +208,6 @@ public partial class TileLandingDust : GpuParticles3D
 	}
 
 	/// <summary>
-	/// One puff off the edge, thrown outward and slightly up.
-	///
-	/// Both the transform and the velocity handed to <c>EmitParticle</c> are read in the emitter's
-	/// coordinate space, and <see cref="GpuParticles3D.LocalCoords"/> is false — so both are taken
-	/// through the node's global transform here rather than being left in tile space, which on any
-	/// tile that is not pointing down the world axis would fire the whole ring off at an angle.
-	/// </summary>
-	private void EmitPuff(Vector3 localPoint, Vector3 localOutward)
-	{
-		// A little spread either side of the edge, so the ring has thickness rather than being a
-		// wire, and a little height so it doesn't read as a flat decal.
-		Vector3 jitter = localOutward * (GD.Randf() * 3.0f - 1.0f)
-						 + Vector3.Up * (GD.Randf() * 1.5f);
-
-		Transform3D spawn = GlobalTransform;
-		spawn.Origin = ToGlobal(localPoint + jitter);
-
-		Vector3 outward = (GlobalBasis * localOutward).Normalized();
-		Vector3 velocity = outward * Mathf.Lerp(OutwardSpeedMin, OutwardSpeedMax, GD.Randf())
-						   + Vector3.Up * Mathf.Lerp(1.5f, 5.0f, GD.Randf());
-
-		EmitParticle(spawn, velocity, Colors.White, Colors.White,
-					 (uint)(EmitFlags.Position | EmitFlags.Velocity));
-	}
-
-	/// <summary>
 	/// How a puff behaves once it exists: shoved out, stalls almost at once, swells and fades.
 	///
 	/// The heavy damping is what makes it read as displaced air rather than as an explosion —
@@ -199,12 +227,20 @@ public partial class TileLandingDust : GpuParticles3D
 
 		_process = new ParticleProcessMaterial
 		{
-			// Every particle's direction comes from the velocity handed to EmitParticle, so the
-			// material contributes none of its own.
-			Direction = Vector3.Up,
-			Spread = 0.0f,
-			InitialVelocityMin = 0.0f,
-			InitialVelocityMax = 0.0f,
+			// Every puff starts on the perimeter and is thrown along the direction stored beside it.
+			EmissionShape = ParticleProcessMaterial.EmissionShapeEnum.DirectedPoints,
+			EmissionPointCount = Mathf.Max(1, PuffCount),
+			EmissionPointTexture = _ringPoints,
+			EmissionNormalTexture = _ringNormals,
+
+			// Directed points do not aim particles by themselves: the launch direction is built from
+			// Direction and Spread as usual and *then* rotated into a frame whose forward is the
+			// texel's normal. So +Z is what "straight out along the edge" is spelled as here, and
+			// anything else quietly fires the whole ring off at an angle to its own perimeter.
+			Direction = Vector3.Back,
+			Spread = ThrowSpread,
+			InitialVelocityMin = OutwardSpeedMin,
+			InitialVelocityMax = OutwardSpeedMax,
 
 			// Rises, barely. This is the dust hanging over the joint, not smoke off a fire.
 			Gravity = new Vector3(0.0f, 1.2f, 0.0f),
@@ -286,5 +322,13 @@ public partial class TileLandingDust : GpuParticles3D
 		_puffPaint = null!;
 		_puffTexture?.Dispose();
 		_puffTexture = null!;
+		_ringPoints?.Dispose();
+		_ringPoints = null!;
+		_ringNormals?.Dispose();
+		_ringNormals = null!;
+		_ringPointImage?.Dispose();
+		_ringPointImage = null!;
+		_ringNormalImage?.Dispose();
+		_ringNormalImage = null!;
 	}
 }

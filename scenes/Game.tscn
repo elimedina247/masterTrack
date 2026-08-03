@@ -12,36 +12,43 @@
 [ext_resource type="Script" path="res://scripts/ui/SpeedBlur.cs" id="8_blur"]
 [ext_resource type="Script" path="res://scripts/ui/SpeedLines.cs" id="9_lines"]
 [ext_resource type="Resource" path="res://resources/nitro_effects.tres" id="10_fx"]
-[ext_resource type="Sky" path="res://resources/sky.tres" id="11_sky"]
+[ext_resource type="Environment" path="res://resources/environment.tres" id="11_env"]
 [ext_resource type="Script" path="res://scripts/game/SkyScenery.cs" id="13_sky_scenery"]
 [ext_resource type="PackedScene" path="res://scenes/ui/PauseMenu.tscn" id="16_pause"]
 [ext_resource type="Script" path="res://scripts/ui/Speedometer.cs" id="17_speedo"]
 [ext_resource type="Script" path="res://scripts/ui/NitroBar.cs" id="18_nitro"]
 [ext_resource type="Script" path="res://scripts/ui/RallyCopilot.cs" id="19_copilot"]
+[ext_resource type="Script" path="res://scripts/rendering/OutlineEffect.cs" id="22_outline"]
 
-[sub_resource type="Environment" id="Env"]
-background_mode = 2
-sky = ExtResource("11_sky")
-ambient_light_source = 3
-ambient_light_energy = 1.5
-tonemap_mode = 0
-fog_enabled = true
-fog_light_color = Color(0.72, 0.92, 1, 1)
-fog_density = 0.0007
-fog_sky_affect = 0.0
+[sub_resource type="CompositorEffect" id="OutlineFx"]
+script = ExtResource("22_outline")
+
+[sub_resource type="Compositor" id="OutlineComp"]
+compositor_effects = Array[CompositorEffect]([SubResource("OutlineFx")])
 
 [node name="Game" type="Node3D" unique_id=653604701]
 script = ExtResource("1_game")
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=2077104838]
-environment = SubResource("Env")
+environment = ExtResource("11_env")
+compositor = SubResource("OutlineComp")
 
 [node name="SkyScenery" type="Node3D" parent="." unique_id=884210377]
 script = ExtResource("13_sky_scenery")
 
 [node name="Sun" type="DirectionalLight3D" parent="." unique_id=1047906660]
 transform = Transform3D(0.866025, -0.353553, 0.353553, 0, 0.707107, 0.707107, -0.5, -0.612372, 0.612372, 0, 40, 0)
+light_energy = 1.15
+light_angular_distance = 1.0
 shadow_enabled = true
+shadow_bias = 0.06
+shadow_normal_bias = 1.5
+directional_shadow_mode = 2
+directional_shadow_split_1 = 0.06
+directional_shadow_split_2 = 0.18
+directional_shadow_split_3 = 0.45
+directional_shadow_blend_splits = true
+directional_shadow_max_distance = 900.0
 
 [node name="Track" type="Node3D" parent="." unique_id=12408710]
 script = ExtResource("5_track")

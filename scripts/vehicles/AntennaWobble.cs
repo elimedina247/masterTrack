@@ -55,27 +55,49 @@ public partial class AntennaWobble : Node3D
 
 	/// <summary>
 	/// Spring rate pulling the ball back over the mount, in 1/s². √(this)/2π is the wobble
-	/// frequency: 380 is about 3 Hz, a fast flutter rather than a slow sway.
+	/// frequency, and it sets three things at once, which is why it is the knob worth turning:
+	/// how fast the antenna waves, how far it lags the car, and how far it droops at rest
+	/// (sag = <see cref="GravityPull"/> / this).
+	///
+	/// <b>130 rather than 380.</b> At 380 it ran at 3.1 Hz and sagged 5 cm — a stiff little
+	/// buzz that read as a wire aerial. At 130 it is <b>1.8 Hz with 15 cm of droop</b> on a
+	/// 95 cm shaft, so it hangs with a visible bend before the car has even moved, and a
+	/// corner throws it nearly three times as far out. That is the whole difference between a
+	/// twitching rod and a floppy whip.
 	/// </summary>
-	[Export] public float Stiffness { get; set; } = 380.0f;
+	[Export] public float Stiffness { get; set; } = 130.0f;
 
 	/// <summary>
 	/// Velocity decay per second. Low on purpose — an antenna that settles in one bounce reads as
 	/// stiff plastic; this one rings for a moment after a landing.
+	///
+	/// <b>Cut with the stiffness, not left alone.</b> What the eye reads as "loose" is the
+	/// damping <i>ratio</i>, c / 2√k — so dropping k while holding c would have made the softer
+	/// antenna settle sooner and undone the change. 1.8 against the new spring keeps the ratio
+	/// near where it was (0.08) and lets a big landing ring for about two and a half seconds
+	/// instead of one and a third.
 	/// </summary>
-	[Export] public float Damping { get; set; } = 3.5f;
+	[Export] public float Damping { get; set; } = 1.8f;
 
 	/// <summary>
 	/// Downward pull on the ball, in m/s². What makes the antenna sag downhill on a banked wall
 	/// and float straight during a jump. Matches the cars' doubled gravity rather than the world's.
+	///
+	/// Left where it was: the softer spring already triples the droop this produces, and raising
+	/// it as well would pin the antenna to the deck rather than letting it wave.
 	/// </summary>
 	[Export] public float GravityPull { get; set; } = 20.0f;
 
 	/// <summary>
 	/// Furthest the shaft may bend off vertical, in degrees. The cap is what keeps a monster hit
 	/// from folding the antenna flat into the bodywork — or into the wing behind it.
+	///
+	/// Opened from 55 to 75 to match the softer spring. The cap was sized for an antenna that
+	/// could not reach it often; a floppy one hits it constantly, and an antenna that spends a
+	/// hard corner pinned against its limit is a stiff antenna again — the clamp reads as the
+	/// spring. There is still room before the ball meets the wing.
 	/// </summary>
-	[Export] public float MaxSwingDegrees { get; set; } = 55.0f;
+	[Export] public float MaxSwingDegrees { get; set; } = 75.0f;
 
 	/// <summary>One joint per segment; each is a child of the one before, so bends compound.</summary>
 	private readonly List<Node3D> _joints = new();

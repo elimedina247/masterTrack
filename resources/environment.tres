@@ -1,0 +1,57 @@
+[gd_resource type="Environment" load_steps=2 format=3]
+
+[ext_resource type="Sky" uid="uid://bvicqno3trron" path="res://resources/sky.tres" id="1_sky"]
+
+; The one environment the game is lit by, shared by every scene that shows the world.
+;
+; It used to be an inline sub-resource duplicated in Game.tscn and TestArea.tscn, which meant
+; the proving ground and the match could disagree about what the game looked like — and did,
+; since only one of the two ever set a tonemap at all.
+;
+; What changed and why:
+;
+; - Ambient down from 1.5 to 0.5. Sky ambient at 1.5 flooded every face with light from every
+;   direction, so the sun's own contribution was a rounding error and nothing in the world had
+;   a lit side and a shaded side. Form is that difference; this is what buys it back, and it is
+;   the change the sun's new shadow distance is there to pay off.
+;
+; - SSAO and glow are OFF since the cel pass landed: ambient occlusion smudges gradients into
+;   flat banded fills (the opposite of the look), and glow was measured contributing nothing at
+;   this exposure. The outline CompositorEffect on the WorldEnvironment does the separating work
+;   AO used to fake.
+;
+; - Fog thinned from 0.0007 to 0.00025. The old density put half a fog over anything a
+;   kilometre out, which on a proving ground two kilometres across meant most of the frame was
+;   pale blue haze rather than track.
+;
+; - A little contrast, and glow only on genuinely bright things.
+;
+; **The tonemap is deliberately still Linear.** ACES is the right long-term answer and it is
+; what most of the "looks like a render" flatness comes from — but road_surface.gdshader's
+; palette is authored at near-maximum saturation against Linear's hard clip, so switching
+; tonemap turns the slope green into pale yellow-green and crushes the bank blue. The tonemap
+; change and a palette retune are one job, not two, and it is not this one.
+[resource]
+background_mode = 2
+sky = ExtResource("1_sky")
+ambient_light_source = 3
+ambient_light_energy = 0.5
+tonemap_mode = 0
+ssao_enabled = false
+ssao_radius = 2.5
+ssao_intensity = 2.5
+ssao_power = 1.5
+ssao_detail = 0.5
+glow_enabled = false
+glow_intensity = 0.35
+glow_strength = 1.0
+glow_bloom = 0.02
+glow_blend_mode = 1
+glow_hdr_threshold = 1.2
+fog_enabled = true
+fog_light_color = Color(0.72, 0.92, 1, 1)
+fog_density = 0.00025
+fog_sky_affect = 0.0
+adjustment_enabled = true
+adjustment_contrast = 1.1
+adjustment_saturation = 1.05

@@ -1,0 +1,14 @@
+[gd_resource type="Environment" load_steps=2 format=3]
+
+[ext_resource type="Sky" path="res://resources/sky.tres" id="1_sky"]
+
+[resource]
+background_mode = 2
+sky = ExtResource("1_sky")
+ambient_light_source = 3
+ambient_light_energy = 0.55
+tonemap_mode = 0
+fog_enabled = false
+adjustment_enabled = true
+adjustment_contrast = 1.12
+adjustment_saturation = 1.1

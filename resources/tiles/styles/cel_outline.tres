@@ -1,0 +1,9 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://resources/tiles/styles/cel_outline.gdshader" id="1_outline"]
+
+[resource]
+render_priority = -1
+shader = ExtResource("1_outline")
+shader_parameter/width = 0.45
+shader_parameter/line_color = Color(0.03, 0.03, 0.05, 1)

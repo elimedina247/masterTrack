@@ -187,8 +187,13 @@ public partial class TrackMasterController : Node3D
 	/// The tiles waiting to be placed. Built on first use rather than in <c>_Ready</c>: the tray
 	/// reads it while building itself, and which of the two runs first is a question about where
 	/// the nodes sit in the scene — not something this should depend on.
+	///
+	/// The head's height goes in as a function rather than a number: the hand outlives every
+	/// placement, and it is read at the moment a card is dealt. Without a track it reads as zero,
+	/// which is the right answer for an opening hand — the race starts on the deck.
 	/// </summary>
-	public TileHand Hand => _hand ??= new TileHand(HandSlots, DealInterval, StartingTiles);
+	public TileHand Hand => _hand ??= new TileHand(HandSlots, DealInterval, StartingTiles,
+												   () => Track?.Grid.HeadHeight ?? 0.0f);
 
 	private TileHand? _hand;
 

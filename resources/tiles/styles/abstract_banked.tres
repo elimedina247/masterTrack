@@ -1,0 +1,15 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://resources/tiles/styles/abstract_road.gdshader" id="1_abstract"]
+
+[resource]
+shader = ExtResource("1_abstract")
+shader_parameter/stop_a = Color(0.95, 0.15, 0.55, 1)
+shader_parameter/stop_b = Color(0.35, 0.1, 0.85, 1)
+shader_parameter/stop_c = Color(0.05, 0.75, 0.95, 1)
+shader_parameter/stop_d = Color(0.55, 0.95, 0.2, 1)
+shader_parameter/edge_color = Color(0.02, 0.01, 0.06, 1)
+shader_parameter/use_uv_turn = true
+shader_parameter/cycle_meters = 320.0
+shader_parameter/emission_energy = 1.6
+shader_parameter/band_contrast = 0.45

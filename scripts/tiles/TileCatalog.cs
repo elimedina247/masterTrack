@@ -293,6 +293,34 @@ public static class TileCatalog
 		=> index >= 0 && index < AllAsData.Count ? AllAsData[index] : null;
 
 	/// <summary>
+	/// How far each entry climbs from the seam it is laid on, in metres, negative for one that
+	/// descends. Built once, after <see cref="AllAsData"/> for the reason <see cref="TotalWeight"/>
+	/// is.
+	///
+	/// Read off <see cref="PlacedTile.ExitFrameFor"/> rather than off
+	/// <see cref="TileDefinition.HeightChange"/>, so the deck's idea of "this one goes down" is the
+	/// same number <c>TrackGrid.Fits</c> refuses a placement by. HeightChange is the piece's rise
+	/// rounded to whole cubes for the board to read; a piece that drops half a cube rounds to zero
+	/// there and would look flat to anything that trusted it.
+	/// </summary>
+	public static readonly IReadOnlyList<float> AllRises = BuildAllRises();
+
+	private static IReadOnlyList<float> BuildAllRises()
+	{
+		var rises = new List<float>(AllAsData.Count);
+		foreach (TileData data in AllAsData)
+			rises.Add(PlacedTile.ExitFrameFor(Transform3D.Identity, data).Origin.Y);
+		return rises;
+	}
+
+	/// <summary>
+	/// Metres a catalog entry climbs, or loses if negative. Zero for an index off the end, which
+	/// is the harmless answer: an entry that does not exist changes no height.
+	/// </summary>
+	public static float RiseOf(int index)
+		=> index >= 0 && index < AllRises.Count ? AllRises[index] : 0.0f;
+
+	/// <summary>
 	/// Pick a tile at random from a subset, respecting the weights <i>inside</i> that subset.
 	///
 	/// This is the anti-lock backstop. When nothing in the Track Master's hand can legally be

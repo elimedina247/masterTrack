@@ -38,6 +38,7 @@ data = PackedVector3Array(-27, -1.6, -30, -27, -1, -30, -27, -1.6, 0, -27, -1.6,
 
 [node name="SquareWave" type="StaticBody3D" unique_id=1089219777]
 script = ExtResource("1_piece")
+DeckWeight = 0.0
 DeckDescription = "A square wave stood on its side: six flat peaks, each a step lower than the last, with nothing between them but air. Kick up onto the first and ride the wave down - every gap is a jump that lands downhill, and losing the rhythm once is a long fall from a short place."
 
 [node name="Entry" type="Marker3D" parent="." unique_id=1875257799]

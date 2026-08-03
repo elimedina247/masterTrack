@@ -7,7 +7,7 @@
 [ext_resource type="Script" uid="uid://dxhuxdu7la88s" path="res://scripts/ui/SpeedBlur.cs" id="5_blur"]
 [ext_resource type="Script" uid="uid://oeywn35d66cv" path="res://scripts/ui/SpeedLines.cs" id="6_lines"]
 [ext_resource type="Resource" uid="uid://btoehb7tlvw70" path="res://resources/nitro_effects.tres" id="7_fx"]
-[ext_resource type="Sky" uid="uid://bvicqno3trron" path="res://resources/sky.tres" id="8_sky"]
+[ext_resource type="Environment" path="res://resources/environment.tres" id="8_env"]
 [ext_resource type="Script" uid="uid://006nwq7ooj8g" path="res://scripts/game/SkyScenery.cs" id="9_sky_scenery"]
 [ext_resource type="Script" uid="uid://cyypgqmv0jhol" path="res://scripts/game/RacerArena.cs" id="10_arena"]
 [ext_resource type="Script" uid="uid://cvfemtwhfl6pw" path="res://scripts/ui/LobbyPanel.cs" id="11_lobby"]
@@ -19,23 +19,21 @@
 [ext_resource type="Script" path="res://scripts/ui/Speedometer.cs" id="17_speedo"]
 [ext_resource type="Script" path="res://scripts/ui/NitroBar.cs" id="18_nitro"]
 [ext_resource type="Script" path="res://scripts/ui/RallyCopilot.cs" id="19_copilot"]
+[ext_resource type="Script" path="res://scripts/rendering/OutlineEffect.cs" id="22_outline"]
 
-[sub_resource type="Environment" id="Env"]
-background_mode = 2
-sky = ExtResource("8_sky")
-ambient_light_source = 3
-ambient_light_energy = 1.5
-fog_enabled = true
-fog_light_color = Color(0.72, 0.92, 1, 1)
-fog_density = 0.0007
-fog_sky_affect = 0.0
+[sub_resource type="CompositorEffect" id="OutlineFx"]
+script = ExtResource("22_outline")
+
+[sub_resource type="Compositor" id="OutlineComp"]
+compositor_effects = Array[CompositorEffect]([SubResource("OutlineFx")])
 
 [node name="TestArea" type="Node3D" unique_id=80453047]
 script = ExtResource("1_area")
 PadHalfSize = 130.0
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1976643172]
-environment = SubResource("Env")
+environment = ExtResource("8_env")
+compositor = SubResource("OutlineComp")
 
 [node name="SkyScenery" type="Node3D" parent="." unique_id=1553087204]
 script = ExtResource("9_sky_scenery")
@@ -43,7 +41,17 @@ InnerRadius = 1200.0
 
 [node name="Sun" type="DirectionalLight3D" parent="." unique_id=563454495]
 transform = Transform3D(0.866025, -0.353553, 0.353553, 0, 0.707107, 0.707107, -0.5, -0.612372, 0.612372, 0, 40, 0)
+light_energy = 1.15
+light_angular_distance = 1.0
 shadow_enabled = true
+shadow_bias = 0.06
+shadow_normal_bias = 1.5
+directional_shadow_mode = 2
+directional_shadow_split_1 = 0.06
+directional_shadow_split_2 = 0.18
+directional_shadow_split_3 = 0.45
+directional_shadow_blend_splits = true
+directional_shadow_max_distance = 900.0
 
 [node name="Track" type="Node3D" parent="." unique_id=638109884]
 script = ExtResource("12_track")

@@ -176,10 +176,17 @@ public partial class SkyScenery : Node3D
 	/// </summary>
 	private static StandardMaterial3D CloudMaterial() => new()
 	{
-		AlbedoColor = new Color(0.97f, 0.98f, 1.00f),
+		AlbedoColor = new Color(0.97f, 0.98f, 1.00f, 0.97f),
 		ShadingMode = BaseMaterial3D.ShadingModeEnum.PerVertex,
 		SpecularMode = BaseMaterial3D.SpecularModeEnum.Disabled,
 		Metallic = 0.0f,
 		Roughness = 1.0f,
+
+		// A hair of transparency, and not for the look of it: it moves the clouds into the
+		// transparent pass, where they write no depth and no normals — so the screen-space
+		// outline cannot see them, and the sky stays unlined weather instead of a page of
+		// ink-edged blobs. (The outline runs pre-transparent, so they also draw over any
+		// line behind them.) At 0.97 they still read as solid.
+		Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
 	};
 }
