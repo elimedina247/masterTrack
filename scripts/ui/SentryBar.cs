@@ -45,6 +45,22 @@ public partial class SentryBar : Control
     /// sentry can see what they are saving toward.</summary>
     private static readonly Color Unaffordable = new(1.0f, 1.0f, 1.0f, 0.45f);
 
+    /// <summary>The colour the pool flashes on a spend — points leaving, not points arriving.</summary>
+    private static readonly Color SpendFlash = new(1.0f, 0.45f, 0.3f);
+
+    /// <summary>
+    /// The pool the bar draws, chasing the real one. The ledger snaps — a 90-point spend and a
+    /// 20-point spend are both one assignment — so the drama has to live here: the drawn bar
+    /// drains through the gap fast enough to feel spent and slow enough to be seen going.
+    /// </summary>
+    private float _shownPool;
+
+    /// <summary>How much spend-flash is left on the pool, 1 at the moment of purchase to 0.</summary>
+    private float _poolFlash;
+
+    /// <summary>The ledger as of the last change, so a drop can be told from a regen tick.</summary>
+    private int _lastPoints;
+
     public override void _Ready()
     {
         MouseFilter = MouseFilterEnum.Ignore;
@@ -104,7 +120,13 @@ public partial class SentryBar : Control
         BuildCategoryRow(box, SentryActionCategory.Everyone, "All");
 
         if (Sentry != null)
+        {
             Sentry.SentryMessage += OnMessage;
+            Sentry.PointsChanged += OnPointsChanged;
+            Sentry.BlastLanded += OnBlastLanded;
+            _lastPoints = Sentry.PointsRemaining;
+            _shownPool = _lastPoints;
+        }
 
         if (Board != null)
         {
@@ -196,9 +218,23 @@ public partial class SentryBar : Control
         int remaining = Sentry.PointsRemaining;
         int limit = GameManager.Instance.SentryPointLimit;
 
+        // The drawn pool chases the ledger. One rate both ways on purpose: a spend drains
+        // through the gap in about a third of a second — long enough to watch 90 points leave,
+        // short enough that the bar is honest again before the next decision — and the same
+        // easing turns the regen's once-a-second steps into a bar that visibly fills.
+        _shownPool = Mathf.Lerp(_shownPool, remaining,
+                                1.0f - Mathf.Exp(-9.0f * (float)delta));
+
+        // The flash and the recoil, decaying together from the moment of purchase.
+        _poolFlash *= Mathf.Exp(-5.0f * (float)delta);
+
         _points.Text = $"{remaining} / {limit}";
+        _points.PivotOffset = _points.Size * 0.5f;
+        _points.Scale = Vector2.One * (1.0f + 0.22f * _poolFlash);
+
         _pool.MaxValue = limit;
-        _pool.Value = remaining;
+        _pool.Value = _shownPool;
+        _pool.Modulate = Colors.White.Lerp(SpendFlash, _poolFlash);
 
         foreach (ActionButton entry in _buttons)
         {
@@ -218,10 +254,42 @@ public partial class SentryBar : Control
         }
     }
 
+    /// <summary>
+    /// A drop in the ledger is a purchase; a rise is the regen drip. Only the drop gets the
+    /// drama — income creeping in is exactly what the eased bar already shows.
+    /// </summary>
+    private void OnPointsChanged(int remaining)
+    {
+        if (remaining < _lastPoints)
+            _poolFlash = 1.0f;
+
+        _lastPoints = remaining;
+    }
+
+    /// <summary>
+    /// The answer to a shot, in words: who the blast caught, or that it caught nobody. The
+    /// second half matters as much as the first — a sentry who can't tell a miss from a bug is
+    /// playing alone, which is the whole gap this line closes.
+    /// </summary>
+    private void OnBlastLanded(int[] caughtPeerIds)
+        => _status.Text = caughtPeerIds.Length switch
+        {
+            0 => "Missed — nobody in the blast.",
+            1 => $"Caught {NameFor(caughtPeerIds[0])}!",
+            _ => $"Caught {caughtPeerIds.Length}!",
+        };
+
+    private static string NameFor(int peerId)
+        => peerId > 0 ? GameManager.Instance.NameOf(peerId) : "a racer";
+
     public override void _ExitTree()
     {
         if (Sentry != null)
+        {
             Sentry.SentryMessage -= OnMessage;
+            Sentry.PointsChanged -= OnPointsChanged;
+            Sentry.BlastLanded -= OnBlastLanded;
+        }
 
         if (Board != null)
         {
@@ -235,6 +303,9 @@ public partial class SentryBar : Control
         {
             TrackMasterController.BoardCameraMode.Follow => "Cam: Track",
             TrackMasterController.BoardCameraMode.Pack => "Cam: Racers",
+            // Transient: the follow-through after a shot. The button ends it early — any input
+            // does — and the label goes back to whichever mode the watch borrowed the camera from.
+            TrackMasterController.BoardCameraMode.Watch => "Cam: Watching…",
             _ => "Cam: Free",
         };
 

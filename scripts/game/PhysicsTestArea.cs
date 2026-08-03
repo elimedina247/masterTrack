@@ -182,7 +182,7 @@ public partial class PhysicsTestArea : Node3D
 	private void OnGameStateChanged(int state)
 	{
 		if ((GameState)state == GameState.InRound)
-			GetTree().ChangeSceneToFile(GameScenePath);
+			UI.SceneFader.Instance.TransitionTo(GameScenePath);
 	}
 
 	/// <summary>

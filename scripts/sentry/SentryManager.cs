@@ -35,6 +35,22 @@ public partial class SentryManager : Node3D
     /// <summary>An action went on cooldown. Fired on every peer; only the sentry's UI listens.</summary>
     [Signal] public delegate void CooldownStartedEventHandler(int kind, float seconds);
 
+    /// <summary>
+    /// A blast resolved, and these peers' cars were inside it. Fired on every peer off its own
+    /// copy of the detonation — the count is geometry against replicated poses, so no packet
+    /// carries it — and only the sentry's UI listens. An empty array is a miss, which is worth
+    /// saying out loud: a shot with no answer is the thing this signal exists to end.
+    /// </summary>
+    [Signal] public delegate void BlastLandedEventHandler(int[] caughtPeerIds);
+
+    /// <summary>
+    /// A placed action was confirmed at a spot in the world. Fired on every peer alongside the
+    /// spawn it announces; the sentry's board uses it to fly the follow-through camera to the
+    /// consequence. Confirmed rather than requested on purpose — a camera that flew off to watch
+    /// a rejection would be selling something that never happened.
+    /// </summary>
+    [Signal] public delegate void ActionPlacedEventHandler(int kind, Vector3 target);
+
     /// <summary>What is left to spend. Server truth; clients follow the broadcast.</summary>
     public int PointsRemaining { get; private set; }
 
@@ -582,6 +598,7 @@ public partial class SentryManager : Node3D
     {
         var missile = new SentryMissile { Name = "Missile", Position = target };
         AddChild(missile);
+        EmitSignal(SignalName.ActionPlaced, (int)SentryActionKind.Missile, target);
     }
 
     [Rpc(MultiplayerApi.RpcMode.Authority, CallLocal = false, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
@@ -589,6 +606,7 @@ public partial class SentryManager : Node3D
     {
         var barrel = new SentryBarrelBomb { Name = "BarrelBomb", Position = target };
         AddChild(barrel);
+        EmitSignal(SignalName.ActionPlaced, (int)SentryActionKind.BarrelBomb, target);
     }
 
     [Rpc(MultiplayerApi.RpcMode.Authority, CallLocal = false, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
@@ -610,6 +628,7 @@ public partial class SentryManager : Node3D
     {
         var slick = new SentryOilSlick { Name = "OilSlick", Position = target };
         AddChild(slick);
+        EmitSignal(SignalName.ActionPlaced, (int)SentryActionKind.OilSlick, target);
     }
 
     [Rpc(MultiplayerApi.RpcMode.Authority, CallLocal = false, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
@@ -617,6 +636,7 @@ public partial class SentryManager : Node3D
     {
         var magnet = new SentryMagnet { Name = "Magnet", Position = target };
         AddChild(magnet);
+        EmitSignal(SignalName.ActionPlaced, (int)SentryActionKind.Magnet, target);
     }
 
     [Rpc(MultiplayerApi.RpcMode.Authority, CallLocal = false, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
@@ -624,6 +644,7 @@ public partial class SentryManager : Node3D
     {
         var spill = new SentryCargoSpill { Name = "CargoSpill", Position = target, Seed = seed };
         AddChild(spill);
+        EmitSignal(SignalName.ActionPlaced, (int)SentryActionKind.CargoSpill, target);
     }
 
     /// <summary>The moon lands on everybody at once — every car this peer knows about gets the
@@ -639,6 +660,11 @@ public partial class SentryManager : Node3D
 
         EmitSignal(SignalName.DebuffApplied, 0, (int)SentryActionKind.MoonGravity);
     }
+
+    /// <summary>Called by <see cref="SentryBlast"/> when a detonation resolves: who was inside
+    /// it. Just a relay onto the signal — the blast is a static helper and cannot emit.</summary>
+    public void ReportBlast(int[] caughtPeerIds)
+        => EmitSignal(SignalName.BlastLanded, caughtPeerIds);
 
     /// <summary>A peer's car, found the way the board finds them: through the group.</summary>
     private RacerController? RacerOf(int peerId)

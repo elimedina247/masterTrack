@@ -30,14 +30,105 @@ public partial class TrackMasterController
 	/// <summary>First car of a chain pick, while waiting for the second.</summary>
 	private RacerController? _chainFirstPick;
 
+	// ---- The aiming ghost ----
+
+	/// <summary>The ring under the cursor while a placed tool is armed. Null while disarmed.</summary>
+	private MeshInstance3D? _aimGhost;
+
+	private StandardMaterial3D? _aimPaint;
+
+	/// <summary>Which tool the current ghost was built for, so re-arming rebuilds it.</summary>
+	private SentryActionKind _aimKind;
+
 	/// <summary>Hand the board its sentry once the race phase opens. Until then clicks are clicks.</summary>
 	public void EnableSentry(SentryManager sentry)
 	{
+		// Re-enabling swaps managers cleanly rather than stacking subscriptions.
+		UnhookSentry();
 		_sentry = sentry;
+
+		// The consequences come back through the manager: a confirmed placement flies the
+		// follow-through camera, a resolved blast flashes whoever it caught. Hooked here rather
+		// than in _Ready because only the sentry's machine ever gets this call — every other
+		// peer's manager fires the same signals to a room with nobody in it.
+		sentry.ActionPlaced += OnSentryActionPlaced;
+		sentry.BlastLanded += OnSentryBlastLanded;
 
 		// The job just changed from roads to cars, so the camera changes with it: start over
 		// the middle of the pack. The toggle on the sentry bar goes back to the other modes.
 		SetCameraMode(BoardCameraMode.Pack);
+	}
+
+	/// <summary>Take the manager's signal handlers back. Called from the controller's
+	/// <c>_ExitTree</c> — a C# <c>+=</c> outlives the node that made it.</summary>
+	private void UnhookSentry()
+	{
+		if (_sentry == null)
+			return;
+
+		_sentry.ActionPlaced -= OnSentryActionPlaced;
+		_sentry.BlastLanded -= OnSentryBlastLanded;
+	}
+
+	/// <summary>
+	/// A placed tool was confirmed somewhere on the board: take the sentry to it. This is the
+	/// follow-through — the button was pressed seconds and hundreds of metres away from where
+	/// the consequence happens, and without this the sentry plays half the match off-screen.
+	/// </summary>
+	private void OnSentryActionPlaced(int kind, Vector3 target)
+	{
+		if (!IsActive)
+			return;
+
+		// Never while the sentry is already lining up the next play: a stolen camera under an
+		// armed tool means the click that comes back cancels the watch <i>and</i> fires — at
+		// wherever the half-flown camera happened to be pointing. Aiming beats spectating.
+		if (_sentryArmed)
+			return;
+
+		BeginSentryWatch(target, WatchSecondsOf((SentryActionKind)kind));
+	}
+
+	/// <summary>
+	/// How long each tool's consequence is worth watching: long enough to see the payoff land,
+	/// short enough that the camera is home before the next play. The ambush tools get the
+	/// shortest stays — their payoff comes later, when somebody drives into them.
+	/// </summary>
+	private static float WatchSecondsOf(SentryActionKind kind) => kind switch
+	{
+		SentryActionKind.Missile => 3.6f,     // the 2 s descent, the blast, the scatter
+		SentryActionKind.BarrelBomb => 3.2f,  // the 2 s fuse and the blast
+		SentryActionKind.CargoSpill => 3.8f,  // the rainfall and the first bounces
+		SentryActionKind.Magnet => 3.0f,      // the spin-up and the first grab
+		SentryActionKind.OilSlick => 2.6f,    // the spread
+		_ => 3.0f,
+	};
+
+	/// <summary>
+	/// A blast resolved: flash the chevron of everyone it caught, so the board answers the shot
+	/// where the sentry is actually looking. The count in words is the bar's job — see
+	/// <see cref="UI.SentryBar"/> — this is the same fact drawn on the world.
+	/// </summary>
+	private void OnSentryBlastLanded(int[] caughtPeerIds)
+	{
+		foreach (RacerMarker marker in _markers)
+		{
+			if (!IsInstanceValid(marker.Racer) || !marker.Racer.IsInsideTree())
+				continue;
+
+			if (System.Array.IndexOf(caughtPeerIds, marker.Racer.OwnerPeerId) < 0)
+				continue;
+
+			if (marker.Root.GetChildOrNull<Label3D>(0) is not { } label)
+				continue;
+
+			// A white pop that settles back to the player's paint. Tweened on the label rather
+			// than the root, because AimMarker rewrites the root's scale every frame.
+			label.Modulate = Colors.White;
+			Tween tween = label.CreateTween();
+			tween.TweenProperty(label, "modulate", marker.Racer.PaintColor, 0.7)
+				 .SetTrans(Tween.TransitionType.Cubic).SetEase(Tween.EaseType.Out);
+		}
 	}
 
 	/// <summary>Called by the sentry bar's buttons. Re-arming swaps the action cleanly.
@@ -78,12 +169,120 @@ public partial class TrackMasterController
 
 	public void CancelSentryAction()
 	{
+		ClearSentryAim();
+
 		if (!_sentryArmed)
 			return;
 
 		_sentryArmed = false;
 		_chainFirstPick = null;
 		EmitSignal(SignalName.SentryStatusChanged, "");
+	}
+
+	/// <summary>
+	/// Keep the armed tool's ghost under the cursor: a ring on the road, sized to the tool's
+	/// <i>true</i> reach — the missile's ghost is exactly the circle its blast will own, the
+	/// magnet's exactly its field. The honest-VFX rule, applied before the effect exists: what
+	/// the sentry aims with is the same promise the racers will be dodging.
+	///
+	/// Called from the board's <c>_Process</c>. The pop-up ramp is the odd one out — it goes
+	/// into a slot, not onto a point, so its ghost sits on the nearest free slot instead of
+	/// under the cursor, which is also a live preview of exactly where the click will commit.
+	/// </summary>
+	private void UpdateSentryAim()
+	{
+		if (!_sentryArmed
+			|| SentryActions.CategoryOf(_armedAction) != SentryActionCategory.PlaceOnTrack)
+		{
+			ClearSentryAim();
+			return;
+		}
+
+		if (_aimGhost == null || _aimKind != _armedAction)
+			BuildSentryAim();
+
+		Vector2 mouse = GetViewport().GetMousePosition();
+		bool found = TryPickTrackPoint(mouse, out Vector3 point);
+
+		// The ramp snaps its ghost to the slot the click would actually take.
+		if (found && _armedAction == SentryActionKind.PopUpRamp)
+		{
+			if (TryNearestFreeSurfaceSlot(point, out int tileIndex, out int slotIndex)
+				&& Track!.SlotWorldTransform(tileIndex, slotIndex) is { } at)
+				point = at.Origin;
+			else
+				found = false;
+		}
+
+		_aimGhost!.Visible = found;
+		if (!found)
+			return;
+
+		_aimGhost.GlobalPosition = point + Vector3.Up * 0.6f;
+
+		// The pulse that says "armed". Gentle — the ghost is information first.
+		float wave = Mathf.Sin(Time.GetTicksMsec() / 1000.0f * 5.0f);
+		Color colour = _aimPaint!.AlbedoColor;
+		colour.A = 0.4f + 0.15f * wave;
+		_aimPaint.AlbedoColor = colour;
+	}
+
+	/// <summary>The ring itself: the armed tool's honest radius in the tool's own colour, drawn
+	/// through the road the way the slot highlights are — an aim on the far side of a crest
+	/// still reads.</summary>
+	private void BuildSentryAim()
+	{
+		ClearSentryAim();
+
+		(float radius, Color colour) = _armedAction switch
+		{
+			// The blasts wear the missile's warning red: the ghost is the target ring, early.
+			SentryActionKind.Missile => (SentryMissile.ExplosionRadius, new Color(1.0f, 0.2f, 0.15f)),
+			SentryActionKind.BarrelBomb => (SentryBarrelBomb.ExplosionRadius, new Color(1.0f, 0.2f, 0.15f)),
+			// The magnet's own blue, the oil's own murk, the spill's cargo-crate amber.
+			SentryActionKind.Magnet => (SentryMagnet.Radius, new Color(0.35f, 0.55f, 1.0f)),
+			SentryActionKind.OilSlick => (SentryActions.OilSlickRadius, new Color(0.35f, 0.28f, 0.18f)),
+			SentryActionKind.CargoSpill => (SentryCargoSpill.SpillRadius, new Color(1.0f, 0.62f, 0.2f)),
+			// The ramp marks a slot, so it wears the slot highlights' green at their size.
+			_ => (6.0f, new Color(0.35f, 1.0f, 0.45f)),
+		};
+
+		_aimPaint = new StandardMaterial3D
+		{
+			AlbedoColor = colour with { A = 0.5f },
+			Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+			ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+			NoDepthTest = true,
+		};
+
+		_aimGhost = new MeshInstance3D
+		{
+			Name = "SentryAimGhost",
+			Mesh = new TorusMesh
+			{
+				InnerRadius = radius * 0.92f,
+				OuterRadius = radius,
+				Material = _aimPaint,
+			},
+			Visible = false,
+		};
+		AddChild(_aimGhost);
+
+		_aimKind = _armedAction;
+	}
+
+	private void ClearSentryAim()
+	{
+		if (_aimGhost == null)
+			return;
+
+		_aimGhost.QueueFree();
+		_aimGhost = null;
+
+		// Freed with its ghost rather than kept for reuse: an armed tool is a moment, not a
+		// mode, and the exit-crash rule wants every wrapper's owner obvious.
+		_aimPaint?.Dispose();
+		_aimPaint = null;
 	}
 
 	/// <summary>
@@ -148,8 +347,11 @@ public partial class TrackMasterController
 					return;
 				}
 
-				_sentry!.RequestBouncy(racer.OwnerPeerId);
+				// Disarmed before the request: in solo the confirmation comes back
+				// synchronously, and the follow-through camera only flies for a shot that
+				// is no longer being aimed.
 				_sentryArmed = false;
+				_sentry!.RequestBouncy(racer.OwnerPeerId);
 				EmitSignal(SignalName.SentryStatusChanged, "Bouncy! away.");
 				return;
 			}
@@ -176,8 +378,8 @@ public partial class TrackMasterController
 					return;
 				}
 
-				_sentry!.RequestChain(_chainFirstPick.OwnerPeerId, racer.OwnerPeerId);
 				_sentryArmed = false;
+				_sentry!.RequestChain(_chainFirstPick.OwnerPeerId, racer.OwnerPeerId);
 				_chainFirstPick = null;
 				EmitSignal(SignalName.SentryStatusChanged, "Chained up!");
 				return;
@@ -191,8 +393,11 @@ public partial class TrackMasterController
 					return;
 				}
 
-				_sentry!.RequestMissile(point);
+				// Disarmed before the request: in solo the confirmation comes back
+				// synchronously, and the follow-through camera only flies for a shot that
+				// is no longer being aimed.
 				_sentryArmed = false;
+				_sentry!.RequestMissile(point);
 				EmitSignal(SignalName.SentryStatusChanged, "Missile away!");
 				return;
 			}
@@ -205,8 +410,11 @@ public partial class TrackMasterController
 					return;
 				}
 
-				_sentry!.RequestBarrel(point);
+				// Disarmed before the request: in solo the confirmation comes back
+				// synchronously, and the follow-through camera only flies for a shot that
+				// is no longer being aimed.
 				_sentryArmed = false;
+				_sentry!.RequestBarrel(point);
 				EmitSignal(SignalName.SentryStatusChanged, "Barrel planted.");
 				return;
 			}
@@ -220,8 +428,11 @@ public partial class TrackMasterController
 					return;
 				}
 
-				_sentry!.RequestBooster(racer.OwnerPeerId);
+				// Disarmed before the request: in solo the confirmation comes back
+				// synchronously, and the follow-through camera only flies for a shot that
+				// is no longer being aimed.
 				_sentryArmed = false;
+				_sentry!.RequestBooster(racer.OwnerPeerId);
 				EmitSignal(SignalName.SentryStatusChanged, "Booster strapped on.");
 				return;
 			}
@@ -235,8 +446,11 @@ public partial class TrackMasterController
 					return;
 				}
 
-				_sentry!.RequestWires(racer.OwnerPeerId);
+				// Disarmed before the request: in solo the confirmation comes back
+				// synchronously, and the follow-through camera only flies for a shot that
+				// is no longer being aimed.
 				_sentryArmed = false;
+				_sentry!.RequestWires(racer.OwnerPeerId);
 				EmitSignal(SignalName.SentryStatusChanged, "Wires crossed.");
 				return;
 			}
@@ -249,8 +463,11 @@ public partial class TrackMasterController
 					return;
 				}
 
-				_sentry!.RequestOilSlick(point);
+				// Disarmed before the request: in solo the confirmation comes back
+				// synchronously, and the follow-through camera only flies for a shot that
+				// is no longer being aimed.
 				_sentryArmed = false;
+				_sentry!.RequestOilSlick(point);
 				EmitSignal(SignalName.SentryStatusChanged, "Oil poured.");
 				return;
 			}
@@ -263,8 +480,11 @@ public partial class TrackMasterController
 					return;
 				}
 
-				_sentry!.RequestMagnet(point);
+				// Disarmed before the request: in solo the confirmation comes back
+				// synchronously, and the follow-through camera only flies for a shot that
+				// is no longer being aimed.
 				_sentryArmed = false;
+				_sentry!.RequestMagnet(point);
 				EmitSignal(SignalName.SentryStatusChanged, "Magnet planted.");
 				return;
 			}
@@ -277,8 +497,11 @@ public partial class TrackMasterController
 					return;
 				}
 
-				_sentry!.RequestCargoSpill(point);
+				// Disarmed before the request: in solo the confirmation comes back
+				// synchronously, and the follow-through camera only flies for a shot that
+				// is no longer being aimed.
 				_sentryArmed = false;
+				_sentry!.RequestCargoSpill(point);
 				EmitSignal(SignalName.SentryStatusChanged, "Cargo away!");
 				return;
 			}
@@ -293,8 +516,11 @@ public partial class TrackMasterController
 					return;
 				}
 
-				_sentry!.RequestPopUpRamp(tileIndex, slotIndex);
+				// Disarmed before the request: in solo the confirmation comes back
+				// synchronously, and the follow-through camera only flies for a shot that
+				// is no longer being aimed.
 				_sentryArmed = false;
+				_sentry!.RequestPopUpRamp(tileIndex, slotIndex);
 				EmitSignal(SignalName.SentryStatusChanged, "Ramp rising!");
 				return;
 			}

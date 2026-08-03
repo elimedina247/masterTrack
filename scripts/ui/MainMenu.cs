@@ -224,7 +224,7 @@ public partial class MainMenu : Control
     /// </summary>
     private void OnSoloPressed()
     {
-        GetTree().ChangeSceneToFile(LobbyScenePath);
+        SceneFader.Instance.TransitionTo(LobbyScenePath);
     }
 
     /// <summary>Jump straight to the Track Master's board, so the builder can be worked on alone.
@@ -234,7 +234,7 @@ public partial class MainMenu : Control
     {
         GameManager.Instance.SoloRole = PlayerRole.TrackMaster;
         GameManager.Instance.SetGameMode(GameMode.LiveBuild);
-        GetTree().ChangeSceneToFile(GameScenePath);
+        SceneFader.Instance.TransitionTo(GameScenePath);
     }
 
     /// <summary>The same solo board, but the whole Sentry match: build against the clock, press
@@ -243,7 +243,7 @@ public partial class MainMenu : Control
     {
         GameManager.Instance.SoloRole = PlayerRole.TrackMaster;
         GameManager.Instance.SetGameMode(GameMode.Sentry);
-        GetTree().ChangeSceneToFile(GameScenePath);
+        SceneFader.Instance.TransitionTo(GameScenePath);
     }
 
     // ---- Network callbacks ----
@@ -253,7 +253,7 @@ public partial class MainMenu : Control
     /// exists. Nobody waits on the menu: the point of the lobby is that you are already driving
     /// while the group assembles.
     /// </summary>
-    private void OnServerCreated() => GetTree().ChangeSceneToFile(LobbyScenePath);
+    private void OnServerCreated() => SceneFader.Instance.TransitionTo(LobbyScenePath);
 
     private void OnConnectedToServer()
     {
@@ -262,7 +262,7 @@ public partial class MainMenu : Control
         // server, or the car would spawn wearing the random deal instead.
         GameManager.Instance.PublishLocalName();
         GameManager.Instance.PublishLocalPreference();
-        GetTree().ChangeSceneToFile(LobbyScenePath);
+        SceneFader.Instance.TransitionTo(LobbyScenePath);
     }
 
     private void OnConnectionFailed()

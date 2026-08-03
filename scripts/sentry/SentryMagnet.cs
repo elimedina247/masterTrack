@@ -24,8 +24,9 @@ public partial class SentryMagnet : Node3D
     /// <summary>Seconds of visible wind-up before the field grabs — the one shared fuse.</summary>
     private const float SpinUpSeconds = SentryActions.LeadSeconds;
 
-    /// <summary>How far the field reaches, in metres. Most of a road width either side.</summary>
-    private const float Radius = 22.0f;
+    /// <summary>How far the field reaches, in metres. Most of a road width either side. Public
+    /// so the aiming ghost can promise exactly this circle before the magnet exists.</summary>
+    public const float Radius = 22.0f;
 
     /// <summary>The drag on a car inside the field, in m/s². Sized against the chain's numbers:
     /// firmly felt, well under <c>ChainMaxPull</c> — a magnet walks you off your line, it does

@@ -1,4 +1,5 @@
 using Godot;
+using MasterTrack.Audio;
 using MasterTrack.Tiles;
 
 namespace MasterTrack.Sentry;
@@ -25,8 +26,9 @@ public partial class SentryBarrelBomb : Node3D
 	private const float FuseSeconds = 2.0f;
 
 	/// <summary>Bigger than the missile's — the barrel trades the missile's aim-anywhere reach
-	/// for a planted spot, so the spot it owns is huge.</summary>
-	private const float ExplosionRadius = TrackTile.Size * 1.3f;
+	/// for a planted spot, so the spot it owns is huge. Public so the aiming ghost can promise
+	/// exactly this circle before the barrel exists.</summary>
+	public const float ExplosionRadius = TrackTile.Size * 1.3f;
 
 	/// <summary>Speed the blast adds to a car at the centre of it, in m/s. Far past the
 	/// missile's 80 and well over double a car's top speed: anyone near the barrel when it goes
@@ -36,6 +38,11 @@ public partial class SentryBarrelBomb : Node3D
 
 	private const float BarrelRadius = 1.6f;
 	private const float BarrelHeight = 3.0f;
+
+	/// <summary>The fuse, out loud: a beeping countdown that runs from planting to the bang.
+	/// It dies with the barrel, so however much of it plays, it always ends in the explosion —
+	/// the audible twin of the blinking lamp.</summary>
+	private const string CountdownSfxPath = "res://assets/audio/hazards/bomb_countdown.mp3";
 
 	private StandardMaterial3D _paint = null!;
 	private StandardMaterial3D _fuseLamp = null!;
@@ -74,6 +81,8 @@ public partial class SentryBarrelBomb : Node3D
 			Radius = 0.45f, Material = _fuseLamp,
 			Position = new Vector3(0.0f, BarrelHeight + 0.35f, 0.0f),
 		});
+
+		Sfx.Attach(this, CountdownSfxPath, unitSize: 20.0f);
 	}
 
 	/// <summary>Free the wrappers while the engine is still alive — a refcounted resource left

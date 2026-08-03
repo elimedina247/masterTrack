@@ -25,6 +25,11 @@ public partial class RacerController
 	/// <summary>How much harder a bouncy car's impacts hit than a normal collision.</summary>
 	private const float BouncyBounceScale = 2.2f;
 
+	/// <summary>The BOING. Touching a bumper is a cartoon gag, and it should sound like one —
+	/// played at the contact by the launched car's machine, per the impact cooldown, so a
+	/// grind along the bumper is one boing rather than a spring solo.</summary>
+	private const string BouncySfxPath = "res://assets/audio/hazards/boing.mp3";
+
 	/// <summary>Pull toward the partner per metre of chain stretch, in m/s² per metre.</summary>
 	private const float ChainSpringRate = 8.0f;
 

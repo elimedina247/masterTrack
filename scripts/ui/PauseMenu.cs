@@ -109,7 +109,7 @@ public partial class PauseMenu : CanvasLayer
             NetworkManager.Instance.Disconnect();
 
         GetTree().Paused = false;
-        GetTree().ChangeSceneToFile(MainMenuScenePath);
+        SceneFader.Instance.TransitionTo(MainMenuScenePath);
     }
 
     /// <summary>

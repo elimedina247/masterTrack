@@ -1,4 +1,5 @@
 using Godot;
+using MasterTrack.Audio;
 using MasterTrack.Racer;
 using MasterTrack.Tiles;
 using MasterTrack.Vehicles;
@@ -47,6 +48,11 @@ public partial class SentryMissile : Node3D
 	/// <summary>Model units to metres. ~1.7 m authored × 5 ≈ an 8.4 m rocket in the world.</summary>
 	private const float ModelScale = 5.0f;
 
+	/// <summary>The cartoon whistle of the drop — the audible half of the warning ring. It
+	/// rides the falling body, so it descends on the racers it is aimed at, and it dies with
+	/// the missile: the cut into the bang <i>is</i> the impact.</summary>
+	private const string WhistleSfxPath = "res://assets/audio/hazards/missile_whistle.mp3";
+
 	private Node3D _body = null!;
 	private StandardMaterial3D _ringMaterial = null!;
 	private float _age;
@@ -80,6 +86,8 @@ public partial class SentryMissile : Node3D
 		_body = BuildBody();
 		_body.Position = new Vector3(0.0f, SpawnHeight, 0.0f);
 		AddChild(_body);
+
+		Sfx.Attach(_body, WhistleSfxPath, unitSize: 30.0f);
 	}
 
 	/// <summary>

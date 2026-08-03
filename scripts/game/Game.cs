@@ -45,6 +45,18 @@ public partial class Game : Node3D
     private BuildPhasePanel? _buildPanel;
     private SentryBar? _sentryBar;
 
+    // ---- The race's bookends: the countdown in, the results out, and the deaths between ----
+
+    private RaceCountdown? _countdown;
+    private MatchResults? _results;
+    private SpectateCamera? _spectate;
+
+    /// <summary>This machine's own car, once it exists. What the countdown locks and releases.</summary>
+    private RacerController? _localCar;
+
+    /// <summary>Whether this match's countdown has already run. One race, one start.</summary>
+    private bool _countdownStarted;
+
     /// <summary>Deal clock during a Sentry build, in seconds. Faster than a live match's: there
     /// is no race to pace the track against, only people waiting for it to be finished.</summary>
     private const float SentryBuildDealInterval = 1.5f;
@@ -92,10 +104,16 @@ public partial class Game : Node3D
             _sentry.DebuffApplied += OnDebuffApplied;
 
             GameManager.Instance.MatchPhaseChanged += OnMatchPhaseChanged;
-
-            // The spectator camera has done its job the moment this machine's car exists.
-            _arena.LocalCarSpawned += OnLocalCarSpawned;
         }
+
+        // Both modes: the local car is the thing the countdown locks and elimination watches,
+        // and the first car into the world — anyone's — is the starting gun for the countdown.
+        _arena.LocalCarSpawned += OnLocalCarSpawned;
+        _arena.Racers.ChildEnteredTree += OnRacerEnteredWorld;
+
+        // Death is a match rule, so the match scene is what listens for it. The lobby never
+        // subscribes, which is half of why nothing there can kill you.
+        GameManager.Instance.RacerEliminated += OnRacerEliminated;
 
         // Pay every piece's one-time costs now, while the scene is still settling, rather than
         // the first time the Track Master plays each card mid-race.
@@ -138,7 +156,7 @@ public partial class Game : Node3D
     private void OnGameStateChanged(int state)
     {
         if ((GameState)state == GameState.Lobby)
-            GetTree().ChangeSceneToFile(LobbyScenePath);
+            SceneFader.Instance.TransitionTo(LobbyScenePath);
     }
 
     /// <summary>
@@ -153,6 +171,7 @@ public partial class Game : Node3D
         GameManager.Instance.GameStateChanged -= OnGameStateChanged;
         GameManager.Instance.MatchWon -= OnMatchWon;
         GameManager.Instance.MatchPhaseChanged -= OnMatchPhaseChanged;
+        GameManager.Instance.RacerEliminated -= OnRacerEliminated;
 
         // The phase describes this match, and this match is over on this machine whatever the
         // reason — see ResetPhase for why it cannot be left to the graceful path alone.
@@ -160,10 +179,10 @@ public partial class Game : Node3D
     }
 
     /// <summary>
-    /// Server only. Somebody got to the chequered bar at the end of the track. That is the race,
-    /// so hand it to the manager, which is the only thing that decides matches are over.
+    /// Server only. Somebody got to the chequered bar at the end of the track. The manager
+    /// records the place — and the first place is the win, which is what decides the match.
     /// </summary>
-    private void OnRaceFinished(int peerId) => GameManager.Instance.DeclareWinner(peerId);
+    private void OnRaceFinished(int peerId) => GameManager.Instance.RecordFinish(peerId);
 
     /// <summary>
     /// Instance every deck piece once, out of sight, and throw it away a frame later.
@@ -204,20 +223,24 @@ public partial class Game : Node3D
     }
 
     /// <summary>
-    /// Everyone, server included: say who won and leave it up. The manager takes the session back
-    /// to the lobby a few seconds later — see <see cref="OnGameStateChanged"/> for the way out.
+    /// Everyone, server included: the match concluded — a finisher, the sentry wiping the grid,
+    /// or nobody left at all — and the results board owns the screen until the manager takes the
+    /// session back to the lobby. Deferred by a couple of seconds so the moment itself (the
+    /// crossing, the last car falling) is seen before the board covers it.
     /// </summary>
     private void OnMatchWon(int peerId)
     {
-        if (_waiting == null)
-            return;
+        if (_waiting != null)
+            _waiting.Visible = false;
 
-        string who = NetworkManager.Instance.IsNetworked
-            ? GameManager.Instance.NameOf(peerId)
-            : "You";
+        GetTree().CreateTimer(1.6f).Timeout += () =>
+        {
+            if (!IsInsideTree() || _results != null)
+                return;
 
-        _waiting.Text = $"{who} reached the finish!";
-        _waiting.Visible = true;
+            _results = new MatchResults { Name = "MatchResults" };
+            GetNode("HUD").AddChild(_results);
+        };
     }
 
     /// <summary>
@@ -306,11 +329,96 @@ public partial class Game : Node3D
         GetNode("HUD").AddChild(_sentryBar);
     }
 
-    /// <summary>This machine's car exists; the build-phase spectator camera is done.</summary>
+    /// <summary>
+    /// This machine's car exists. The build-phase spectator camera is done, the car becomes the
+    /// one the countdown holds, and — because a car only ever spawns here inside a gamemode —
+    /// it becomes mortal. The lobby and the proving ground never set
+    /// <see cref="RacerController.EliminationEnabled"/>, which is the whole rule about where
+    /// death exists.
+    /// </summary>
     private void OnLocalCarSpawned(RacerController car)
     {
         _spectator?.QueueFree();
         _spectator = null;
+
+        _localCar = car;
+        car.EliminationEnabled = true;
+
+        // The countdown can beat the car (a client's own spawn arrives with everyone else's) or
+        // the car can beat the countdown; whichever order, a car that exists while the numbers
+        // are still up starts held.
+        if (_countdown != null && IsInstanceValid(_countdown))
+            car.AcceptsInput = false;
+    }
+
+    /// <summary>
+    /// The first car into the world — anyone's — starts the countdown on this screen. Every
+    /// peer's cars arrive off the same spawn broadcast, so every screen counts the same three
+    /// beats within a network moment, racers and builder alike.
+    /// </summary>
+    private void OnRacerEnteredWorld(Node node)
+    {
+        if (_countdownStarted || node is not RacerController { OwnerPeerId: > 0 })
+            return;
+
+        _countdownStarted = true;
+
+        // Deferred: this fires mid spawn-replication, and the overlay wants a settled tree.
+        CallDeferred(nameof(StartRaceCountdown));
+    }
+
+    private void StartRaceCountdown()
+    {
+        if (!IsInsideTree())
+            return;
+
+        _countdown = new RaceCountdown { Name = "RaceCountdown" };
+        GetNode("HUD").AddChild(_countdown);
+        _countdown.Finished += OnCountdownFinished;
+
+        if (_localCar != null && IsInstanceValid(_localCar))
+            _localCar.AcceptsInput = false;
+    }
+
+    /// <summary>RACE! — give the driver the car back.</summary>
+    private void OnCountdownFinished()
+    {
+        if (_localCar != null && IsInstanceValid(_localCar) && !_localCar.IsEliminated)
+            _localCar.AcceptsInput = true;
+    }
+
+    /// <summary>
+    /// A death became real: switch that car off on this machine, and if it was ours, move into
+    /// the spectator seat. Deferred because the confirmation can arrive while the physics step
+    /// that killed the car is still on the stack.
+    /// </summary>
+    private void OnRacerEliminated(int peerId)
+    {
+        foreach (Node node in GetTree().GetNodesInGroup(RacerController.GroupName))
+        {
+            if (node is not RacerController car || car.OwnerPeerId != peerId)
+                continue;
+
+            car.CallDeferred(RacerController.MethodName.MarkEliminated);
+            break;
+        }
+
+        if (peerId == Multiplayer.GetUniqueId())
+            CallDeferred(nameof(StartSpectating));
+    }
+
+    /// <summary>Out of the race, not out of the room: watch whoever is still in it.</summary>
+    private void StartSpectating()
+    {
+        if (!IsInsideTree() || _spectate != null)
+            return;
+
+        _spectate = new SpectateCamera { Name = "SpectateCamera" };
+        AddChild(_spectate);
+
+        // The driving HUD is about a car this player no longer has.
+        if (_hud != null)
+            _hud.Visible = false;
     }
 
     /// <summary>

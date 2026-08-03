@@ -121,6 +121,11 @@ public partial class TrackTile : StaticBody3D
 		// needs them: the fall by Initialize, the physics step by the hazards that move or push.
 		SetProcess(false);
 		SetPhysicsProcess(false);
+
+		// The tile reacts to its own arrival through the signal rather than by calling the effects
+		// out of StepFall, so the landing layer is a listener that can be lifted off in one line
+		// and anything else that wants the moment hooks the same place. See TrackTile.Landing.cs.
+		TileLanded += OnTileLanded;
 	}
 
 	/// <summary>
@@ -201,6 +206,7 @@ public partial class TrackTile : StaticBody3D
 			_fallSpeed = fallSpeed;
 			Position += new Vector3(0.0f, fallHeight, 0.0f);
 			SetProcess(true);
+			BeginDropTelegraph(fallHeight);
 			return;
 		}
 
@@ -239,6 +245,7 @@ public partial class TrackTile : StaticBody3D
 		{
 			_fallRemaining -= step;
 			Position -= new Vector3(0.0f, step, 0.0f);
+			UpdateDropTelegraph();
 			return;
 		}
 

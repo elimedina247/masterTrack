@@ -22,8 +22,9 @@ public partial class SentryCargoSpill : Node3D
     private const int DropCount = 26;
 
     /// <summary>How far from the aim point a piece can land, in metres. Two-thirds of a road
-    /// width — a field you thread, not a wall you stop for.</summary>
-    private const float SpillRadius = 17.0f;
+    /// width — a field you thread, not a wall you stop for. Public so the aiming ghost can
+    /// promise exactly this circle before the rain starts.</summary>
+    public const float SpillRadius = 17.0f;
 
     /// <summary>How high the junk spawns, in metres. With the debris' 2 g, about two and a half
     /// seconds of visible incoming — the warning is the rain itself.</summary>

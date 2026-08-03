@@ -103,6 +103,27 @@ public partial class CameraRig : Node3D
     /// <summary>Roughly how many wobbles a second at full strength.</summary>
     [Export] public float ShakeFrequency = 14.0f;
 
+    // ---------------------------------------------------------------- Impact shake
+
+    /// <summary>
+    /// Peak wobble in <b>degrees</b> from a one-off impact, on top of whatever the speed shake is
+    /// already doing.
+    ///
+    /// An order of magnitude past <see cref="ShakeAngle"/> on purpose. Speed shake has to stay
+    /// under the threshold where it reads as a fault, because it is on for minutes at a time; an
+    /// impact is over in half a second and has to be unmistakable, so it is allowed to be the
+    /// thing you see rather than the thing you feel.
+    /// </summary>
+    [ExportGroup("Impact Shake")]
+    [Export] public float ImpactShakeAngle = 1.6f;
+
+    /// <summary>
+    /// How fast an impact dies away, in e-folds per second. Exponential rather than linear: a
+    /// knock should hit hard and let go, and a shake that comes off at a constant rate reads as a
+    /// scripted animation playing out.
+    /// </summary>
+    [Export] public float ImpactShakeDecay = 4.5f;
+
     private float _yaw;
     private float _pitch;
     private bool _active;
@@ -113,6 +134,9 @@ public partial class CameraRig : Node3D
     private Vector3 _baseCameraRotation;
     private readonly FastNoiseLite _shakeNoise = new();
     private float _shakeTime;
+
+    /// <summary>How much impact shake is left to spend, 0 to 1. See <see cref="AddImpact"/>.</summary>
+    private float _impact;
 
     /// <summary>How far let go the camera currently is, 0 on the ground to 1 fully detached.</summary>
     private float _detach;
@@ -157,6 +181,25 @@ public partial class CameraRig : Node3D
         SetProcess(local);
         SetProcessUnhandledInput(local);
         GD.Print($"[CameraRig] SetActive({local}); camera current = {_camera.Current}.");
+    }
+
+    /// <summary>
+    /// Knock the camera, <paramref name="strength"/> from 0 to 1. Anything in the world that lands
+    /// hard enough to be felt calls this — the first of them is a tile hitting the road.
+    ///
+    /// Rides the speed shake's machinery rather than owning any of its own: one noise field, one
+    /// place the camera's rotation is written, and the two channels simply add. Knocks stack up to
+    /// the full channel, so a car caught by two things at once is shaken once, harder.
+    ///
+    /// Only the local player's rig runs, so a knock handed to a puppet is dropped rather than
+    /// banked — otherwise it would go off the moment that camera was ever made current.
+    /// </summary>
+    public void AddImpact(float strength)
+    {
+        if (!_active || strength <= 0.0f)
+            return;
+
+        _impact = Mathf.Min(1.0f, _impact + strength);
     }
 
     public override void _UnhandledInput(InputEvent @event)
@@ -264,7 +307,14 @@ public partial class CameraRig : Node3D
         // the moment the speedometer ticks past it.
         float amount = ramp * ramp;
 
-        if (amount <= 0.0f)
+        // Let any knock bleed off. Snapped to zero at the bottom, because an exponential never
+        // quite arrives and a camera that trembles a thousandth of a degree forever is a camera
+        // that never gives the frame back.
+        _impact *= Mathf.Exp(-ImpactShakeDecay * delta);
+        if (_impact < 0.002f)
+            _impact = 0.0f;
+
+        if (amount <= 0.0f && _impact <= 0.0f)
         {
             _camera.Rotation = _baseCameraRotation;
             return;
@@ -272,11 +322,12 @@ public partial class CameraRig : Node3D
 
         // Advance faster the harder the shake, so speed changes the texture of it and not just
         // the size — a fast tremble reads very differently to a slow sway of the same size.
-        _shakeTime += delta * ShakeFrequency * Mathf.Lerp(0.6f, 1.0f, amount);
+        _shakeTime += delta * ShakeFrequency * Mathf.Lerp(0.6f, 1.0f, Mathf.Max(amount, _impact));
 
         // Three well-separated slices of the same noise field: one field, three uncorrelated
         // wobbles, no three objects to seed and keep in step.
-        float angle = Mathf.DegToRad(ShakeAngle) * amount;
+        float angle = Mathf.DegToRad(ShakeAngle) * amount
+                      + Mathf.DegToRad(ImpactShakeAngle) * _impact;
         _camera.Rotation = _baseCameraRotation + new Vector3(
             _shakeNoise.GetNoise2D(_shakeTime, 0.0f),
             _shakeNoise.GetNoise2D(_shakeTime, 37.0f),

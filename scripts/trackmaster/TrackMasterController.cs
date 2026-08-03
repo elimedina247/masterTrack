@@ -70,6 +70,14 @@ public partial class TrackMasterController : Node3D
 		/// flying anything. Skipped by the toggle while there are no cars to centre on.
 		/// </summary>
 		Pack,
+
+		/// <summary>
+		/// Transient: rides over the spot a just-confirmed sentry action is about to pay off at,
+		/// then hands back to whatever mode was on before. Never entered by the toggle — only by
+		/// a confirmed placement — and <i>any</i> input from the builder ends it instantly. A
+		/// camera that takes the wheel during a fight is worse than no camera help at all.
+		/// </summary>
+		Watch,
 	}
 
 	/// <summary>The track to build onto. Required.</summary>
@@ -251,6 +259,24 @@ public partial class TrackMasterController : Node3D
 	private readonly List<RacerMarker> _markers = new();
 	private float _rosterCountdown;
 
+	// ---- Follow-through camera ----
+
+	/// <summary>Where the Watch camera is looking: the confirmed action's target.</summary>
+	private Vector3 _watchTarget;
+
+	/// <summary>Seconds of watching left before the camera goes home on its own.</summary>
+	private float _watchRemaining;
+
+	/// <summary>The mode the Watch borrowed the camera from, restored when it ends.</summary>
+	private BoardCameraMode _watchReturnMode = BoardCameraMode.Pack;
+
+	/// <summary>
+	/// The height the Watch rides at, low enough that the consequence fills the frame. The
+	/// sentry's own zoom wins when it is already closer — a watch that zoomed <i>out</i> would
+	/// be taking the shot away from someone already leaning in.
+	/// </summary>
+	private float WatchHeight => Mathf.Min(_boardHeight, TrackTile.Size * 3.2f);
+
 	public override void _Ready()
 	{
 		if (Track == null)
@@ -311,6 +337,8 @@ public partial class TrackMasterController : Node3D
 		StopLooking();
 		ClearPreview();
 		CancelHazardPlacement();
+		CancelSentryAction();
+		EndSentryWatch();
 	}
 
 	/// <summary>
@@ -401,6 +429,7 @@ public partial class TrackMasterController : Node3D
 			UpdateFollow((float)delta);
 
 		UpdateRacerMarkers((float)delta);
+		UpdateSentryAim();
 	}
 
 	// ---- Racer markers ----
@@ -490,12 +519,17 @@ public partial class TrackMasterController : Node3D
 		// The roster is only re-read every MarkerRosterInterval seconds, so a car that goes away
 		// in between — a peer dropping out, or the match scene being torn down — leaves a marker
 		// pointing at a freed object. Without this that is an exception every frame until the
-		// next sweep, rather than a chevron that simply stops being drawn.
-		if (!IsInstanceValid(marker.Racer) || !marker.Racer.IsInsideTree())
+		// next sweep, rather than a chevron that simply stops being drawn. An eliminated car is
+		// hidden rather than freed, so its name goes with it the same way — a label floating
+		// over an empty piece of void would be a ghost on the board.
+		if (!IsInstanceValid(marker.Racer) || !marker.Racer.IsInsideTree()
+			|| !marker.Racer.Visible)
 		{
 			marker.Root.Visible = false;
 			return;
 		}
+
+		marker.Root.Visible = true;
 
 		marker.Root.Position = marker.Racer.GlobalPosition + new Vector3(0.0f, MarkerHeight, 0.0f);
 
@@ -537,11 +571,46 @@ public partial class TrackMasterController : Node3D
 	// ---- Camera modes ----
 
 	/// <summary>
+	/// Take the camera to a spot the sentry's shot is about to pay off at, for a few seconds or
+	/// until the builder touches anything. Entered through <see cref="SetCameraMode"/> like every
+	/// other mode; the return mode is only captured on the way <i>in</i>, so back-to-back shots
+	/// extend the watch rather than making Watch its own return address.
+	/// </summary>
+	public void BeginSentryWatch(Vector3 target, float seconds)
+	{
+		_watchTarget = target;
+		_watchRemaining = seconds;
+
+		if (CameraMode != BoardCameraMode.Watch)
+		{
+			_watchReturnMode = CameraMode;
+			SetCameraMode(BoardCameraMode.Watch);
+		}
+	}
+
+	/// <summary>Hand the camera back to whatever the sentry was doing before the shot.</summary>
+	public void EndSentryWatch()
+	{
+		if (CameraMode != BoardCameraMode.Watch)
+			return;
+
+		_watchRemaining = 0.0f;
+		SetCameraMode(_watchReturnMode);
+	}
+
+	/// <summary>
 	/// Step to the next camera mode: track, pack, free roam, round again. Pack only offers
 	/// itself while somebody is racing — over an empty board it is just Follow with extra steps.
+	/// Pressed during a Watch it simply ends the watch: the toggle is input, and input wins.
 	/// </summary>
 	public void ToggleCameraMode()
 	{
+		if (CameraMode == BoardCameraMode.Watch)
+		{
+			EndSentryWatch();
+			return;
+		}
+
 		BoardCameraMode next = CameraMode switch
 		{
 			BoardCameraMode.Follow => BoardCameraMode.Pack,
@@ -579,23 +648,37 @@ public partial class TrackMasterController : Node3D
 	}
 
 	/// <summary>
-	/// Ride over the point this mode cares about — the end of the track, or the middle of the
-	/// pack. Eased rather than pinned, so a placed tile (or a pack spreading out) pulls the
-	/// board along instead of teleporting it out from under the Track Master's eyes.
+	/// Ride over the point this mode cares about — the end of the track, the middle of the
+	/// pack, or the spot a shot is landing on. Eased rather than pinned, so a placed tile (or a
+	/// pack spreading out) pulls the board along instead of teleporting it out from under the
+	/// Track Master's eyes.
 	/// </summary>
 	private void UpdateFollow(float delta)
 	{
 		if (Track == null)
 			return;
 
-		Vector3 focus = CameraMode == BoardCameraMode.Pack
-			? PackCenter()
-			: Track.HeadWorldPosition;
+		// The watch runs its own clock here, because this is the only per-frame work the mode
+		// does: when the moment has been seen, the camera eases home by itself.
+		if (CameraMode == BoardCameraMode.Watch)
+		{
+			_watchRemaining -= delta;
+			if (_watchRemaining <= 0.0f)
+				EndSentryWatch();
+		}
 
+		Vector3 focus = CameraMode switch
+		{
+			BoardCameraMode.Pack => PackCenter(),
+			BoardCameraMode.Watch => _watchTarget,
+			_ => Track.HeadWorldPosition,
+		};
+
+		float height = CameraMode == BoardCameraMode.Watch ? WatchHeight : _boardHeight;
 		float t = 1.0f - Mathf.Exp(-FollowSpeed * delta);
 
 		_camera.Position = _camera.Position.Lerp(
-			focus + new Vector3(0, _boardHeight, 0), t);
+			focus + new Vector3(0, height, 0), t);
 
 		// Per-angle rather than a plain lerp: coming back from free roam the yaw can be several
 		// turns from zero, and a straight lerp would unwind all of it the long way round.
@@ -633,6 +716,13 @@ public partial class TrackMasterController : Node3D
 	{
 		if (Track == null)
 			return;
+
+		// Any deliberate input ends a follow-through watch on the spot — and then keeps going,
+		// so the keystroke that ended the watch is also the keystroke that does its job. Mouse
+		// motion deliberately doesn't count; nudging the mouse is not a decision.
+		if (CameraMode == BoardCameraMode.Watch
+			&& @event is InputEventKey { Pressed: true } or InputEventMouseButton { Pressed: true })
+			EndSentryWatch();
 
 		// An armed sentry action owns the mouse buttons until it fires or is cancelled.
 		if (HandleSentryInput(@event))

@@ -248,8 +248,12 @@ hand up behind it, the way a hand of cards does.
 `TileFallSpeed` metres per second (both on `TrackController`, since every peer builds the tile
 and the racers are the ones meant to see it coming). The whole tile descends, collision and all,
 so it isn't track you can drive on until it lands — which puts a real clock on building far
-enough ahead. At the defaults that's 120 m at 24 m/s, a five second descent. The starting
-straight doesn't drop; the racers are already parked on it.
+enough ahead. At the defaults that's 135 m at 130 m/s, a descent of about a second: read against
+how fast the cars are rather than against how long it looks nice for, so a placement arrives
+roughly as the car that was one tile back reaches it. The tile doesn't sink, it slams — a shadow
+tightens on the spot it's headed for on the way down, and it throws a ring of dust off its own
+footprint and shakes the cameras of anyone nearby when it hits. The starting straight doesn't
+drop; the racers are already parked on it, and road that never moved gets none of the impact.
 
 **Watching the racers.** Every car carries a coloured chevron on the board, pointing the way
 it's travelling, labelled with whose it is. They're drawn over everything — a marker that hid

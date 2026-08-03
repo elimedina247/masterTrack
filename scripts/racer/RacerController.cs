@@ -1,4 +1,5 @@
 using Godot;
+using MasterTrack.Audio;
 using MasterTrack.Networking;
 using MasterTrack.Tiles;
 using MasterTrack.Vehicles;
@@ -171,6 +172,37 @@ public partial class RacerController : Vehicle
 	/// <summary>The track whose floor is checked. Found once through the group.</summary>
 	private TrackController? _killTrack;
 	private bool _killTrackSearched;
+
+	// ---- Elimination ----
+	//
+	// A fall is not always survivable. During a match — and only there — some falls take the car
+	// out of the race instead of putting it back: in Sentry mode every trip past the kill plane
+	// is fatal (being knocked off the road is the sentry's whole kit working), and in Live Build
+	// the fatal fall is the one where the road you were on has already crumbled away, because
+	// there is nothing left to respawn onto. The lobby and the proving ground never eliminate;
+	// the flag below is only ever set by the match scene.
+
+	/// <summary>
+	/// Whether a fall can end this car's race. Off by default and switched on per-car by the
+	/// match scene, which is what keeps death a gamemode rule rather than a physics rule — the
+	/// lobby pad and the playtest area never set it, so nothing there can kill you.
+	/// </summary>
+	public bool EliminationEnabled { get; set; }
+
+	/// <summary>Set the moment this machine reports its own death, so the frames spent falling
+	/// while the broadcast makes its round trip don't report it again.</summary>
+	private bool _eliminationReported;
+
+	/// <summary>
+	/// The last tile this car actually stood on, or -1 before it has stood on any. Cached because
+	/// <see cref="CurrentTrackIndex"/> reads the wheels and answers -1 the moment the car is
+	/// airborne — and the fall is precisely when the fatality rule needs to know what road the
+	/// car fell <i>from</i>.
+	/// </summary>
+	private int _lastGroundedTileIndex = -1;
+
+	/// <summary>Whether this copy of the car has been switched off by an elimination.</summary>
+	public bool IsEliminated { get; private set; }
 
 	/// <summary>
 	/// How long a car must be stuck before it is rescued, in seconds. Long enough that no live
@@ -536,8 +568,86 @@ public partial class RacerController : Vehicle
 		if (GlobalPosition.Y >= _killTrack.LowestTileY - KillPlaneMargin)
 			return;
 
+		if (FallIsFatal())
+		{
+			if (_eliminationReported)
+				return;
+
+			_eliminationReported = true;
+			GD.Print($"[Racer {OwnerPeerId}] Fell with nothing to go back to — out of the race.");
+
+			// The report goes up; the car is only actually switched off when the confirmation
+			// comes back down to every peer at once — see MarkEliminated. Until then it simply
+			// keeps falling, which is also what everyone watching is seeing.
+			GameManager.Instance.ReportSelfEliminated();
+			return;
+		}
+
 		GD.Print($"[Racer {OwnerPeerId}] Fell {KillPlaneMargin:0}m below the lowest tile — respawn.");
 		Respawn();
+	}
+
+	/// <summary>
+	/// Whether this fall ends the race for this car. Only ever true inside a match (see
+	/// <see cref="EliminationEnabled"/>), never once the match has concluded, and never for a
+	/// car that already crossed the line — a finisher who then sails off the world has finished.
+	/// </summary>
+	private bool FallIsFatal()
+	{
+		if (!EliminationEnabled || IsEliminated)
+			return false;
+
+		GameManager manager = GameManager.Instance;
+
+		if (manager.WinnerPeerId != 0 || manager.MatchUnfinished || manager.HasFinished(OwnerPeerId))
+			return false;
+
+		// Sentry mode: while the race runs, the void is the void. Every tool in the sentry's
+		// kit that throws, drags or launches a car is lethal exactly when it puts you off the
+		// road — which is the whole reason placement is a skill.
+		if (manager.Mode == GameMode.Sentry)
+			return manager.Phase == MatchPhase.Racing;
+
+		// Live Build: fatal only when the road this car was on has already crumbled away. An
+		// ordinary tumble off live road keeps the respawn it has always had; falling behind the
+		// track's moving tail is the one fall with nothing left under it. Judged off the last
+		// tile the wheels touched, because by the time the kill plane fires the car has been
+		// airborne for seconds and the wheels have long since stopped answering.
+		return _killTrack != null && _lastGroundedTileIndex >= 0
+			   && _lastGroundedTileIndex < _killTrack.Grid.OldestLiveIndex;
+	}
+
+	/// <summary>
+	/// Switch this copy of the car off: the elimination broadcast landed, on every peer at once.
+	/// The car is not freed — freeing is the server's spawner's business and nothing here needs
+	/// it — it simply stops being part of the race: invisible, solid to nothing, simulated by
+	/// nobody, and out of the racers group so the board's markers, the finish sweep and the
+	/// sentry's blasts all forget it in one move.
+	/// </summary>
+	public void MarkEliminated()
+	{
+		if (IsEliminated)
+			return;
+
+		IsEliminated = true;
+
+		RemoveFromGroup(GroupName);
+		Visible = false;
+		AcceptsInput = false;
+		CollisionLayer = 0;
+		CollisionMask = 0;
+		SetPhysicsProcess(false);
+		SetProcess(false);
+
+		if (!IsRemote)
+		{
+			FreezeMode = FreezeModeEnum.Kinematic;
+			Freeze = true;
+		}
+
+		// The dead player's own camera is handed over to the spectator by the match scene; the
+		// rig only needs to let go.
+		GetNodeOrNull<CameraRig>("CameraRig")?.SetActive(false);
 	}
 
 	/// <summary>
@@ -590,6 +700,11 @@ public partial class RacerController : Vehicle
 		}
 
 		base._PhysicsProcess(delta);
+
+		// Remembered while the wheels still know it; read back when they no longer do.
+		int standingOn = CurrentTrackIndex;
+		if (standingOn >= 0)
+			_lastGroundedTileIndex = standingOn;
 
 		UpdateRecoveryPose((float)delta);
 		UpdateStuckWatchdog((float)delta);
@@ -712,6 +827,10 @@ public partial class RacerController : Vehicle
 			state.AngularVelocity += Vector3.Up * (spinSign * ImpactSpinRate * severity);
 
 			RegisterImpact(severity, contactPoint);
+
+			if (bouncy)
+				Sfx.PlayAt(this, BouncySfxPath, contactPoint,
+						   volumeDb: 2.0f, unitSize: 15.0f, pitchJitter: 0.08f);
 		}
 	}
 

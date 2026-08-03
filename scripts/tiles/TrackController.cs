@@ -195,8 +195,13 @@ public partial class TrackController : Node3D
     /// </summary>
     private int _condemnedThrough = -1;
 
-    /// <summary>Whether somebody has already crossed the line. The race is only won once.</summary>
-    private bool _finished;
+    /// <summary>
+    /// Who has already crossed the line, so each racer's crossing fires exactly once. A set
+    /// rather than the old single flag: the first crossing still decides the match, but cars
+    /// arriving during the victory linger complete the race too, and the results board lists
+    /// them in the order this sweep saw them.
+    /// </summary>
+    private readonly HashSet<int> _crossedPeers = new();
 
     /// <summary>Whether the track has been declared finished regardless of the tile count.</summary>
     private bool _locked;
@@ -462,7 +467,7 @@ public partial class TrackController : Node3D
     /// </summary>
     public override void _PhysicsProcess(double delta)
     {
-        if (_finished || !RaceRules)
+        if (!RaceRules)
             return;
 
         if (Networked && !Multiplayer.IsServer())
@@ -481,8 +486,9 @@ public partial class TrackController : Node3D
         foreach (Node node in GetTree().GetNodesInGroup(RacerController.GroupName))
         {
             // A car with no owner is the one the board builds ahead of in solo play. It cannot
-            // win a race it is not in.
-            if (node is not RacerController racer || racer.OwnerPeerId <= 0)
+            // win a race it is not in. A car that already crossed cannot cross again.
+            if (node is not RacerController racer || racer.OwnerPeerId <= 0
+                || _crossedPeers.Contains(racer.OwnerPeerId))
                 continue;
 
             Vector3 offset = racer.GlobalPosition - line;
@@ -497,10 +503,10 @@ public partial class TrackController : Node3D
             if (Mathf.Abs(offset.Y) > TileCatalog.HeightStep * 1.5f)
                 continue;
 
-            _finished = true;
-            GD.Print($"[Track] Peer {racer.OwnerPeerId} crossed the line at tile {Grid.Count}.");
+            _crossedPeers.Add(racer.OwnerPeerId);
+            GD.Print($"[Track] Peer {racer.OwnerPeerId} crossed the line at tile {Grid.Count} " +
+                     $"(finisher #{_crossedPeers.Count}).");
             EmitSignal(SignalName.RaceFinished, racer.OwnerPeerId);
-            return;
         }
     }
 

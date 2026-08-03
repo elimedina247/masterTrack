@@ -1,4 +1,5 @@
 using Godot;
+using MasterTrack.Audio;
 using MasterTrack.Racer;
 
 namespace MasterTrack.Sentry;
@@ -15,13 +16,39 @@ namespace MasterTrack.Sentry;
 /// </summary>
 public static class SentryBlast
 {
+	/// <summary>The bang itself, shared like everything else here: the missile and the barrel
+	/// sound like the same ordnance because they are.</summary>
+	private const string ExplosionSfxPath = "res://assets/audio/hazards/explosion.mp3";
+
 	public static void Explode(Node3D source, Vector3 center, float radius, float strength)
 	{
+		// Fired through the scene root rather than from the weapon, because the weapon frees
+		// itself this frame and the bang has to keep ringing over the crater.
+		Sfx.PlayAt(source, ExplosionSfxPath, center,
+				   volumeDb: 4.0f, unitSize: 45.0f, pitchJitter: 0.06f);
+
+		// Who got caught, counted here rather than inside the impulse: the impulse only runs on
+		// the machine that simulates a car, but the geometry — who was inside the radius — reads
+		// the same off every peer's replicated poses. That is what lets the sentry's machine know
+		// the result of its own shot without the answer ever crossing the wire.
+		var caught = new System.Collections.Generic.List<int>();
+
 		foreach (Node node in source.GetTree().GetNodesInGroup(RacerController.GroupName))
 		{
-			if (node is RacerController racer)
-				racer.ApplyExplosionImpulse(center, radius, strength);
+			if (node is not RacerController racer)
+				continue;
+
+			if (racer.IsInsideTree()
+				&& racer.GlobalPosition.DistanceTo(center) <= radius)
+				caught.Add(racer.OwnerPeerId);
+
+			racer.ApplyExplosionImpulse(center, radius, strength);
 		}
+
+		// The missile and the barrel live as children of the manager, which is how the report
+		// finds its way to the sentry's UI. A blast fired from anywhere else simply goes
+		// unreported rather than being an error — the feedback is for the sentry's own shots.
+		(source.GetParent() as SentryManager)?.ReportBlast(caught.ToArray());
 
 		// Spilled cargo goes flying too — lay a junk field, then missile it into the pack.
 		// Debris is local on every peer, so each machine simply throws its own copies; and

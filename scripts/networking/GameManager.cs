@@ -118,8 +118,20 @@ public partial class GameManager : Node
     /// </summary>
     [Signal] public delegate void MatchPhaseChangedEventHandler(int phase, float seconds);
 
-    /// <summary>Somebody crossed the line. Fired on every peer, with the winner's peer id.</summary>
+    /// <summary>
+    /// The match concluded. Fired on every peer with the winner's peer id — or <b>0 for nobody</b>,
+    /// which means every racer died and the race went unfinished. (In Sentry mode that case never
+    /// carries 0: a board that killed everyone belongs to the sentry, and the id is theirs.)
+    /// </summary>
     [Signal] public delegate void MatchWonEventHandler(int peerId);
+
+    /// <summary>A racer crossed the line, in what place. Fired on every peer; feeds the results
+    /// board. The first of these is also the <see cref="MatchWon"/> winner.</summary>
+    [Signal] public delegate void RacerFinishedEventHandler(int peerId, int place);
+
+    /// <summary>A racer is out of the race — fell where no respawn could put them back. Fired on
+    /// every peer; the car is switched off and the dead player goes spectating off this.</summary>
+    [Signal] public delegate void RacerEliminatedEventHandler(int peerId);
 
     /// <summary>Tiles dealt to the Track Master at the start of each round.</summary>
     public const int TilesPerRound = 5;
@@ -195,6 +207,28 @@ public partial class GameManager : Node
 
     /// <summary>Who won the current match, or 0 if it is still being raced.</summary>
     public int WinnerPeerId { get; private set; }
+
+    // ---- The race's ledger: who finished, who died ----
+    //
+    // Both lists are replicated by broadcast and identical on every peer, because the results
+    // board reads them locally the moment the match concludes. Order matters in both: finish
+    // order is the leaderboard, and elimination order is the story of who lasted longest.
+
+    /// <summary>Peers that crossed the line, in the order they crossed it.</summary>
+    public readonly List<int> FinishOrder = new();
+
+    /// <summary>Peers that died during the race, in the order they went.</summary>
+    public readonly List<int> EliminatedOrder = new();
+
+    /// <summary>Whether the match ended with every racer dead and nobody across the line.
+    /// In Sentry mode that outcome crowns the sentry instead — see <see cref="ServerEliminate"/>.</summary>
+    public bool MatchUnfinished { get; private set; }
+
+    /// <summary>Whether a peer is out of the race.</summary>
+    public bool IsEliminated(int peerId) => EliminatedOrder.Contains(peerId);
+
+    /// <summary>Whether a peer has already crossed the line.</summary>
+    public bool HasFinished(int peerId) => FinishOrder.Contains(peerId);
 
     /// <summary>
     /// How long the winner's name stays up before everyone is taken back to the lobby. Long enough
@@ -485,6 +519,14 @@ public partial class GameManager : Node
     {
         SetProcess(false);
         Phase = MatchPhase.None;
+
+        // The race's ledger describes this match too, and solo runs never pass through
+        // StartMatch/EndMatch — without this a solo win (or death) would carry into the next
+        // solo run and quietly refuse to declare its winner.
+        WinnerPeerId = 0;
+        FinishOrder.Clear();
+        EliminatedOrder.Clear();
+        MatchUnfinished = false;
     }
 
     private void SetPhase(MatchPhase phase, float seconds)
@@ -622,6 +664,163 @@ public partial class GameManager : Node
     {
         WinnerPeerId = peerId;
         EmitSignal(SignalName.MatchWon, peerId);
+    }
+
+    /// <summary>
+    /// Server only. A racer crossed the line. The first crossing is the win and ends the match
+    /// the way it always has; the rest — cars arriving during the victory linger — are appended
+    /// to the finish order so the results board can list everyone who completed the race, not
+    /// only whoever completed it first.
+    /// </summary>
+    public void RecordFinish(int peerId)
+    {
+        if (NetworkManager.Instance.IsNetworked && !NetworkManager.Instance.IsHost)
+            return;
+
+        if (FinishOrder.Contains(peerId))
+            return;
+
+        int place = FinishOrder.Count + 1;
+
+        if (NetworkManager.Instance.IsNetworked)
+            Rpc(MethodName.NotifyRacerFinished, peerId, place);
+        NotifyRacerFinished(peerId, place);
+
+        if (place == 1)
+            DeclareWinner(peerId);
+    }
+
+    [Rpc(MultiplayerApi.RpcMode.Authority, CallLocal = false, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    private void NotifyRacerFinished(int peerId, int place)
+    {
+        if (!FinishOrder.Contains(peerId))
+            FinishOrder.Add(peerId);
+
+        EmitSignal(SignalName.RacerFinished, peerId, place);
+    }
+
+    // ---- Elimination ----
+    //
+    // Death is detected where the car is simulated — the owner's machine is the only one that
+    // knows its car fell somewhere no respawn can fix — and becomes real here, the way every
+    // sentry action does: the owner asks, the server checks, everyone is told. Elimination only
+    // exists inside a match; the lobby and the proving ground never send these.
+
+    /// <summary>
+    /// Called by the dying car's own machine. The car has already decided the fall is fatal
+    /// (see <c>RacerController.UpdateKillPlane</c>); this routes the fact to the authority.
+    /// </summary>
+    public void ReportSelfEliminated()
+    {
+        if (!NetworkManager.Instance.IsNetworked || NetworkManager.Instance.IsHost)
+        {
+            ServerEliminate(Multiplayer.GetUniqueId());
+            return;
+        }
+
+        RpcId(1, MethodName.ServerRequestEliminated);
+    }
+
+    [Rpc(MultiplayerApi.RpcMode.AnyPeer, CallLocal = false, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    private void ServerRequestEliminated() => ServerEliminate(Multiplayer.GetRemoteSenderId());
+
+    /// <summary>
+    /// Server only. Make a death real, tell everyone, and see whether it ended the match: with
+    /// every racer dead and nobody across the line, a Sentry board belongs to the sentry —
+    /// <c>"{their name} WON !!!"</c> — and a Live Build race simply went unfinished.
+    /// </summary>
+    private void ServerEliminate(int peerId)
+    {
+        if (NetworkManager.Instance.IsNetworked && !NetworkManager.Instance.IsHost)
+            return;
+
+        // Only mid-match, only racers, only once, and never someone already across the line — a
+        // finisher who then falls off the world has still finished.
+        if (EliminatedOrder.Contains(peerId) || FinishOrder.Contains(peerId))
+            return;
+
+        if (NetworkManager.Instance.IsNetworked
+            && (State != GameState.InRound || Roles.GetValueOrDefault(peerId) != PlayerRole.Racer))
+            return;
+
+        if (NetworkManager.Instance.IsNetworked)
+            Rpc(MethodName.NotifyEliminated, peerId);
+        NotifyEliminated(peerId);
+
+        CheckAllRacersOut();
+    }
+
+    [Rpc(MultiplayerApi.RpcMode.Authority, CallLocal = false, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    private void NotifyEliminated(int peerId)
+    {
+        if (EliminatedOrder.Contains(peerId))
+            return;
+
+        EliminatedOrder.Add(peerId);
+        EmitSignal(SignalName.RacerEliminated, peerId);
+    }
+
+    /// <summary>
+    /// Server only. If that death was the last racer standing, conclude the match. Solo has no
+    /// role table, so a solo death is always the last one.
+    /// </summary>
+    private void CheckAllRacersOut()
+    {
+        if (WinnerPeerId != 0 || MatchUnfinished || FinishOrder.Count > 0)
+            return;
+
+        if (NetworkManager.Instance.IsNetworked)
+        {
+            foreach (var kvp in Roles)
+            {
+                if (kvp.Value == PlayerRole.Racer && !EliminatedOrder.Contains(kvp.Key))
+                    return;
+            }
+        }
+
+        // Everybody died. In Sentry mode that is not a draw, it is the sentry's win — wiping the
+        // pack is the role's fantasy and the board should say so with their name on it.
+        if (Mode == GameMode.Sentry && TrackMasterPeerId != 0)
+        {
+            GD.Print($"[GameManager] Every racer is down — the sentry (peer {TrackMasterPeerId}) wins.");
+            DeclareWinner(TrackMasterPeerId);
+            return;
+        }
+
+        DeclareUnfinished();
+    }
+
+    /// <summary>
+    /// Server only. Nobody finished and nobody is left to: the race goes in the book as
+    /// unfinished. The same shape as <see cref="DeclareWinner"/> with nobody's name on it.
+    /// </summary>
+    private void DeclareUnfinished()
+    {
+        GD.Print("[GameManager] Every racer is down; the race is unfinished.");
+
+        if (!NetworkManager.Instance.IsNetworked)
+        {
+            NotifyUnfinished();
+            return;
+        }
+
+        Rpc(MethodName.NotifyUnfinished);
+        NotifyUnfinished();
+
+        SetState(GameState.MatchOver);
+
+        GetTree().CreateTimer(VictoryLingerSeconds).Timeout += () =>
+        {
+            if (State == GameState.MatchOver)
+                EndMatch();
+        };
+    }
+
+    [Rpc(MultiplayerApi.RpcMode.Authority, CallLocal = false, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    private void NotifyUnfinished()
+    {
+        MatchUnfinished = true;
+        EmitSignal(SignalName.MatchWon, 0);
     }
 
     /// <summary>
@@ -840,6 +1039,9 @@ public partial class GameManager : Node
         _sceneReadyPeers.Clear();
         _allPeersReady = false;
         WinnerPeerId = 0;
+        FinishOrder.Clear();
+        EliminatedOrder.Clear();
+        MatchUnfinished = false;
 
         // Re-published rather than assumed. It was last sent when it was chosen or when a peer
         // joined, and the length is what every peer's track measures itself against — a peer that
@@ -887,6 +1089,9 @@ public partial class GameManager : Node
         TrackMasterPeerId = 0;
         RoundNumber = 0;
         WinnerPeerId = 0;
+        FinishOrder.Clear();
+        EliminatedOrder.Clear();
+        MatchUnfinished = false;
 
         // A Sentry match that ends mid-phase must not leave the phase (or its clock) running
         // into the lobby — the next match checks Phase == None before it will open a build.

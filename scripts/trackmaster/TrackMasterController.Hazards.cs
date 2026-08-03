@@ -351,13 +351,16 @@ public partial class TrackMasterController
 	}
 
 	/// <summary>
-	/// The controller's only <c>_ExitTree</c>, living in this partial. Two duties: take the
-	/// track's signal handlers back by hand (a C# <c>+=</c> outlives the control that made it),
-	/// and free the shared marker paint while the engine is alive — the exit-crash rule.
+	/// The controller's only <c>_ExitTree</c>, living in this partial. Three duties: take the
+	/// track's and the sentry's signal handlers back by hand (a C# <c>+=</c> outlives the
+	/// control that made it), and free the shared marker paint while the engine is alive — the
+	/// exit-crash rule. The aim ghost's paint goes with its ghost in <c>ClearSentryAim</c>.
 	/// </summary>
 	public override void _ExitTree()
 	{
 		HookHazardSignals(false);
+		UnhookSentry();
+		ClearSentryAim();
 		_slotPaint?.Dispose();
 		_slotPaint = null;
 	}
