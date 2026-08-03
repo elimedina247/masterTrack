@@ -18,7 +18,7 @@
 [ext_resource type="Script" uid="uid://c1l0rgq3nvu5a" path="res://scripts/vehicles/WheelSmoke.cs" id="16_smoke"]
 [ext_resource type="Script" uid="uid://cfghsx0ad4vav" path="res://scripts/racer/RacerChevron.cs" id="17_chevron"]
 [ext_resource type="Script" uid="uid://bl5yb71p0oet7" path="res://scripts/vehicles/AntennaWobble.cs" id="18_antenna"]
-[ext_resource type="Script" path="res://scripts/vehicles/NitroSound.cs" id="19_nitrosnd"]
+[ext_resource type="Script" uid="uid://b00wssds6jjnc" path="res://scripts/vehicles/NitroSound.cs" id="19_nitrosnd"]
 [ext_resource type="AudioStream" uid="uid://cd8wuftxabxam" path="res://assets/audio/short_nitro.wav" id="20_nitrowav"]
 
 [sub_resource type="BoxShape3D" id="Shape_body"]
@@ -161,7 +161,7 @@ autoplay = true
 script = ExtResource("4_engsnd")
 VehicleNode = NodePath("..")
 
-[node name="NitroSound" type="AudioStreamPlayer3D" parent="." node_paths=PackedStringArray("VehicleNode")]
+[node name="NitroSound" type="AudioStreamPlayer3D" parent="." unique_id=1605928346 node_paths=PackedStringArray("VehicleNode")]
 stream = ExtResource("20_nitrowav")
 script = ExtResource("19_nitrosnd")
 VehicleNode = NodePath("..")

@@ -139,7 +139,11 @@ public partial class MainMenu : Control
 
         if (!SteamService.Instance.IsAvailable)
         {
-            _steamIdLabel.Text = $"Steam unavailable ({SteamService.Instance.UnavailableReason})";
+            // Deliberately short. The reason Steamworks gives back is a multi-line exception
+            // message, and this label autowraps inside the rail — printing it here pushed Host,
+            // Join and Solo off the bottom of the screen. It is already in the log for anyone
+            // who needs it (see SteamService.Start); on the menu, the fix is the whole message.
+            _steamIdLabel.Text = "Log into Steam";
             return;
         }
 
