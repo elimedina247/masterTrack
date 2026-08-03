@@ -43,6 +43,16 @@ public partial class LobbyPanel : Control
     /// <summary>The mode as everyone else sees it: a fact, not a control.</summary>
     private Label _modeLabel = null!;
 
+    /// <summary>The whole sentry-points row, hidden outside Sentry mode — the setting means
+    /// nothing in Live Build, and a knob that does nothing is worse than no knob.</summary>
+    private HBoxContainer _sentryPointsRow = null!;
+
+    /// <summary>The host's sentry pool picker. Same deal as the race length.</summary>
+    private OptionButton _sentryPoints = null!;
+
+    /// <summary>The pool as everyone else sees it: a fact, not a control.</summary>
+    private Label _sentryPointsLabel = null!;
+
     /// <summary>Clients that trigger an automatic Start; 0 for the normal button. See MainMenu.</summary>
     private int _autoStartClients;
 
@@ -86,6 +96,7 @@ public partial class LobbyPanel : Control
 
         BuildRaceLength(box);
         BuildGameMode(box);
+        BuildSentryPoints(box);
 
         _hint = AddLabel(box, 18);
 
@@ -112,6 +123,7 @@ public partial class LobbyPanel : Control
         GameManager.Instance.PlayerNameChanged += OnPlayerNameChanged;
         GameManager.Instance.RaceLengthChanged += OnRaceLengthChanged;
         GameManager.Instance.GameModeChanged += OnGameModeChanged;
+        GameManager.Instance.SentryPointLimitChanged += OnSentryPointLimitChanged;
 
         Refresh();
     }
@@ -195,6 +207,41 @@ public partial class LobbyPanel : Control
     private void OnGameModeChanged(int mode) => Refresh();
 
     /// <summary>
+    /// How many points the sentry's pool holds. Only meaningful in Sentry mode, so the whole row
+    /// appears and disappears with the mode picker's answer; otherwise shaped exactly like the
+    /// race length row, and for the same reason.
+    /// </summary>
+    private void BuildSentryPoints(Node parent)
+    {
+        _sentryPointsRow = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.End };
+        _sentryPointsRow.AddThemeConstantOverride("separation", 8);
+        parent.AddChild(_sentryPointsRow);
+
+        Label caption = AddLabel(_sentryPointsRow, 18);
+        caption.Text = "Sentry points";
+
+        _sentryPointsLabel = AddLabel(_sentryPointsRow, 18);
+
+        _sentryPoints = new OptionButton
+        {
+            // Same reason as the other pickers: the host is driving on the space bar.
+            FocusMode = FocusModeEnum.None,
+        };
+        _sentryPoints.AddThemeFontSizeOverride("font_size", 18);
+
+        foreach (int points in GameManager.SentryPointLimitChoices)
+            _sentryPoints.AddItem($"{points} pts", points);
+
+        _sentryPoints.ItemSelected += OnSentryPointsPicked;
+        _sentryPointsRow.AddChild(_sentryPoints);
+    }
+
+    private void OnSentryPointsPicked(long index)
+        => GameManager.Instance.SetSentryPointLimit(_sentryPoints.GetItemId((int)index));
+
+    private void OnSentryPointLimitChanged(int points) => Refresh();
+
+    /// <summary>
     /// Autoloads outlive this scene, and a C# <c>+=</c> handler is a managed delegate Godot
     /// cannot tie to a node's lifetime — so it has to be taken back by hand or the next signal
     /// lands on a disposed control.
@@ -209,6 +256,7 @@ public partial class LobbyPanel : Control
         GameManager.Instance.PlayerNameChanged -= OnPlayerNameChanged;
         GameManager.Instance.RaceLengthChanged -= OnRaceLengthChanged;
         GameManager.Instance.GameModeChanged -= OnGameModeChanged;
+        GameManager.Instance.SentryPointLimitChanged -= OnSentryPointLimitChanged;
     }
 
     private void OnAppearanceAssigned(int peerId, int variant, int colour, int antenna) => Refresh();
@@ -277,6 +325,21 @@ public partial class LobbyPanel : Control
                 continue;
 
             _mode.Selected = i;
+            break;
+        }
+
+        int sentryPoints = GameManager.Instance.SentryPointLimit;
+        _sentryPointsRow.Visible = mode == GameMode.Sentry;
+        _sentryPoints.Visible = isHost;
+        _sentryPointsLabel.Visible = !isHost;
+        _sentryPointsLabel.Text = $"{sentryPoints} pts";
+
+        for (int i = 0; i < _sentryPoints.ItemCount; i++)
+        {
+            if (_sentryPoints.GetItemId(i) != sentryPoints)
+                continue;
+
+            _sentryPoints.Selected = i;
             break;
         }
 

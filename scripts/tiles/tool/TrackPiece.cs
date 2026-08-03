@@ -251,8 +251,11 @@ public partial class TrackPiece : StaticBody3D
 			{
 				// A connector is never a waypoint, whatever it is called: a piece with a second
 				// exit must not have that exit quietly threaded into the middle of its road.
+				// Neither is a hazard slot — it is also a Marker3D, but it marks a spot ON the
+				// road, and a road threaded through its own furniture would kink there.
 				if (child is Marker3D marker
 					&& marker is not TrackConnector
+					&& marker is not TrackHazardSlot
 					&& marker.Name != EntryName
 					&& marker.Name != ExitName)
 					yield return marker;

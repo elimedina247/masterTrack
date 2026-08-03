@@ -9,9 +9,9 @@ namespace MasterTrack.Sentry;
 /// The sentry's missile: a slow, extremely visible drop onto a marked spot, then a blast that
 /// throws every car near it.
 ///
-/// The whole point is the warning. It spawns high, descends at a walking-pace-for-a-racing-game
-/// speed, and a pulsing ring sits on the impact point the entire way down — about seven seconds
-/// of "not here". A racer who eats it was told; a sentry who leads a pack into it earned it.
+/// The warning is short but honest. It spawns high enough to be seen coming, dives hard, and a
+/// pulsing ring sits on the impact point the entire way down — about two seconds of "not here",
+/// the same lead beat every delayed sentry action gives. A racer who eats it was told, briefly.
 ///
 /// Not replicated. Every peer builds one from the same launch broadcast and flies it with the
 /// same constants, so they all detonate at the same spot within a frame of each other. The
@@ -24,10 +24,11 @@ namespace MasterTrack.Sentry;
 public partial class SentryMissile : Node3D
 {
 	/// <summary>How high above the target the missile starts, in metres.</summary>
-	private const float SpawnHeight = 220.0f;
+	private const float SpawnHeight = 150.0f;
 
-	/// <summary>Descent speed, in metres per second. With the height, ~7 s of warning.</summary>
-	private const float DescendSpeed = 30.0f;
+	/// <summary>Descent speed, in metres per second. With the height, ~2 s of warning — the
+	/// same window as <see cref="SentryActions.LeadSeconds"/>.</summary>
+	private const float DescendSpeed = 75.0f;
 
 	/// <summary>How far from the impact point the blast still throws cars, in metres.</summary>
 	public const float ExplosionRadius = TrackTile.Size * 1.1f;

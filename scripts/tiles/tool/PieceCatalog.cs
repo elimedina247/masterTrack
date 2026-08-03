@@ -14,6 +14,15 @@ public sealed class PieceSeam
 	public required string Profile { get; init; }
 }
 
+/// <summary>One hazard slot of a catalogued piece, as read from its scene file: where it sits
+/// in the <b>entry seam's frame</b> — the same frame the route speaks — and what mounting it
+/// offers. See <see cref="TrackHazardSlot"/> for the authoring side.</summary>
+public sealed class PieceSlot
+{
+	public required Transform3D Local { get; init; }
+	public required HazardSlotKind Kind { get; init; }
+}
+
 /// <summary>Everything a builder needs to know about one authored piece without instancing it.</summary>
 public sealed class PieceEntry
 {
@@ -25,6 +34,11 @@ public sealed class PieceEntry
 
 	/// <summary>Every seam on the piece, in scene order.</summary>
 	public required IReadOnlyList<PieceSeam> Seams { get; init; }
+
+	/// <summary>Every hazard slot on the piece, in scene order — which is also the order the
+	/// slot index over the wire refers to, so it must be identical on every peer (it is: it
+	/// comes from the same byte-identical scene file the seams do).</summary>
+	public IReadOnlyList<PieceSlot> Slots { get; init; } = Array.Empty<PieceSlot>();
 
 	/// <summary>How often the piece is dealt, straight off the scene root's
 	/// <see cref="TrackPiece.DeckWeight"/>. 0 keeps it out of the deck.</summary>
@@ -248,6 +262,7 @@ public static class PieceCatalog
 				ScenePath = path,
 				Name = path.GetFile().GetBaseName(),
 				Seams = seams,
+				Slots = ReadSlots(state, seams),
 				Route = ReadRoute(state, seams),
 				DeckWeight = weight,
 				DeckDescription = description,
@@ -369,6 +384,69 @@ public static class PieceCatalog
 		}
 
 		return new List<Vector3> { Vector3.Zero, intoEntry * exitLocal.Origin };
+	}
+
+	/// <summary>
+	/// Pull the hazard slots out of a saved scene: every direct child of the root carrying the
+	/// <see cref="TrackHazardSlot"/> script, expressed in the entry seam's frame the same way
+	/// the route is — so a placed tile's slot transform is <c>EntryFrame * slot.Local</c>, the
+	/// exact composition <see cref="PlacedTile.PieceFootprint"/> already uses for the road.
+	/// </summary>
+	private static IReadOnlyList<PieceSlot> ReadSlots(SceneState state, List<PieceSeam> seams)
+	{
+		Transform3D intoEntry = Transform3D.Identity;
+		foreach (PieceSeam seam in seams)
+		{
+			if (seam.Role == ConnectorRole.Entry)
+			{
+				intoEntry = seam.Local.Orthonormalized().AffineInverse();
+				break;
+			}
+		}
+
+		var slots = new List<PieceSlot>();
+
+		for (var i = 0; i < state.GetNodeCount(); i++)
+		{
+			// Direct children of the root only — a slot is part of the piece's contract, the
+			// seams' rule.
+			if (state.GetNodePath(i, forParent: true).ToString() != ".")
+				continue;
+
+			var transform = Transform3D.Identity;
+			var kind = HazardSlotKind.Surface;
+			var isSlot = false;
+
+			for (var p = 0; p < state.GetNodePropertyCount(i); p++)
+			{
+				switch (state.GetNodePropertyName(i, p))
+				{
+					case "script":
+						isSlot = state.GetNodePropertyValue(i, p).As<Resource>()?.ResourcePath
+							.EndsWith("TrackHazardSlot.cs", StringComparison.Ordinal) == true;
+						break;
+
+					case "transform":
+						transform = state.GetNodePropertyValue(i, p).AsTransform3D();
+						break;
+
+					case "Kind":
+						kind = (HazardSlotKind)state.GetNodePropertyValue(i, p).AsInt32();
+						break;
+				}
+			}
+
+			if (!isSlot)
+				continue;
+
+			slots.Add(new PieceSlot
+			{
+				Local = intoEntry * transform,
+				Kind = kind,
+			});
+		}
+
+		return slots;
 	}
 
 	/// <summary>

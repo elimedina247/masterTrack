@@ -15,44 +15,65 @@ namespace MasterTrack.Sentry;
 /// </summary>
 public static class SentryBlast
 {
-    public static void Explode(Node3D source, Vector3 center, float radius, float strength)
-    {
-        foreach (Node node in source.GetTree().GetNodesInGroup(RacerController.GroupName))
-        {
-            if (node is RacerController racer)
-                racer.ApplyExplosionImpulse(center, radius, strength);
-        }
+	public static void Explode(Node3D source, Vector3 center, float radius, float strength)
+	{
+		foreach (Node node in source.GetTree().GetNodesInGroup(RacerController.GroupName))
+		{
+			if (node is RacerController racer)
+				racer.ApplyExplosionImpulse(center, radius, strength);
+		}
 
-        SpawnFireball(source, center, radius);
-    }
+		// Spilled cargo goes flying too — lay a junk field, then missile it into the pack.
+		// Debris is local on every peer, so each machine simply throws its own copies; and
+		// being a tenth of a car, the junk gets launched properly where a car gets shoved.
+		foreach (Node node in source.GetTree().GetNodesInGroup(SentryDebris.GroupName))
+		{
+			if (node is not RigidBody3D body || !body.IsInsideTree())
+				continue;
 
-    /// <summary>A fireball that grows to the true blast radius and fades — honest VFX, so what
-    /// racers learn to dodge is the distance that actually throws them.</summary>
-    private static void SpawnFireball(Node3D source, Vector3 center, float radius)
-    {
-        var material = new StandardMaterial3D
-        {
-            AlbedoColor = new Color(1.0f, 0.5f, 0.1f, 0.85f),
-            Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
-            ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
-        };
+			Vector3 offset = body.GlobalPosition - center;
+			float distance = offset.Length();
+			if (distance > radius)
+				continue;
 
-        var blast = new MeshInstance3D
-        {
-            Name = "Blast",
-            Mesh = new SphereMesh { Radius = 1.0f, Height = 2.0f, Material = material },
-            Position = center,
-            Scale = Vector3.One * 2.0f,
-        };
+			float proximity = 1.0f - distance / radius;
+			float falloff = proximity * proximity;
+			Vector3 direction = distance > 0.5f ? offset / distance : Vector3.Up;
 
-        // Parented beside the weapon, not to it — the weapon frees itself this frame.
-        source.GetParent().AddChild(blast);
+			body.ApplyCentralImpulse((direction + Vector3.Up * 0.8f)
+									 * (strength * falloff * body.Mass * 0.6f));
+		}
 
-        Tween tween = blast.CreateTween();
-        tween.SetParallel();
-        tween.TweenProperty(blast, "scale", Vector3.One * radius, 0.55)
-             .SetTrans(Tween.TransitionType.Cubic).SetEase(Tween.EaseType.Out);
-        tween.TweenProperty(material, "albedo_color:a", 0.0f, 0.55);
-        tween.Chain().TweenCallback(Callable.From(blast.QueueFree));
-    }
+		SpawnFireball(source, center, radius);
+	}
+
+	/// <summary>A fireball that grows to the true blast radius and fades — honest VFX, so what
+	/// racers learn to dodge is the distance that actually throws them.</summary>
+	private static void SpawnFireball(Node3D source, Vector3 center, float radius)
+	{
+		var material = new StandardMaterial3D
+		{
+			AlbedoColor = new Color(1.0f, 0.5f, 0.1f, 0.85f),
+			Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+			ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+		};
+
+		var blast = new MeshInstance3D
+		{
+			Name = "Blast",
+			Mesh = new SphereMesh { Radius = 1.0f, Height = 2.0f, Material = material },
+			Position = center,
+			Scale = Vector3.One * 2.0f,
+		};
+
+		// Parented beside the weapon, not to it — the weapon frees itself this frame.
+		source.GetParent().AddChild(blast);
+
+		Tween tween = blast.CreateTween();
+		tween.SetParallel();
+		tween.TweenProperty(blast, "scale", Vector3.One * radius, 0.55)
+			 .SetTrans(Tween.TransitionType.Cubic).SetEase(Tween.EaseType.Out);
+		tween.TweenProperty(material, "albedo_color:a", 0.0f, 0.55);
+		tween.Chain().TweenCallback(Callable.From(blast.QueueFree));
+	}
 }

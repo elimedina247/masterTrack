@@ -171,6 +171,12 @@ public partial class TrackController : Node3D
     /// <summary>Fired when the head of the track moves, so the builder can re-aim.</summary>
     [Signal] public delegate void TrackHeadChangedEventHandler();
 
+    /// <summary>Fired on every peer once a furniture hazard has gone into a slot.</summary>
+    [Signal] public delegate void HazardPlacedEventHandler(int tileIndex, int slotIndex, int kind);
+
+    /// <summary>Fired on every peer once a hazard has been lifted back out of its slot.</summary>
+    [Signal] public delegate void HazardRemovedEventHandler(int tileIndex, int slotIndex);
+
     /// <summary>
     /// Fired on the server the moment a racer crosses the bar at the end of the track. Only ever
     /// once — the track stops looking after the first car across.
@@ -549,6 +555,9 @@ public partial class TrackController : Node3D
         Grid.RetireThrough(trackIndex);
         GetNodeOrNull(TileNodeName(trackIndex))?.QueueFree();
 
+        // The hazard nodes died with the tile node; this is only the ledger catching up.
+        _hazards.RemoveAll(h => h.TileIndex <= trackIndex);
+
         // The floor may just have crumbled: a race that dived early and climbed late has its
         // lowest road at the back, and the kill plane must rise as that road stops existing.
         UpdateLowestTile();
@@ -647,10 +656,270 @@ public partial class TrackController : Node3D
         // end of a track that just got shorter.
         _condemnedThrough = Mathf.Min(_condemnedThrough, Grid.Count - 1);
 
+        // Any hazards on the undone tile went down with its node; the ledger follows.
+        _hazards.RemoveAll(h => h.TileIndex == tile.Index);
+
         UpdateFinishLine();
         UpdateLowestTile();
         EmitSignal(SignalName.TrackHeadChanged);
     }
+
+    // ---- Furniture hazards ----
+    //
+    // Same shape as tile placement, because it is the same problem: the builder's client asks,
+    // the server checks the asker and the legality, then broadcasts, and every peer applies the
+    // broadcast identically. A hazard's address is (tile, slot, kind) — three ints — and its
+    // node lives under the tile's own node, so a hazard on a tile that crumbles or is undone
+    // leaves with it without a line of cleanup.
+
+    /// <summary>Every hazard standing on the track, in placement order — what a late joiner is
+    /// sent, alongside the tile list.</summary>
+    private readonly List<PlacedHazard> _hazards = new();
+
+    public IReadOnlyList<PlacedHazard> Hazards => _hazards;
+
+    /// <summary>The hazard slots a placed tile offers, or none — generated tiles have no scene
+    /// and so no slots; only authored pieces are slotted.</summary>
+    public IReadOnlyList<Tool.PieceSlot> SlotsOf(int tileIndex)
+    {
+        if (tileIndex < Grid.OldestLiveIndex || tileIndex >= Grid.Count)
+            return System.Array.Empty<Tool.PieceSlot>();
+
+        PlacedTile tile = Grid.Tiles[tileIndex];
+        if (tile.Data.ScenePath.Length == 0)
+            return System.Array.Empty<Tool.PieceSlot>();
+
+        return Tool.PieceCatalog.AtPath(tile.Data.ScenePath)?.Slots
+               ?? (IReadOnlyList<Tool.PieceSlot>)System.Array.Empty<Tool.PieceSlot>();
+    }
+
+    public bool IsSlotFree(int tileIndex, int slotIndex)
+    {
+        foreach (PlacedHazard hazard in _hazards)
+        {
+            if (hazard.TileIndex == tileIndex && hazard.SlotIndex == slotIndex)
+                return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>Where a slot sits in the world: the tile's entry frame carrying the slot's
+    /// authored transform — the same composition the footprint uses for the route.</summary>
+    public Transform3D? SlotWorldTransform(int tileIndex, int slotIndex)
+    {
+        IReadOnlyList<Tool.PieceSlot> slots = SlotsOf(tileIndex);
+        if (slotIndex < 0 || slotIndex >= slots.Count)
+            return null;
+
+        return Grid.Tiles[tileIndex].EntryFrame * slots[slotIndex].Local;
+    }
+
+    /// <summary>One rulebook for every door a hazard can come through. Public because the
+    /// sentry's manager pre-checks it before spending points on the slot.</summary>
+    public bool CanPlaceHazard(int tileIndex, int slotIndex, HazardKind kind, out string reason)
+    {
+        IReadOnlyList<Tool.PieceSlot> slots = SlotsOf(tileIndex);
+        if (slots.Count == 0)
+        {
+            reason = "that tile takes no hazards";
+            return false;
+        }
+
+        if (slotIndex < 0 || slotIndex >= slots.Count)
+        {
+            reason = $"no slot {slotIndex} on tile {tileIndex}";
+            return false;
+        }
+
+        if (slots[slotIndex].Kind != kind.SlotKind())
+        {
+            reason = $"{kind.DisplayName()} does not fit a {slots[slotIndex].Kind} slot";
+            return false;
+        }
+
+        if (!IsSlotFree(tileIndex, slotIndex))
+        {
+            reason = "that slot is taken";
+            return false;
+        }
+
+        reason = "";
+        return true;
+    }
+
+    /// <summary>Client-side intent: ask the server to put a hazard into a slot. The builder's
+    /// free door, open during the build only — during a Sentry race the paid door below is the
+    /// only way in.</summary>
+    public void RequestPlaceHazard(int tileIndex, int slotIndex, HazardKind kind)
+    {
+        if (!Networked)
+        {
+            if (CanPlaceHazard(tileIndex, slotIndex, kind, out string why))
+                ApplyHazardPlacement(tileIndex, slotIndex, (int)kind);
+            else
+                GD.PushWarning($"[Track] Hazard refused: {why}.");
+            return;
+        }
+
+        if (Multiplayer.IsServer())
+        {
+            AuthorizeAndBroadcastHazard(tileIndex, slotIndex, kind, Multiplayer.GetUniqueId());
+            return;
+        }
+
+        RpcId(1, MethodName.ServerPlaceHazard, tileIndex, slotIndex, (int)kind);
+    }
+
+    [Rpc(MultiplayerApi.RpcMode.AnyPeer, CallLocal = false,
+         TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    private void ServerPlaceHazard(int tileIndex, int slotIndex, int kind)
+    {
+        if (!NetworkManager.Instance.IsHost)
+            return;
+
+        AuthorizeAndBroadcastHazard(tileIndex, slotIndex, (HazardKind)kind,
+                                    Multiplayer.GetRemoteSenderId());
+    }
+
+    private void AuthorizeAndBroadcastHazard(int tileIndex, int slotIndex, HazardKind kind, int senderId)
+    {
+        if (!MayBuild(senderId))
+        {
+            GD.PushWarning($"[Track] Peer {senderId} tried to place a hazard but is not the builder.");
+            return;
+        }
+
+        // Once a Sentry race is on, free placement closes: the sentry pays points for the same
+        // slots through ServerCommitHazard, and a free door beside a paid one is no price at all.
+        if (GameManager.Instance.Phase == MatchPhase.Racing)
+        {
+            GD.PushWarning($"[Track] Peer {senderId} tried to place a free hazard mid-race.");
+            return;
+        }
+
+        if (!CanPlaceHazard(tileIndex, slotIndex, kind, out string reason))
+        {
+            GD.PushWarning($"[Track] Rejected {kind.DisplayName()} from peer {senderId}: {reason}.");
+            return;
+        }
+
+        Rpc(MethodName.ConfirmHazardPlaced, tileIndex, slotIndex, (int)kind);
+        ApplyHazardPlacement(tileIndex, slotIndex, (int)kind);
+    }
+
+    /// <summary>
+    /// The sentry's door. Server only, called by <see cref="Sentry.SentryManager"/> <i>after</i>
+    /// the role check — points are only spent when this says the slot was really there to buy.
+    /// Returns false with the reason so the manager can refuse before charging.
+    /// </summary>
+    public bool ServerCommitHazard(int tileIndex, int slotIndex, HazardKind kind, out string reason)
+    {
+        if (!CanPlaceHazard(tileIndex, slotIndex, kind, out reason))
+            return false;
+
+        if (Networked)
+            Rpc(MethodName.ConfirmHazardPlaced, tileIndex, slotIndex, (int)kind);
+        ApplyHazardPlacement(tileIndex, slotIndex, (int)kind);
+        return true;
+    }
+
+    [Rpc(MultiplayerApi.RpcMode.Authority, CallLocal = false,
+         TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    private void ConfirmHazardPlaced(int tileIndex, int slotIndex, int kind)
+        => ApplyHazardPlacement(tileIndex, slotIndex, kind);
+
+    /// <summary>Put the hazard in the world, identically on every peer: record it, and stand
+    /// its node up under the tile it belongs to, wearing the slot's authored transform.</summary>
+    private void ApplyHazardPlacement(int tileIndex, int slotIndex, int kind)
+    {
+        Transform3D? local = null;
+        IReadOnlyList<Tool.PieceSlot> slots = SlotsOf(tileIndex);
+        if (slotIndex >= 0 && slotIndex < slots.Count)
+            local = slots[slotIndex].Local;
+
+        if (local == null || GetNodeOrNull(TileNodeName(tileIndex)) is not TrackTile tile)
+        {
+            // A broadcast can land after the tile crumbled on this peer. A hazard on road that
+            // is gone is no hazard; skipping is the whole handling.
+            return;
+        }
+
+        _hazards.Add(new PlacedHazard(tileIndex, slotIndex, (HazardKind)kind));
+
+        TrackHazard node = TrackHazard.Create((HazardKind)kind);
+        node.Name = HazardNodeName(slotIndex);
+        tile.AddChild(node);
+        node.Transform = local.Value;
+
+        EmitSignal(SignalName.HazardPlaced, tileIndex, slotIndex, kind);
+    }
+
+    /// <summary>Client-side intent: lift a hazard back out of its slot. Build-time only, the
+    /// mirror of <see cref="RequestPlaceHazard"/>.</summary>
+    public void RequestRemoveHazard(int tileIndex, int slotIndex)
+    {
+        if (!Networked)
+        {
+            ApplyHazardRemoval(tileIndex, slotIndex);
+            return;
+        }
+
+        if (Multiplayer.IsServer())
+        {
+            AuthorizeAndBroadcastHazardRemoval(tileIndex, slotIndex, Multiplayer.GetUniqueId());
+            return;
+        }
+
+        RpcId(1, MethodName.ServerRemoveHazard, tileIndex, slotIndex);
+    }
+
+    [Rpc(MultiplayerApi.RpcMode.AnyPeer, CallLocal = false,
+         TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    private void ServerRemoveHazard(int tileIndex, int slotIndex)
+    {
+        if (!NetworkManager.Instance.IsHost)
+            return;
+
+        AuthorizeAndBroadcastHazardRemoval(tileIndex, slotIndex, Multiplayer.GetRemoteSenderId());
+    }
+
+    private void AuthorizeAndBroadcastHazardRemoval(int tileIndex, int slotIndex, int senderId)
+    {
+        if (!MayBuild(senderId) || GameManager.Instance.Phase == MatchPhase.Racing)
+            return;
+
+        if (IsSlotFree(tileIndex, slotIndex))
+            return;
+
+        Rpc(MethodName.ConfirmHazardRemoved, tileIndex, slotIndex);
+        ApplyHazardRemoval(tileIndex, slotIndex);
+    }
+
+    [Rpc(MultiplayerApi.RpcMode.Authority, CallLocal = false,
+         TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    private void ConfirmHazardRemoved(int tileIndex, int slotIndex)
+        => ApplyHazardRemoval(tileIndex, slotIndex);
+
+    private void ApplyHazardRemoval(int tileIndex, int slotIndex)
+    {
+        int found = _hazards.FindIndex(h => h.TileIndex == tileIndex && h.SlotIndex == slotIndex);
+        if (found < 0)
+            return;
+
+        _hazards.RemoveAt(found);
+
+        if (GetNodeOrNull(TileNodeName(tileIndex)) is TrackTile tile
+            && tile.GetNodeOrNull(HazardNodeName(slotIndex)) is Node node)
+        {
+            tile.RemoveChild(node);
+            node.QueueFree();
+        }
+
+        EmitSignal(SignalName.HazardRemoved, tileIndex, slotIndex);
+    }
+
+    private static string HazardNodeName(int slotIndex) => $"Hazard{slotIndex}";
 
     // ---- Catch-up ----
 
@@ -667,7 +936,17 @@ public partial class TrackController : Node3D
         if (!Networked || !NetworkManager.Instance.IsHost || peerId == 1)
             return;
 
-        RpcId(peerId, MethodName.SyncTrack, _placed.ToArray());
+        // Hazards travel as flattened (tile, slot, kind) triples — the same three ints the
+        // placement broadcast speaks, in the same order they were placed.
+        var hazards = new int[_hazards.Count * 3];
+        for (int i = 0; i < _hazards.Count; i++)
+        {
+            hazards[i * 3] = _hazards[i].TileIndex;
+            hazards[i * 3 + 1] = _hazards[i].SlotIndex;
+            hazards[i * 3 + 2] = (int)_hazards[i].Kind;
+        }
+
+        RpcId(peerId, MethodName.SyncTrack, _placed.ToArray(), hazards);
     }
 
     /// <summary>
@@ -679,7 +958,7 @@ public partial class TrackController : Node3D
     /// </summary>
     [Rpc(MultiplayerApi.RpcMode.Authority, CallLocal = false,
          TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
-    private void SyncTrack(int[] catalogIndices)
+    private void SyncTrack(int[] catalogIndices, int[] hazardTriples)
     {
         // Detached before being freed, not just queued: QueueFree runs at the end of the frame, so
         // the old Tile0 would still be holding that name when the replay tries to add the new one,
@@ -694,10 +973,16 @@ public partial class TrackController : Node3D
         }
 
         _placed.Clear();
+        _hazards.Clear();
         BuildStartingTrack();
 
         foreach (int catalogIndex in catalogIndices)
             ApplyPlacement(catalogIndex);
+
+        // The hazards replay after every tile is standing — each entry was legal when the
+        // server recorded it, so this is reflection, not re-judging.
+        for (int i = 0; i + 2 < hazardTriples.Length; i += 3)
+            ApplyHazardPlacement(hazardTriples[i], hazardTriples[i + 1], hazardTriples[i + 2]);
 
         // ApplyPlacement moves the bar each time round, but a peer that arrived before anything
         // had been built replays nothing at all and still needs it back on the start tile.

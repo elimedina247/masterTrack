@@ -103,6 +103,7 @@ public partial class TilePalette : Control
         BuildCameraToggle();
         BuildRemainingCounter();
         BuildTray();
+        BuildHazardTray();
 
         // The cards come up wearing their accent swatches and trade them for these portraits as
         // each one is rendered — the tray never waits on the camera.
@@ -123,7 +124,10 @@ public partial class TilePalette : Control
         Builder.PreviewChanged += OnPreviewChanged;
         Builder.CameraModeChanged += OnCameraModeChanged;
         Builder.HandChanged += OnHandChanged;
+        Builder.HazardHandChanged += RefreshHazardSlots;
+        Builder.HazardStatusChanged += OnHazardStatus;
         OnCameraModeChanged((int)Builder.CameraMode);
+        RefreshHazardSlots();
 
         // The counter moves when the track grows, which is exactly when the head changes.
         if (Builder.Track != null)
@@ -147,6 +151,9 @@ public partial class TilePalette : Control
         // carefully as the track it is being asked about.
         if (Builder == null || !IsInstanceValid(Builder))
             return;
+
+        Builder.HazardHandChanged -= RefreshHazardSlots;
+        Builder.HazardStatusChanged -= OnHazardStatus;
 
         if (Builder.Track is { } track && IsInstanceValid(track))
             track.TrackHeadChanged -= RefreshRemaining;
@@ -274,6 +281,7 @@ public partial class TilePalette : Control
         // Grown to fit however many rows the tray wrapped onto, rather than clipping them: the
         // hand's single row still comes out at TrayHeight, and the catalog's three do not.
         int height = Mathf.Max(TrayHeight, rows * CardHeight + (rows - 1) * 8 + 20);
+        _trayPixelHeight = height;
 
         var tray = new PanelContainer
         {
@@ -460,7 +468,207 @@ public partial class TilePalette : Control
         int slot = Builder.Hand.CooldownSlot;
         if (slot >= 0 && slot < _slots.Count)
             _slots[slot].Cooldown.Value = Builder.Hand.DealProgress;
+
+        int hazardSlot = Builder.HazardHand.CooldownSlot;
+        if (hazardSlot >= 0 && hazardSlot < _hazardSlots.Count)
+            _hazardSlots[hazardSlot].Cooldown.Value = Builder.HazardHand.DealProgress;
     }
+
+    // ---- The hazard tray ----
+    //
+    // The hazard hand's own little row, docked above the tile tray on the right: the furniture
+    // the builder can bolt onto road that is already down, dealt on its own slow clock. Clicking
+    // a card arms placement — every slot it fits lights up on the road, and the click that
+    // follows happens out on the board, not in here.
+
+    /// <summary>The nodes making up one hazard card.</summary>
+    private sealed class HazardSlotView
+    {
+        public required PanelContainer Card { get; init; }
+        public required ColorRect Swatch { get; init; }
+        public required ProgressBar Cooldown { get; init; }
+        public required Label Name { get; init; }
+    }
+
+    private readonly List<HazardSlotView> _hazardSlots = new();
+
+    /// <summary>What the tile tray actually came out at, so the hazard tray can sit clear of it
+    /// even when free build wraps the catalog onto several rows.</summary>
+    private int _trayPixelHeight = 132;
+
+    private const int HazardCardWidth = 116;
+    private const int HazardCardHeight = 58;
+
+    /// <summary>Each hazard kind's card colour — the same paint its placed node wears, so the
+    /// card and the thing it becomes read as one object.</summary>
+    private static Color HazardAccent(HazardKind kind) => kind switch
+    {
+        HazardKind.LaunchPad => new Color(0.95f, 0.78f, 0.12f),
+        HazardKind.PopUpRamp => new Color(0.95f, 0.55f, 0.10f),
+        _ => new Color(0.6f, 0.6f, 0.6f),
+    };
+
+    private void BuildHazardTray()
+    {
+        int slots = Builder?.HazardTrayLength ?? 0;
+        if (slots == 0)
+            return;
+
+        var tray = new PanelContainer
+        {
+            MouseFilter = MouseFilterEnum.Stop,
+            AnchorLeft = 1.0f,
+            AnchorTop = 1.0f,
+            AnchorRight = 1.0f,
+            AnchorBottom = 1.0f,
+            // Above the tile tray, hugging the right edge — clear of however tall the tray
+            // actually came out, which in free build is several rows.
+            OffsetLeft = -(slots + 1) * (HazardCardWidth + 10) - 26,
+            OffsetRight = -16,
+            OffsetTop = -_trayPixelHeight - HazardCardHeight - 30,
+            OffsetBottom = -_trayPixelHeight - 10,
+            GrowHorizontal = GrowDirection.Begin,
+            GrowVertical = GrowDirection.Begin,
+        };
+        tray.AddThemeStyleboxOverride("panel", Panel(new Color(0.07f, 0.08f, 0.10f, 0.88f)));
+        AddChild(tray);
+
+        var margin = new MarginContainer();
+        margin.AddThemeConstantOverride("margin_left", 10);
+        margin.AddThemeConstantOverride("margin_right", 10);
+        margin.AddThemeConstantOverride("margin_top", 6);
+        margin.AddThemeConstantOverride("margin_bottom", 6);
+        tray.AddChild(margin);
+
+        var row = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.End };
+        row.AddThemeConstantOverride("separation", 10);
+        margin.AddChild(row);
+
+        for (int i = 0; i < slots; i++)
+            row.AddChild(BuildHazardSlot(i));
+
+        // The lift card: takes a placed hazard back into the hand. A card rather than a bound
+        // key, because the tray is the builder's whole vocabulary.
+        var lift = new Button
+        {
+            Text = "Lift",
+            TooltipText = "Take a placed hazard back off the road.\nClick this, then click the hazard.",
+            FocusMode = FocusModeEnum.None,
+            CustomMinimumSize = new Vector2(56, HazardCardHeight),
+        };
+        lift.AddThemeStyleboxOverride("normal", Panel(CardIdle));
+        lift.AddThemeStyleboxOverride("hover", Panel(CardHover));
+        lift.AddThemeStyleboxOverride("pressed", Panel(new Color(0.16f, 0.34f, 0.24f, 0.95f)));
+        lift.Pressed += () => Builder?.ArmHazardLift();
+        row.AddChild(lift);
+
+        RefreshHazardSlots();
+    }
+
+    private PanelContainer BuildHazardSlot(int slot)
+    {
+        var card = new PanelContainer
+        {
+            CustomMinimumSize = new Vector2(HazardCardWidth, HazardCardHeight),
+            MouseFilter = MouseFilterEnum.Stop,
+        };
+        card.AddThemeStyleboxOverride("panel", Panel(CardIdle));
+
+        int captured = slot;
+        card.GuiInput += @event =>
+        {
+            if (@event is not InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: true })
+                return;
+
+            Builder?.ArmHazardPlacement(captured);
+            card.AcceptEvent();
+        };
+        card.MouseEntered += () => card.AddThemeStyleboxOverride("panel", Panel(CardHover));
+        card.MouseExited += () => card.AddThemeStyleboxOverride("panel", Panel(CardIdle));
+
+        var margin = new MarginContainer();
+        foreach (string side in new[] { "margin_left", "margin_right", "margin_top", "margin_bottom" })
+            margin.AddThemeConstantOverride(side, 6);
+        card.AddChild(margin);
+
+        var box = new VBoxContainer { MouseFilter = MouseFilterEnum.Ignore };
+        box.AddThemeConstantOverride("separation", 4);
+        margin.AddChild(box);
+
+        var swatch = new ColorRect
+        {
+            CustomMinimumSize = new Vector2(0, 16),
+            MouseFilter = MouseFilterEnum.Ignore,
+        };
+        box.AddChild(swatch);
+
+        var cooldown = new ProgressBar
+        {
+            CustomMinimumSize = new Vector2(0, 16),
+            MinValue = 0.0,
+            MaxValue = 1.0,
+            ShowPercentage = false,
+            MouseFilter = MouseFilterEnum.Ignore,
+            Visible = false,
+        };
+        cooldown.AddThemeStyleboxOverride("background", Panel(new Color(0.06f, 0.07f, 0.09f, 0.9f)));
+        cooldown.AddThemeStyleboxOverride("fill", Panel(new Color(0.30f, 0.45f, 0.62f, 0.95f)));
+        box.AddChild(cooldown);
+
+        var name = new Label
+        {
+            HorizontalAlignment = HorizontalAlignment.Center,
+            MouseFilter = MouseFilterEnum.Ignore,
+        };
+        name.AddThemeFontSizeOverride("font_size", 13);
+        box.AddChild(name);
+
+        _hazardSlots.Add(new HazardSlotView
+        {
+            Card = card,
+            Swatch = swatch,
+            Cooldown = cooldown,
+            Name = name,
+        });
+        return card;
+    }
+
+    private void RefreshHazardSlots()
+    {
+        if (Builder == null)
+            return;
+
+        int cooldownSlot = Builder.FreeBuild ? -1 : Builder.HazardHand.CooldownSlot;
+
+        for (int i = 0; i < _hazardSlots.Count; i++)
+        {
+            HazardSlotView view = _hazardSlots[i];
+            int kind = Builder.HazardKindAt(i);
+
+            bool isCooldown = i == cooldownSlot;
+            view.Cooldown.Visible = isCooldown;
+            view.Swatch.Visible = !isCooldown;
+
+            if (kind != HazardHand.Empty)
+            {
+                view.Swatch.Color = HazardAccent((HazardKind)kind);
+                view.Name.Text = ((HazardKind)kind).DisplayName();
+                view.Card.TooltipText = "Click, then click a lit spot on the road.";
+                continue;
+            }
+
+            view.Swatch.Color = EmptySwatch;
+            view.Name.Text = isCooldown ? "next hazard" : "";
+            view.Card.TooltipText = isCooldown
+                ? "The next hazard is on its way here."
+                : "An empty slot. Hazards arrive on their own.";
+        }
+    }
+
+    /// <summary>The board said something about hazard placement; an empty message means the
+    /// gesture ended and the line goes back to resting.</summary>
+    private void OnHazardStatus(string text)
+        => SetStatus(string.IsNullOrEmpty(text) ? RestingStatus : text, StatusIdle);
 
     private void OnSlotInput(PanelContainer card, InputEvent @event, int slot)
     {

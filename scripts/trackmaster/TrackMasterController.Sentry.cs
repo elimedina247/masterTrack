@@ -69,6 +69,9 @@ public partial class TrackMasterController
 			SentryActionKind.RunawayBooster => "Runaway booster: click a racer's marker. Right-click to cancel.",
 			SentryActionKind.CrossedWires => "Crossed wires!: click a racer's marker. Right-click to cancel.",
 			SentryActionKind.OilSlick => "Oil slick: click a spot on the track. Right-click to cancel.",
+			SentryActionKind.Magnet => "Magnet: click a spot on the track. Right-click to cancel.",
+			SentryActionKind.CargoSpill => "Cargo spill: click a spot on the track. Right-click to cancel.",
+			SentryActionKind.PopUpRamp => "Pop-up ramp: click near a hazard spot on the road. Right-click to cancel.",
 			_ => "",
 		});
 	}
@@ -84,13 +87,34 @@ public partial class TrackMasterController
 	}
 
 	/// <summary>
-	/// First look at input while armed. Returns true when the event was a sentry gesture, so
-	/// the rest of the board's input handling stays out of it. Wheel and camera-look events
-	/// return false on purpose — aiming a missile should not cost the sentry their zoom.
+	/// First look at input while the sentry is live. Returns true when the event was a sentry
+	/// gesture, so the rest of the board's input handling stays out of it. Wheel and camera-look
+	/// events return false on purpose — aiming a missile should not cost the sentry their zoom.
+	///
+	/// The number row arms tools without a trip to the bar: <c>1</c>–<c>9</c> for the first nine
+	/// actions, <c>Shift</c> for the overflow — the same order the buttons show, because the bar
+	/// prints each button's key from the same arithmetic. Verified free of the board's other
+	/// bindings, which are only <c>builder_undo</c> and <c>camera_look</c>.
 	/// </summary>
 	private bool HandleSentryInput(InputEvent @event)
 	{
-		if (!_sentryArmed || _sentry == null)
+		if (_sentry == null)
+			return false;
+
+		if (@event is InputEventKey { Pressed: true, Echo: false } key
+			&& key.Keycode is >= Key.Key1 and <= Key.Key9)
+		{
+			int kind = (int)key.Keycode - (int)Key.Key1 + (key.ShiftPressed ? 9 : 0);
+			if (kind < System.Enum.GetValues<SentryActionKind>().Length)
+			{
+				ArmSentryAction(kind);
+				return true;
+			}
+
+			return false;
+		}
+
+		if (!_sentryArmed)
 			return false;
 
 		if (@event is not InputEventMouseButton { Pressed: true } mouse)
@@ -230,7 +254,91 @@ public partial class TrackMasterController
 				EmitSignal(SignalName.SentryStatusChanged, "Oil poured.");
 				return;
 			}
+
+			case SentryActionKind.Magnet:
+			{
+				if (!TryPickTrackPoint(screenPosition, out Vector3 point))
+				{
+					EmitSignal(SignalName.SentryStatusChanged, "Nothing there — click the road.");
+					return;
+				}
+
+				_sentry!.RequestMagnet(point);
+				_sentryArmed = false;
+				EmitSignal(SignalName.SentryStatusChanged, "Magnet planted.");
+				return;
+			}
+
+			case SentryActionKind.CargoSpill:
+			{
+				if (!TryPickTrackPoint(screenPosition, out Vector3 point))
+				{
+					EmitSignal(SignalName.SentryStatusChanged, "Nothing there — click the road.");
+					return;
+				}
+
+				_sentry!.RequestCargoSpill(point);
+				_sentryArmed = false;
+				EmitSignal(SignalName.SentryStatusChanged, "Cargo away!");
+				return;
+			}
+
+			case SentryActionKind.PopUpRamp:
+			{
+				if (!TryPickTrackPoint(screenPosition, out Vector3 point)
+					|| !TryNearestFreeSurfaceSlot(point, out int tileIndex, out int slotIndex))
+				{
+					EmitSignal(SignalName.SentryStatusChanged,
+							   "No free hazard spot near there — slotted pieces only.");
+					return;
+				}
+
+				_sentry!.RequestPopUpRamp(tileIndex, slotIndex);
+				_sentryArmed = false;
+				EmitSignal(SignalName.SentryStatusChanged, "Ramp rising!");
+				return;
+			}
 		}
+	}
+
+	/// <summary>
+	/// The free surface slot nearest a clicked point on the road, within most of a tile. The
+	/// sentry aims at road the way the missile does; the slot system decides what "there" means,
+	/// which is the same curation every other hazard placement gets.
+	/// </summary>
+	private bool TryNearestFreeSurfaceSlot(Vector3 point, out int tileIndex, out int slotIndex)
+	{
+		tileIndex = -1;
+		slotIndex = -1;
+
+		if (Track == null)
+			return false;
+
+		float bestDistance = Tiles.TrackTile.Size * 0.8f;
+
+		for (int tile = Track.Grid.OldestLiveIndex; tile < Track.Grid.Count; tile++)
+		{
+			var slots = Track.SlotsOf(tile);
+			for (int slot = 0; slot < slots.Count; slot++)
+			{
+				if (slots[slot].Kind != Tiles.HazardSlotKind.Surface
+					|| !Track.IsSlotFree(tile, slot))
+					continue;
+
+				if (Track.SlotWorldTransform(tile, slot) is not { } at)
+					continue;
+
+				float distance = at.Origin.DistanceTo(point);
+				if (distance >= bestDistance)
+					continue;
+
+				bestDistance = distance;
+				tileIndex = tile;
+				slotIndex = slot;
+			}
+		}
+
+		return tileIndex >= 0;
 	}
 
 	/// <summary>

@@ -693,6 +693,14 @@ public partial class Vehicle : RigidBody3D
     /// </summary>
     public float DebuffSpeedBonus;
 
+    /// <summary>
+    /// Multiplier on the drive force limit while the throttle is down — 1 is stock. Written by
+    /// the racer layer's debuff upkeep, for the runaway booster: raising the speed target says
+    /// how fast the car may go, but this is what makes getting there violent. A hook inside the
+    /// drive solve for the same reason the grip multiplier is inside the tire model.
+    /// </summary>
+    public float DebuffAccelMultiplier = 1.0f;
+
     // ---------------------------------------------------------------- Reported state
 
     public bool IsVehicleReady { get; private set; }
@@ -1427,7 +1435,8 @@ public partial class Vehicle : RigidBody3D
         else
         {
             if (ThrottleAmount > 0.05f)
-                forwardLimit = MaxAccelForce + (BurstActive ? BoostAccelForce : 0.0f);
+                forwardLimit = (MaxAccelForce + (BurstActive ? BoostAccelForce : 0.0f))
+                               * DebuffAccelMultiplier;
 
             if (BrakeAmount > 0.05f && currentForwardSpeed > 0.0f)
                 backwardLimit = MaxBrakeForce;

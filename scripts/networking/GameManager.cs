@@ -50,9 +50,10 @@ public enum GameMode
     LiveBuild,
 
     /// <summary>
-    /// The Track Master builds the whole track first, then turns sentry: they spend a fixed
-    /// points budget on sabotage — debuffs on cars, missiles at the road — while the racers run
-    /// what they built. See <see cref="MatchPhase"/> for where a match of this shape currently is.
+    /// The Track Master builds the whole track first, then turns sentry: they spend a
+    /// regenerating points pool on sabotage — debuffs on cars, missiles at the road — while the
+    /// racers run what they built. See <see cref="MatchPhase"/> for where a match of this shape
+    /// currently is.
     /// </summary>
     Sentry,
 }
@@ -105,6 +106,9 @@ public partial class GameManager : Node
     /// <summary>The race length has been set or re-published. Known on every peer.</summary>
     [Signal] public delegate void RaceLengthChangedEventHandler(int tiles);
 
+    /// <summary>The sentry point limit has been set or re-published. Known on every peer.</summary>
+    [Signal] public delegate void SentryPointLimitChangedEventHandler(int points);
+
     /// <summary>The host picked a game mode. Known on every peer, like the race length.</summary>
     [Signal] public delegate void GameModeChangedEventHandler(int mode);
 
@@ -141,6 +145,24 @@ public partial class GameManager : Node
     /// set its own would disagree with the server about when the Track Master had run dry.
     /// </summary>
     public int RaceLength { get; private set; } = DefaultRaceLength;
+
+    // ---- Sentry point limit ----
+    //
+    // How big the sentry's points pool is in Sentry mode. A lobby decision like the race length,
+    // because it is the knob that sets how much chaos the racers signed up for: the pool starts
+    // full, regenerates during the race (see Sentry.SentryActions.RegenPerSecond), and never
+    // grows past this.
+
+    /// <summary>Pool sizes the lobby offers, in points.</summary>
+    public static readonly int[] SentryPointLimitChoices = { 100, 250, 500, 1000 };
+
+    public const int DefaultSentryPointLimit = 500;
+
+    private const int MinSentryPointLimit = 10;
+    private const int MaxSentryPointLimit = 9999;
+
+    /// <summary>The sentry's pool size for this session. Host owns it; everyone is told.</summary>
+    public int SentryPointLimit { get; private set; } = DefaultSentryPointLimit;
 
     // ---- Game mode and match phase ----
     //
@@ -321,9 +343,11 @@ public partial class GameManager : Node
         }
 
         // The lobby shows the race length to everybody, not only to the host who set it, so a
-        // newcomer has to be told what was decided before they arrived. Same for the mode.
+        // newcomer has to be told what was decided before they arrived. Same for the mode and
+        // the sentry pool.
         RpcId(peerId, MethodName.NotifyRaceLength, RaceLength);
         RpcId(peerId, MethodName.NotifyGameMode, (int)Mode);
+        RpcId(peerId, MethodName.NotifySentryPointLimit, SentryPointLimit);
     }
 
     // ---- Game mode ----
@@ -516,6 +540,40 @@ public partial class GameManager : Node
     {
         RaceLength = tiles;
         EmitSignal(SignalName.RaceLengthChanged, tiles);
+    }
+
+    // ---- Sentry point limit ----
+
+    /// <summary>
+    /// Host only. Set the sentry's pool size for the next match, and tell everyone. Called from
+    /// the lobby, the same way <see cref="SetRaceLength"/> is.
+    /// </summary>
+    public void SetSentryPointLimit(int points)
+    {
+        if (NetworkManager.Instance.IsNetworked && !NetworkManager.Instance.IsHost)
+        {
+            GD.PushWarning("[GameManager] Only the host sets the sentry point limit; ignored.");
+            return;
+        }
+
+        int clamped = Mathf.Clamp(points, MinSentryPointLimit, MaxSentryPointLimit);
+        if (clamped == SentryPointLimit)
+            return;
+
+        SentryPointLimit = clamped;
+        GD.Print($"[GameManager] Sentry point limit set to {SentryPointLimit}.");
+
+        if (NetworkManager.Instance.IsNetworked)
+            Rpc(MethodName.NotifySentryPointLimit, SentryPointLimit);
+
+        EmitSignal(SignalName.SentryPointLimitChanged, SentryPointLimit);
+    }
+
+    [Rpc(MultiplayerApi.RpcMode.Authority, CallLocal = false, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    private void NotifySentryPointLimit(int points)
+    {
+        SentryPointLimit = points;
+        EmitSignal(SignalName.SentryPointLimitChanged, points);
     }
 
     // ---- Winning ----
@@ -786,7 +844,10 @@ public partial class GameManager : Node
         // Re-published rather than assumed. It was last sent when it was chosen or when a peer
         // joined, and the length is what every peer's track measures itself against — a peer that
         // somehow missed it would be building toward a different finish line to everyone else.
+        // The sentry pool rides along for the same reason: the sentry's own machine seeds its
+        // ledger from it when the match scene loads.
         Rpc(MethodName.NotifyRaceLength, RaceLength);
+        Rpc(MethodName.NotifySentryPointLimit, SentryPointLimit);
 
         var peers = new List<int> { Multiplayer.GetUniqueId() };
         peers.AddRange(Multiplayer.GetPeers());

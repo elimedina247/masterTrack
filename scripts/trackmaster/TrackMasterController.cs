@@ -310,6 +310,7 @@ public partial class TrackMasterController : Node3D
 		// with a stale ghost on a head that has since moved.
 		StopLooking();
 		ClearPreview();
+		CancelHazardPlacement();
 	}
 
 	/// <summary>
@@ -391,6 +392,8 @@ public partial class TrackMasterController : Node3D
 		// countdown nobody is waiting on.
 		if (!FreeBuild && Hand.Tick((float)delta, IsPlaceable))
 			EmitSignal(SignalName.HandChanged);
+
+		TickHazardHand((float)delta);
 
 		if (CameraMode == BoardCameraMode.FreeRoam)
 			UpdateFreeRoam((float)delta);
@@ -633,6 +636,10 @@ public partial class TrackMasterController : Node3D
 
 		// An armed sentry action owns the mouse buttons until it fires or is cancelled.
 		if (HandleSentryInput(@event))
+			return;
+
+		// Then an armed hazard, the same way.
+		if (HandleHazardInput(@event))
 			return;
 
 		if (@event.IsActionPressed("builder_undo"))

@@ -1,6 +1,7 @@
 using Godot;
 using MasterTrack.Networking;
 using MasterTrack.Racer;
+using System.Collections.Generic;
 
 namespace MasterTrack.Sentry;
 
@@ -31,17 +32,67 @@ public partial class SentryManager : Node3D
     /// <summary>A debuff landed on a peer's car. Fired on every peer, so HUDs can shout it.</summary>
     [Signal] public delegate void DebuffAppliedEventHandler(int peerId, int kind);
 
+    /// <summary>An action went on cooldown. Fired on every peer; only the sentry's UI listens.</summary>
+    [Signal] public delegate void CooldownStartedEventHandler(int kind, float seconds);
+
     /// <summary>What is left to spend. Server truth; clients follow the broadcast.</summary>
-    public int PointsRemaining { get; private set; } = SentryActions.PointsBudget;
+    public int PointsRemaining { get; private set; }
+
+    /// <summary>Seconds banked toward the next regen tick. Server only.</summary>
+    private float _regenBank;
+
+    /// <summary>
+    /// When each action comes off cooldown, on this machine's clock. The server's copy is the
+    /// one that gates; every client keeps its own from the broadcast, purely so the bar can
+    /// count down without asking — the same each-peer-runs-its-own-clock trick the build timer
+    /// uses. A few network milliseconds of disagreement changes a label, never a decision.
+    /// </summary>
+    private readonly Dictionary<SentryActionKind, ulong> _cooldownUntil = new();
 
     private static bool Networked => NetworkManager.Instance.IsNetworked;
 
     public override void _Ready()
     {
+        // The pool starts full at whatever the host picked in the lobby. Every peer seeds the
+        // same number from the replicated setting; the server's broadcasts keep it true from here.
+        PointsRemaining = GameManager.Instance.SentryPointLimit;
+
         // Warm the missile's model now, while the match scene is still settling, rather than on
         // its first launch mid-race — the same reason the match warms the tile pieces. The
         // resource cache holds it from here, so the launch is an instancing and nothing more.
         GD.Load<PackedScene>(SentryMissile.ModelPath);
+    }
+
+    /// <summary>
+    /// The regen drip: while the race runs, the server hands points back once a second up to the
+    /// lobby's limit, through the same broadcast every spend uses — so clients never do their own
+    /// arithmetic and the ledger stays one machine's opinion.
+    /// </summary>
+    public override void _Process(double delta)
+    {
+        if (Networked && !Multiplayer.IsServer())
+            return;
+
+        if (GameManager.Instance.Phase != MatchPhase.Racing)
+            return;
+
+        int limit = GameManager.Instance.SentryPointLimit;
+        if (PointsRemaining >= limit)
+        {
+            _regenBank = 0.0f;
+            return;
+        }
+
+        _regenBank += (float)delta;
+        if (_regenBank < 1.0f)
+            return;
+
+        _regenBank -= 1.0f;
+        PointsRemaining = Mathf.Min(PointsRemaining + SentryActions.RegenPerSecond, limit);
+
+        if (Networked)
+            Rpc(MethodName.NotifyPoints, PointsRemaining);
+        NotifyPoints(PointsRemaining);
     }
 
     // ---- Requests: sentry client -> server ----
@@ -134,6 +185,39 @@ public partial class SentryManager : Node3D
         RpcId(1, MethodName.ServerRequestMoonGravity);
     }
 
+    public void RequestMagnet(Vector3 target)
+    {
+        if (!Networked || Multiplayer.IsServer())
+        {
+            ServerMagnet(Multiplayer.GetUniqueId(), target);
+            return;
+        }
+
+        RpcId(1, MethodName.ServerRequestMagnet, target);
+    }
+
+    public void RequestCargoSpill(Vector3 target)
+    {
+        if (!Networked || Multiplayer.IsServer())
+        {
+            ServerCargoSpill(Multiplayer.GetUniqueId(), target);
+            return;
+        }
+
+        RpcId(1, MethodName.ServerRequestCargoSpill, target);
+    }
+
+    public void RequestPopUpRamp(int tileIndex, int slotIndex)
+    {
+        if (!Networked || Multiplayer.IsServer())
+        {
+            ServerPopUpRamp(Multiplayer.GetUniqueId(), tileIndex, slotIndex);
+            return;
+        }
+
+        RpcId(1, MethodName.ServerRequestPopUpRamp, tileIndex, slotIndex);
+    }
+
     [Rpc(MultiplayerApi.RpcMode.AnyPeer, CallLocal = false, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
     private void ServerRequestBouncy(int targetPeerId)
         => ServerBouncy(Multiplayer.GetRemoteSenderId(), targetPeerId);
@@ -165,6 +249,18 @@ public partial class SentryManager : Node3D
     [Rpc(MultiplayerApi.RpcMode.AnyPeer, CallLocal = false, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
     private void ServerRequestMoonGravity()
         => ServerMoonGravity(Multiplayer.GetRemoteSenderId());
+
+    [Rpc(MultiplayerApi.RpcMode.AnyPeer, CallLocal = false, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    private void ServerRequestMagnet(Vector3 target)
+        => ServerMagnet(Multiplayer.GetRemoteSenderId(), target);
+
+    [Rpc(MultiplayerApi.RpcMode.AnyPeer, CallLocal = false, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    private void ServerRequestCargoSpill(Vector3 target)
+        => ServerCargoSpill(Multiplayer.GetRemoteSenderId(), target);
+
+    [Rpc(MultiplayerApi.RpcMode.AnyPeer, CallLocal = false, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    private void ServerRequestPopUpRamp(int tileIndex, int slotIndex)
+        => ServerPopUpRamp(Multiplayer.GetRemoteSenderId(), tileIndex, slotIndex);
 
     // ---- Authority: validate, spend, broadcast ----
 
@@ -296,6 +392,63 @@ public partial class SentryManager : Node3D
         NotifyMoonGravity();
     }
 
+    private void ServerMagnet(int senderId, Vector3 target)
+    {
+        if (!MaySentry(senderId))
+            return;
+
+        if (!TrySpend(SentryActionKind.Magnet, senderId))
+            return;
+
+        if (Networked)
+            Rpc(MethodName.NotifyMagnet, target);
+        NotifyMagnet(target);
+    }
+
+    private void ServerCargoSpill(int senderId, Vector3 target)
+    {
+        if (!MaySentry(senderId))
+            return;
+
+        if (!TrySpend(SentryActionKind.CargoSpill, senderId))
+            return;
+
+        // The seed is the server's roll, made once — every peer grows the same rainfall from
+        // it. See SentryCargoSpill.
+        int seed = unchecked((int)GD.Randi());
+
+        if (Networked)
+            Rpc(MethodName.NotifyCargoSpill, target, seed);
+        NotifyCargoSpill(target, seed);
+    }
+
+    /// <summary>
+    /// Server only. The pop-up ramp goes through the track's own hazard pipeline rather than a
+    /// sentry Notify: the slot is checked <i>before</i> the points move, then
+    /// <see cref="Tiles.TrackController.ServerCommitHazard"/> broadcasts the same confirmation
+    /// every other hazard placement rides — composition at race time, never a tile swap.
+    /// </summary>
+    private void ServerPopUpRamp(int senderId, int tileIndex, int slotIndex)
+    {
+        if (!MaySentry(senderId))
+            return;
+
+        if (GetTree().GetFirstNodeInGroup(Tiles.TrackController.GroupName)
+                is not Tiles.TrackController track)
+            return;
+
+        if (!track.CanPlaceHazard(tileIndex, slotIndex, Tiles.HazardKind.PopUpRamp, out string reason))
+        {
+            Reject(senderId, $"No ramp there — {reason}.");
+            return;
+        }
+
+        if (!TrySpend(SentryActionKind.PopUpRamp, senderId))
+            return;
+
+        track.ServerCommitHazard(tileIndex, slotIndex, Tiles.HazardKind.PopUpRamp, out _);
+    }
+
     /// <summary>
     /// Server only. Whether a peer may spend sentry points right now: the race must actually be
     /// running, and the asker must hold the role. Solo skips the role half the way the track's
@@ -321,9 +474,26 @@ public partial class SentryManager : Node3D
         return true;
     }
 
-    /// <summary>Server only. Take the cost out of the ledger, or say why not.</summary>
+    /// <summary>Seconds until an action may fire again, or 0 when it is ready. For the bar.</summary>
+    public float CooldownLeft(SentryActionKind kind)
+        => _cooldownUntil.TryGetValue(kind, out ulong until) && Time.GetTicksMsec() < until
+            ? (until - Time.GetTicksMsec()) / 1000.0f
+            : 0.0f;
+
+    /// <summary>
+    /// Server only. Take the cost out of the ledger and start the cooldown, or say why not.
+    /// Two gates rather than one because they guard different failure modes: the cooldown stops
+    /// one tool being spammed, the pool stops the whole kit being fired at once.
+    /// </summary>
     private bool TrySpend(SentryActionKind kind, int senderId)
     {
+        float reloading = CooldownLeft(kind);
+        if (reloading > 0.0f)
+        {
+            Reject(senderId, $"{SentryActions.NameOf(kind)} is reloading — {reloading:0}s.");
+            return false;
+        }
+
         int cost = SentryActions.CostOf(kind);
         if (PointsRemaining < cost)
         {
@@ -336,8 +506,12 @@ public partial class SentryManager : Node3D
         GD.Print($"[Sentry] {SentryActions.NameOf(kind)} bought for {cost}; {PointsRemaining} left.");
 
         if (Networked)
+        {
             Rpc(MethodName.NotifyPoints, PointsRemaining);
+            Rpc(MethodName.NotifyCooldown, (int)kind, SentryActions.CooldownOf(kind));
+        }
         NotifyPoints(PointsRemaining);
+        NotifyCooldown((int)kind, SentryActions.CooldownOf(kind));
 
         return true;
     }
@@ -366,6 +540,13 @@ public partial class SentryManager : Node3D
     [Rpc(MultiplayerApi.RpcMode.Authority, CallLocal = false, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
     private void NotifyRejected(string reason)
         => EmitSignal(SignalName.SentryMessage, reason);
+
+    [Rpc(MultiplayerApi.RpcMode.Authority, CallLocal = false, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    private void NotifyCooldown(int kind, float seconds)
+    {
+        _cooldownUntil[(SentryActionKind)kind] = Time.GetTicksMsec() + (ulong)(seconds * 1000.0f);
+        EmitSignal(SignalName.CooldownStarted, kind, seconds);
+    }
 
     [Rpc(MultiplayerApi.RpcMode.Authority, CallLocal = false, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
     private void NotifyBouncy(int targetPeerId)
@@ -429,6 +610,20 @@ public partial class SentryManager : Node3D
     {
         var slick = new SentryOilSlick { Name = "OilSlick", Position = target };
         AddChild(slick);
+    }
+
+    [Rpc(MultiplayerApi.RpcMode.Authority, CallLocal = false, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    private void NotifyMagnet(Vector3 target)
+    {
+        var magnet = new SentryMagnet { Name = "Magnet", Position = target };
+        AddChild(magnet);
+    }
+
+    [Rpc(MultiplayerApi.RpcMode.Authority, CallLocal = false, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    private void NotifyCargoSpill(Vector3 target, int seed)
+    {
+        var spill = new SentryCargoSpill { Name = "CargoSpill", Position = target, Seed = seed };
+        AddChild(spill);
     }
 
     /// <summary>The moon lands on everybody at once — every car this peer knows about gets the

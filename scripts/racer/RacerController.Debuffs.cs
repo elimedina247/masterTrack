@@ -178,6 +178,78 @@ public partial class RacerController
 	}
 
 	/// <summary>
+	/// A magnet is dragging at this car — maybe. Called every physics tick for every car near
+	/// one; the distance and ownership checks decide whether anything happens to this copy. A
+	/// velocity edit rather than a force for the same reason the chain is: a force would just be
+	/// one more disturbance for the tire solve to grip away.
+	///
+	/// The pull is flattened to the road plane — a magnet that pressed cars into the tarmac
+	/// would only be helping their grip, and one that lifted them would be a different tool.
+	/// </summary>
+	public void ApplyMagnetPull(Vector3 centre, float radius, float accel, float delta)
+	{
+		if (IsRemote || !IsInsideTree())
+			return;
+
+		Vector3 toCentre = centre - GlobalPosition;
+		toCentre.Y = 0.0f;
+		float distance = toCentre.Length();
+
+		// Inside a couple of metres the magnet has caught you; yanking through the centre
+		// would slingshot, which is the wrong joke.
+		if (distance > radius || distance < 2.0f)
+			return;
+
+		LinearVelocity += toCentre / distance * (accel * delta);
+	}
+
+	/// <summary>
+	/// This car clipped a piece of spilled cargo. The physics contact already shoved the debris
+	/// — this is the debris shoving <i>back</i>, through the same velocity-level door every
+	/// outside hit uses, because the solver's contact force on the car mostly gets eaten by the
+	/// tire model.
+	///
+	/// The design lives in the split below: a dead-centre hit is a thump that scrubs a little
+	/// speed and nothing else, an off-centre clip puts <i>yaw</i> into the car. One piece of
+	/// junk is a wobble; threading a field of it clean at full tilt is a skill, and hitting
+	/// three in a second is a spin. The hazard punishes a bad line, never speed itself.
+	/// </summary>
+	public void ApplyDebrisHit(Vector3 debrisPosition)
+	{
+		if (IsRemote || !IsInsideTree())
+			return;
+
+		float speed = LinearVelocity.Length();
+		if (speed < 3.0f)
+			return;
+
+		Vector3 offset = debrisPosition - GlobalPosition;
+		offset.Y = 0.0f;
+		if (offset.LengthSquared() < 0.01f)
+			return;
+		Vector3 toDebris = offset.Normalized();
+
+		// Which side took the hit: -1 hard left, +1 hard right, ~0 dead ahead.
+		float side = GlobalBasis.X.Dot(toDebris);
+
+		// Faster hits kick harder, saturating around top speed — the scale, not the shape.
+		float pace = Mathf.Clamp(speed / 50.0f, 0.2f, 1.2f);
+
+		// The nose deflects away from the side that clipped: in Godot +Y yaw swings the nose
+		// left, so a hit on the right (+side) yaws positive. Centred hits barely steer.
+		AngularVelocity += Vector3.Up * (side * 0.9f * pace);
+
+		// The clip also shoulders the car off its line a touch, away from the debris.
+		Vector3 shove = (LinearVelocity.Normalized() - toDebris * 0.6f).Normalized();
+		LinearVelocity += shove * (2.0f * pace * Mathf.Abs(side));
+
+		// And the thump itself: a small scrub whoever you are, biggest when dead centre.
+		LinearVelocity *= 1.0f - 0.04f * (1.0f - Mathf.Abs(side) * 0.5f);
+
+		GD.Print($"[Racer {OwnerPeerId}] Clipped cargo (side {side:0.00}) at {speed:0} m/s.");
+	}
+
+	/// <summary>
 	/// Per-physics-step debuff upkeep, called for every car — simulated and puppet alike,
 	/// because the aura is everyone's business even where the physics isn't.
 	/// </summary>
@@ -197,6 +269,7 @@ public partial class RacerController
 		// permanently soaped or permanently fast.
 		DebuffGripMultiplier = IsSlicked ? SentryActions.OilGripMultiplier : 1.0f;
 		DebuffSpeedBonus = IsBoosterActive ? SentryActions.BoosterSpeedBonus : 0.0f;
+		DebuffAccelMultiplier = IsBoosterActive ? SentryActions.BoosterAccelMultiplier : 1.0f;
 
 		UpdateMoonGravity();
 	}
