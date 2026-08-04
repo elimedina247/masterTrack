@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="360" viewBox="0 0 200 90">
+  <!-- The wing used to be drawn under the shell; over it now that the shell is its own layer, so
+       the stalk stops at the bootlid (y 39) instead of running on down behind it. -->
+  <rect x="158" y="30" width="30" height="3.2" rx="1.6" fill="#1a1626"/>
+  <rect x="166" y="32" width="4" height="7" fill="#1a1626"/>
+  <path d="M98 37 L150 37 L157 46 L89 46 Z" fill="#dcf0ff" fill-opacity="0.85"/>
+  <circle cx="48" cy="70.66" r="8.16" fill="#1a1626"/><circle cx="48" cy="70.66" r="4.49" fill="#c9c4d6"/><circle cx="48" cy="70.66" r="1.63" fill="#5a5470"/>
+  <circle cx="152" cy="66.98" r="12.24" fill="#1a1626"/><circle cx="152" cy="66.98" r="6.73" fill="#c9c4d6"/><circle cx="152" cy="66.98" r="2.45" fill="#5a5470"/>
+</svg>

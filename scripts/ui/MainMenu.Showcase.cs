@@ -16,13 +16,20 @@ namespace MasterTrack.UI;
 /// into <see cref="GameManager.LocalPreference"/>, which solo play reads directly and a session
 /// sends to the server on join. Paint is a preference rather than a claim — the server only
 /// grants a colour nobody else is wearing, because the colour is how players tell each other
-/// apart. The colours baked into the silhouettes are set dressing; the pill under the name is
-/// what states your actual pick.
+/// apart.
+///
+/// Every pick lands on the car in front of you: <see cref="GarageCar"/> paints the silhouette in
+/// the chosen colour and stands the antenna at the chosen mount, so the stage is a picture of the
+/// car you are about to drive rather than stock art with a caption. The pill under the name still
+/// spells the pick out in words, for the paint two people would argue over the name of.
 /// </summary>
 public partial class MainMenu
 {
-	/// <summary>Index-aligned with <see cref="CarVariants.All"/>; the colours baked into each
-	/// file follow the palette in order, wrapping past G — H is red again.</summary>
+	/// <summary>Index-aligned with <see cref="CarVariants.All"/>. Each of these is the body layer
+	/// on its own; the trim that goes over it is the same name with <c>_trim</c>, and
+	/// <see cref="GarageCar"/> draws the pair. The colour each body used to be filled with is its
+	/// own palette entry — the palette in order, wrapping past G — which is what AUTO paints, so a
+	/// garage nobody has touched looks exactly as it always did.</summary>
 	private static readonly string[] GarageArt =
 	{
 		"res://assets/ui/garage/car_a_wedge.svg",
@@ -35,23 +42,46 @@ public partial class MainMenu
 		"res://assets/ui/garage/car_h_hatch.svg",
 	};
 
+	/// <summary>
+	/// Where the whip's foot lands on each body, in the art's 200x90 space, in the order of
+	/// <see cref="CarVariants.AntennaSpots"/>: back deck, roof centre, front.
+	///
+	/// Read off the silhouettes by hand rather than projected from the 3D spots — the drawings are
+	/// not the models. Every body faces left, so "front" is the low end. A side view cannot show
+	/// the front mount's offset across the car either; on the stage it only says nose rather than
+	/// nose-right, which is the part a player is choosing between.
+	/// </summary>
+	private static readonly Vector2[][] GarageAntennaMounts =
+	{
+		new[] { new Vector2(160, 41), new Vector2(126, 21), new Vector2(40, 52) }, // A_Wedge
+		new[] { new Vector2(145, 23), new Vector2(87, 16), new Vector2(35, 30) },  // B_Bubble
+		new[] { new Vector2(156, 44), new Vector2(116, 28), new Vector2(50, 51) }, // C_Cartoon
+		new[] { new Vector2(156, 44), new Vector2(90, 29), new Vector2(50, 51) },  // D_Cartoon
+		new[] { new Vector2(164, 48), new Vector2(106, 25), new Vector2(38, 45) }, // E_Hachi
+		new[] { new Vector2(164, 48), new Vector2(106, 25), new Vector2(38, 45) }, // F_Hachi
+		new[] { new Vector2(164, 48), new Vector2(106, 25), new Vector2(38, 45) }, // G_Panda
+		new[] { new Vector2(152, 34), new Vector2(132, 32), new Vector2(48, 52) }, // H_Hatch
+	};
+
 	private const string GarageSettingsPath = "user://settings.cfg";
 	private const string GarageSection = "garage";
 
 	/// <summary>The muted lavender the stage's captions use — see the Hint label in Main.tscn.</summary>
 	private static readonly Color CaptionColour = new(0.4275f, 0.3961f, 0.5176f);
 
-	private TextureRect _carImage = null!;
+	private GarageCar _stageCar = null!;
 	private Label _carName = null!;
 	private Label _carSpec = null!;
 	private Label _colorPill = null!;
 	private HBoxContainer _thumbs = null!;
 
-	private Texture2D[] _garageTextures = null!;
+	private Texture2D[] _bodyTextures = null!;
+	private Texture2D[] _trimTextures = null!;
 	private StyleBoxFlat _pillStyle = null!;
 	private StyleBoxFlat _thumbNormal = null!;
 	private StyleBoxFlat _thumbSelected = null!;
 	private readonly List<Button> _thumbButtons = new();
+	private readonly List<GarageCar> _thumbCars = new();
 
 	private readonly List<Button> _swatchButtons = new();
 	private readonly List<StyleBoxFlat> _swatchNormalStyles = new();
@@ -64,17 +94,28 @@ public partial class MainMenu
 
 	private void SetupShowcase()
 	{
-		_carImage = GetNode<TextureRect>("%CarImage");
 		_carName = GetNode<Label>("%CarName");
 		_carSpec = GetNode<Label>("%CarSpec");
 		_colorPill = GetNode<Label>("%ColorPill");
 		_thumbs = GetNode<HBoxContainer>("%Thumbs");
 
+		// CarImage is the stage's spotlight rectangle, authored in Main.tscn. The car inside it is
+		// drawn rather than displayed now that it is layers plus an antenna, so the node is left as
+		// the frame and the GarageCar fills it.
+		_stageCar = new GarageCar();
+		Control frame = GetNode<Control>("%CarImage");
+		frame.AddChild(_stageCar);
+		_stageCar.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
+
 		LoadGarage();
 
-		_garageTextures = new Texture2D[GarageArt.Length];
+		_bodyTextures = new Texture2D[GarageArt.Length];
+		_trimTextures = new Texture2D[GarageArt.Length];
 		for (int i = 0; i < GarageArt.Length; i++)
-			_garageTextures[i] = GD.Load<Texture2D>(GarageArt[i]);
+		{
+			_bodyTextures[i] = GD.Load<Texture2D>(GarageArt[i]);
+			_trimTextures[i] = GD.Load<Texture2D>(GarageArt[i].Replace(".svg", "_trim.svg"));
+		}
 
 		// The pill's border takes the picked paint's colour, so its box has to be per-instance
 		// rather than authored in the scene where every state would share it.
@@ -125,14 +166,12 @@ public partial class MainMenu
 			thumb.AddThemeStyleboxOverride("pressed", _thumbSelected);
 			thumb.Pressed += () => ShowVariant(index);
 
-			var art = new TextureRect
-			{
-				Texture = _garageTextures[i],
-				ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
-				StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered,
-				MouseFilter = MouseFilterEnum.Ignore,
-			};
+			// The thumbs take the picked paint as well, which leaves the row saying what it is
+			// actually choosing between: shapes. No antenna down here — at this size the whip is a
+			// smudge, and the stage car above is already showing where it sits.
+			var art = new GarageCar { ShowAntenna = false };
 			thumb.AddChild(art);
+			_thumbCars.Add(art);
 			art.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
 			art.OffsetLeft = 8;
 			art.OffsetTop = 5;
@@ -305,6 +344,7 @@ public partial class MainMenu
 		}
 
 		UpdatePill();
+		RefreshCars();
 	}
 
 	/// <summary>One line stating the whole pick, coloured by the paint it names.</summary>
@@ -327,7 +367,6 @@ public partial class MainMenu
 		_shownVariant = Mathf.PosMod(index, CarVariants.All.Count);
 		CarVariants.Variant variant = CarVariants.At(_shownVariant);
 
-		_carImage.Texture = _garageTextures[_shownVariant];
 		_carName.Text = variant.Name.Replace('_', ' ').ToUpperInvariant();
 		_carSpec.Text = $"front rim {variant.ModelledFrontRadius:0.00} m · rear rim {variant.ModelledRearRadius:0.00} m";
 
@@ -338,9 +377,35 @@ public partial class MainMenu
 			_thumbButtons[i].AddThemeStyleboxOverride("hover", style);
 		}
 
+		RefreshCars();
 		SyncPreference();
 		SaveGarage();
 	}
+
+	/// <summary>
+	/// Push the current pick onto the cars themselves. Called by every picker, so the stage answers
+	/// the click that was just made rather than the next time the scene loads — which is the whole
+	/// point of choosing here: what you are looking at is what you will be driving.
+	/// </summary>
+	private void RefreshCars()
+	{
+		_stageCar.SetCar(
+			_bodyTextures[_shownVariant],
+			_trimTextures[_shownVariant],
+			PaintColour,
+			GarageAntennaMounts[_shownVariant][_chosenAntenna]);
+
+		for (int i = 0; i < _thumbCars.Count; i++)
+			_thumbCars[i].SetCar(_bodyTextures[i], _trimTextures[i], PaintColour,
+				GarageAntennaMounts[i][_chosenAntenna]);
+	}
+
+	/// <summary>What the shown car is painted. AUTO has no colour of its own to show — the server
+	/// deals it, and only once there is a lobby — so it wears the shade this body was drawn in,
+	/// which is its own place in the palette.</summary>
+	private Color PaintColour => _chosenColour == RacerAppearance.NoColour
+		? CarVariants.ColourAt(_shownVariant)
+		: CarVariants.ColourAt(_chosenColour);
 
 	/// <summary>Arrow keys browse the garage. Unhandled input, so a focused control (a LineEdit
 	/// moving its caret, a button moving focus) always wins over the carousel.</summary>
@@ -371,9 +436,15 @@ public partial class MainMenu
 			style.Dispose();
 		_swatchNormalStyles.Clear();
 		_swatchSelectedStyles.Clear();
-		if (_garageTextures != null)
-			foreach (Texture2D texture in _garageTextures)
+		DisposeTextures(ref _bodyTextures);
+		DisposeTextures(ref _trimTextures);
+	}
+
+	private static void DisposeTextures(ref Texture2D[] textures)
+	{
+		if (textures != null)
+			foreach (Texture2D texture in textures)
 				texture?.Dispose();
-		_garageTextures = null!;
+		textures = null!;
 	}
 }

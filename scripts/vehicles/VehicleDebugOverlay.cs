@@ -27,14 +27,32 @@ public partial class VehicleDebugOverlay : Control, IVehicleObserver
     /// <summary>Whether the overlay starts visible.</summary>
     [Export] public bool ShowDebug { get; set; }
 
+    /// <summary>
+    /// The point on the car the nose trace follows, in the vehicle's own space. Defaults to the
+    /// middle of the front face of the collision box — far enough forward that a degree of
+    /// rotation moves it a readable distance.
+    /// </summary>
+    [ExportGroup("Nose trace")]
+    [Export] public Vector3 NoseOffset { get; set; } = new(0.0f, 0.59f, -1.24f);
+
+    /// <summary>Seconds of nose history kept. The trail is sampled once per physics tick.</summary>
+    [Export(PropertyHint.Range, "0.5,10,0.5")]
+    public float TraceSeconds { get; set; } = 3.0f;
+
     private static readonly string[] DebugSets =
-        { "All", "Inputs", "Grip", "Suspension", "Drift and Boost", "Steering", "Airborne" };
+        { "All", "Inputs", "Grip", "Suspension", "Drift and Boost", "Steering", "Airborne", "Nose" };
 
     private int _currentDebugSet;
 
     private readonly List<TextCommand> _text = new();
     private readonly List<LineCommand> _lines = new();
     private readonly List<CircleCommand> _circles = new();
+
+    /// <summary>Where the nose has been. See <see cref="SampleNose"/> for why there are two.</summary>
+    private readonly Queue<NoseSample> _trace = new();
+
+    private BodyLean? _bodyLean;
+    private Vehicle? _bodyLeanOwner;
 
     private Font _font = null!;
     private int _fontSize;
@@ -77,6 +95,149 @@ public partial class VehicleDebugOverlay : Control, IVehicleObserver
     {
         // Wrap in both directions; C#'s % keeps the sign of the dividend.
         _currentDebugSet = (value % DebugSets.Length + DebugSets.Length) % DebugSets.Length;
+    }
+
+    // ---- Nose trace ----
+
+    /// <summary>
+    /// Sampled on the physics tick, not the render frame, so the trail is the motion the
+    /// simulation actually produced rather than whatever the renderer happened to catch.
+    /// </summary>
+    public override void _PhysicsProcess(double delta)
+    {
+        if (!ShowDebug || VehicleNode is not { IsVehicleReady: true } vehicle)
+        {
+            _trace.Clear();
+            return;
+        }
+
+        SampleNose(vehicle);
+
+        var capacity = Mathf.Max(2, Mathf.RoundToInt(TraceSeconds * Engine.PhysicsTicksPerSecond));
+        while (_trace.Count > capacity)
+            _trace.Dequeue();
+    }
+
+    /// <summary>
+    /// Two nose positions, and the gap between them is the whole point of this trace.
+    ///
+    /// <b>Chassis</b> is the nose carried by the rigid body alone — where the physics put the car.
+    /// <b>Shell</b> is the same point on the visible model, which hangs off a <see cref="BodyLean"/>
+    /// that poses it in roll, yaw and pitch on top of the chassis. Those two separating is a car
+    /// that is being *posed* oddly; those two moving together but roughly is a car that is being
+    /// *simulated* oddly. Without both traces the difference is invisible, because the player only
+    /// ever sees the second one.
+    /// </summary>
+    private void SampleNose(Vehicle vehicle)
+    {
+        Vector3 chassis = vehicle.GlobalTransform * NoseOffset;
+
+        BodyLean? lean = ResolveBodyLean(vehicle);
+        Vector3 shell = lean != null ? lean.GlobalTransform * NoseOffset : chassis;
+
+        _trace.Enqueue(new NoseSample
+        {
+            Chassis = chassis, Shell = shell, Airborne = vehicle.IsAirborne,
+        });
+    }
+
+    /// <summary>
+    /// The posing node under this vehicle, found rather than wired: the car is spawned at runtime
+    /// and the overlay is handed only the vehicle (see <see cref="IVehicleObserver"/>), so there
+    /// is no scene path to export.
+    /// </summary>
+    private BodyLean? ResolveBodyLean(Vehicle vehicle)
+    {
+        if (_bodyLeanOwner == vehicle && IsInstanceValid(_bodyLean))
+            return _bodyLean;
+
+        _bodyLeanOwner = vehicle;
+        _bodyLean = FindBodyLean(vehicle);
+        return _bodyLean;
+    }
+
+    private static BodyLean? FindBodyLean(Node node)
+    {
+        foreach (Node child in node.GetChildren())
+        {
+            if (child is BodyLean lean)
+                return lean;
+
+            if (FindBodyLean(child) is { } deeper)
+                return deeper;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Both trails, plus the readouts that say which of the two is doing the moving.
+    ///
+    /// Airborne samples are drawn bright and grounded ones dim, so a flip stands out of the lap
+    /// either side of it without having to catch the trace at the right moment.
+    /// </summary>
+    private void BuildNose(Vehicle vehicle)
+    {
+        NoseSample? previous = null;
+
+        foreach (NoseSample sample in _trace)
+        {
+            if (previous is { } last)
+            {
+                Line(last.Chassis, sample.Chassis - last.Chassis,
+                     sample.Airborne ? Colors.Aqua : Colors.Teal);
+                Line(last.Shell, sample.Shell - last.Shell,
+                     sample.Airborne ? Colors.Orange : Colors.SaddleBrown);
+            }
+
+            previous = sample;
+        }
+
+        if (previous is not { } current)
+            return;
+
+        Circle(current.Chassis, 3.0f, Colors.Aqua);
+        Circle(current.Shell, 3.0f, Colors.Orange);
+
+        // The separation itself, drawn where it happens. A long red stick between the two dots is
+        // the pose disagreeing with the chassis by that much, right now.
+        Line(current.Chassis, current.Shell - current.Chassis, Colors.Red);
+
+        float split = current.Chassis.DistanceTo(current.Shell);
+
+        Text("Chassis nose (physics)", new Vector2(10, 120), Colors.Aqua);
+        Text("Shell nose (what you see)", new Vector2(10, 140), Colors.Orange);
+        Text($"Split: {split * 100.0f:F0} cm", new Vector2(10, 160),
+             split > 0.25f ? Colors.Red : Colors.White);
+
+        // The chassis' own rotation, in its own axes. Smooth numbers here with a jumping split
+        // above means the physics is fine and the pose is lying.
+        Basis basis = vehicle.GlobalTransform.Basis;
+        Text($"Chassis rate  pitch {Mathf.RadToDeg(vehicle.AngularVelocity.Dot(basis.X)):F0}"
+             + $"  yaw {Mathf.RadToDeg(vehicle.AngularVelocity.Dot(Vector3.Up)):F0}"
+             + $"  roll {Mathf.RadToDeg(vehicle.AngularVelocity.Dot(basis.Z)):F0} deg/s",
+             new Vector2(10, 190), Colors.Aqua);
+
+        if (ResolveBodyLean(vehicle) is { } lean)
+        {
+            Vector3 pose = lean.PoseEuler;
+            Text($"Shell pose    pitch {Mathf.RadToDeg(pose.X):F1}"
+                 + $"  yaw {Mathf.RadToDeg(pose.Y):F1}"
+                 + $"  roll {Mathf.RadToDeg(pose.Z):F1} deg"
+                 + $"  shift {lean.PoseSideways * 100.0f:F0} cm",
+                 new Vector2(10, 210), Colors.Orange);
+        }
+
+        // The two quantities BodyLean poses from. Both are ground concepts — a heading flattened
+        // into the horizontal plane, and a cornering g worked out from yaw rate times forward
+        // speed — so watch what they do to a car that is pointing at the sky.
+        Text($"HeadingError: {Mathf.RadToDeg(vehicle.HeadingError):F0} deg"
+             + $"   nose tilt: {Mathf.RadToDeg(Mathf.Asin(Mathf.Clamp(-basis.Z.Y, -1.0f, 1.0f))):F0} deg",
+             new Vector2(10, 240), Colors.Yellow);
+        Text($"Yaw rate x forward speed: {vehicle.AngularVelocity.Y * vehicle.ForwardSpeed / 9.8f:F2} g",
+             new Vector2(10, 260), Colors.Yellow);
+        Text($"Airborne: {vehicle.IsAirborne}   air time {vehicle.AirTime:F2} s",
+             new Vector2(10, 280), Colors.White);
     }
 
     private void BuildDebug(Vehicle vehicle)
@@ -159,6 +320,9 @@ public partial class VehicleDebugOverlay : Control, IVehicleObserver
                 Text($"Torque: {vehicle.SteerTorque:F0} Nm", new Vector2(10, 180), Colors.Aqua);
                 break;
         }
+
+        if (set is "Nose" or "All")
+            BuildNose(vehicle);
 
         if (set is "Inputs" or "All")
             BuildInputBars(vehicle, basis, centerOfGravity);
@@ -278,5 +442,12 @@ public partial class VehicleDebugOverlay : Control, IVehicleObserver
         public Vector3 Position { get; init; }
         public float Radius { get; init; }
         public Color Color { get; init; }
+    }
+
+    private readonly struct NoseSample
+    {
+        public Vector3 Chassis { get; init; }
+        public Vector3 Shell { get; init; }
+        public bool Airborne { get; init; }
     }
 }

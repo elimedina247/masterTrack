@@ -4,7 +4,7 @@
     {
       "name": "hud-preview",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "http.server", "8931", "--directory", "C:/Users/elime/AppData/Local/Temp/claude/C--Users-elime-source-repos-masterTrack/4aea3465-8a8e-4b49-9fe1-fe5fa9620c67/scratchpad"],
+      "runtimeArgs": ["-m", "http.server", "8931", "--directory", "C:/Users/elime/AppData/Local/Temp/claude/C--Users-elime-source-repos-masterTrack/d2d2a021-9bcc-474b-9696-9b7a316055e8/scratchpad"],
       "port": 8931
     }
   ]

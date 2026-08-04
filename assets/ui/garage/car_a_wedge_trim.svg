@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="360" viewBox="0 0 200 90">
+  <!-- Glass and rubber, drawn over the painted shell. Same viewBox as the body so the two stack. -->
+  <path d="M104 34 L126 26 L146 40 L112 42 Z" fill="#dcf0ff" fill-opacity="0.85"/>
+  <circle cx="48" cy="69.43" r="9.52" fill="#1a1626"/><circle cx="48" cy="69.43" r="5.24" fill="#c9c4d6"/><circle cx="48" cy="69.43" r="1.9" fill="#5a5470"/>
+  <circle cx="152" cy="69.43" r="9.52" fill="#1a1626"/><circle cx="152" cy="69.43" r="5.24" fill="#c9c4d6"/><circle cx="152" cy="69.43" r="1.9" fill="#5a5470"/>
+</svg>

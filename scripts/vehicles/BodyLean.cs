@@ -112,6 +112,35 @@ public partial class BodyLean : Node3D
     /// <summary>How quickly the pose chases its target. Higher is snappier.</summary>
     [Export] public float Responsiveness { get; set; } = 8.0f;
 
+    // ---------------------------------------------------------------- Air
+
+    /// <summary>
+    /// Seconds off the ground before the pose starts fading out.
+    ///
+    /// <b>Not zero, on purpose.</b> A car crests a rise or clips a kerb and goes light for a few
+    /// frames constantly, and a shell that snapped upright every time it did would read worse than
+    /// the thing this fade exists to stop. Long enough to ignore that, short enough that a real
+    /// jump is neutral well before the flip gets going.
+    /// </summary>
+    [ExportGroup("Air")]
+    [Export(PropertyHint.Range, "0,1,0.01")]
+    public float AirFadeDelay { get; set; } = 0.15f;
+
+    /// <summary>Seconds the fade to neutral then takes.</summary>
+    [Export(PropertyHint.Range, "0.05,2,0.05")]
+    public float AirFadeTime { get; set; } = 0.25f;
+
+    /// <summary>
+    /// The pose actually applied to the shell this frame — pitch, yaw and roll in radians, plus
+    /// the sideways shift in metres.
+    ///
+    /// Published only so the debug overlay can tell a shell that is being posed apart from a
+    /// chassis that is being moved. Nothing in the game reads these.
+    /// </summary>
+    public Vector3 PoseEuler { get; private set; }
+
+    public float PoseSideways { get; private set; }
+
     private Transform3D _rest = Transform3D.Identity;
     private float _lean;
     private float _drift;
@@ -133,19 +162,21 @@ public partial class BodyLean : Node3D
             return;
 
         float t = 1.0f - Mathf.Exp(-Responsiveness * (float)delta);
-        _lean = Mathf.Lerp(_lean, TargetLean(vehicle), t);
-        _pitch = Mathf.Lerp(_pitch, TargetPitch(vehicle), t);
+        float pose = PoseAuthority(vehicle);
+
+        _lean = Mathf.Lerp(_lean, TargetLean(vehicle) * pose, t);
+        _pitch = Mathf.Lerp(_pitch, TargetPitch(vehicle) * pose, t);
 
         // Signed by the drift direction rather than by the lean, so the shell keeps rolling into
         // the slide even through the moment the player countersteers and the lean crosses zero.
-        _drift = Mathf.Lerp(_drift, vehicle.DriftBlend * vehicle.DriftDirection, t);
+        _drift = Mathf.Lerp(_drift, vehicle.DriftBlend * vehicle.DriftDirection * pose, t);
 
         // Take up the chassis' lag on the commanded heading. Positive HeadingError means the
         // heading is to the left of the nose, and a positive yaw about local +Y swings the nose
         // left, so the two already agree.
         float maxYaw = Mathf.DegToRad(MaxHeadingYaw);
         _yaw = Mathf.Lerp(_yaw,
-                          Mathf.Clamp(vehicle.HeadingError * HeadingYawFollow, -maxYaw, maxYaw),
+                          Mathf.Clamp(vehicle.HeadingError * HeadingYawFollow, -maxYaw, maxYaw) * pose,
                           t);
 
         float direction = LeanIntoTurn ? 1.0f : -1.0f;
@@ -157,6 +188,9 @@ public partial class BodyLean : Node3D
                       + _drift * Mathf.DegToRad(DriftRoll)) * direction;
         float yaw = _yaw;
 
+        PoseEuler = new Vector3(_pitch, yaw, roll);
+        PoseSideways = sideways;
+
         // Roll about a pivot above the origin rather than through the floor, then yaw and pitch
         // about the same point so the whole shell moves as one piece.
         var basis = Basis.FromEuler(new Vector3(_pitch, yaw, roll));
@@ -164,6 +198,37 @@ public partial class BodyLean : Node3D
         Vector3 origin = pivot - basis * pivot + new Vector3(sideways, 0.0f, 0.0f);
 
         Transform = _rest * new Transform3D(basis, origin);
+    }
+
+    /// <summary>
+    /// How much of the pose the shell is allowed to wear right now: 1 on the ground, easing to 0
+    /// once the car has been airborne a moment.
+    ///
+    /// <b>Every input this node poses from is a ground quantity, and off the ground they don't
+    /// just go quiet — they go wrong.</b> The lean reads cornering g as yaw rate times forward
+    /// speed, and in the air that is a pitch rate leaking into world Y times a forward speed that
+    /// swings on its own as the body rotates under a fixed velocity; through a held flip it sweeps
+    /// the full width of the lean twice. The drift yaw chases
+    /// <see cref="Vehicle.HeadingError"/>, which is measured off the nose flattened into the
+    /// horizontal plane — a vector that shrinks to nothing and then flips right round as the nose
+    /// passes vertical, twisting the shell most of the way to <see cref="MaxHeadingYaw"/> at the
+    /// exact moment the player is watching it. The chassis is rotating perfectly evenly underneath
+    /// all of that; the tug is the pose alone.
+    ///
+    /// So the pose stands down up there rather than being made airborne-aware term by term. There
+    /// is nothing for it to communicate in the air — no cornering load, no drift angle, no weight
+    /// on any wheel — and the flip itself is the read.
+    ///
+    /// Applied to the targets rather than to the finished transform, so the existing
+    /// <see cref="Responsiveness"/> chase carries the fade and the landing eases back in.
+    /// </summary>
+    private float PoseAuthority(Vehicle vehicle)
+    {
+        if (!vehicle.IsAirborne)
+            return 1.0f;
+
+        float fade = (vehicle.AirTime - AirFadeDelay) / Mathf.Max(AirFadeTime, 0.001f);
+        return 1.0f - Mathf.SmoothStep(0.0f, 1.0f, Mathf.Clamp(fade, 0.0f, 1.0f));
     }
 
     /// <summary>

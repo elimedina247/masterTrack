@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="360" viewBox="0 0 200 90">
+  <!-- The panda's two-tone livery is trim, not paint: the black rocker and the white door panel
+       stay themselves whatever colour the player picks, the way the real thing does. -->
+  <path d="M15 60 L183 60 L182 68 L14 68 Z" fill="#1a1626"/>
+  <path d="M78 30 L124 30 L134 44 L60 46 Z" fill="#dcf0ff" fill-opacity="0.85"/>
+  <path d="M24 47 L52 44 L54 52 L22 54 Z" fill="#f4f2f8"/>
+  <circle cx="48" cy="69.13" r="9.86" fill="#1a1626"/><circle cx="48" cy="69.13" r="5.42" fill="#c9c4d6"/><circle cx="48" cy="69.13" r="1.97" fill="#5a5470"/>
+  <circle cx="152" cy="69.13" r="9.86" fill="#1a1626"/><circle cx="152" cy="69.13" r="5.42" fill="#c9c4d6"/><circle cx="152" cy="69.13" r="1.97" fill="#5a5470"/>
+</svg>
