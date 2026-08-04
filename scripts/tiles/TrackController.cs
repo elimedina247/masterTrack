@@ -684,6 +684,32 @@ public partial class TrackController : Node3D
 
     public IReadOnlyList<PlacedHazard> Hazards => _hazards;
 
+    /// <summary>
+    /// Whether hazards are hidden on this machine. Set on the racers' peers for the rig phase and
+    /// cleared when the race starts.
+    ///
+    /// <b>Concealment is local rendering, not a secret.</b> Every peer still receives every
+    /// placement and builds the identical node — the rig has to be the same object on every
+    /// machine or the traps would fire into different worlds — this only decides whether it is
+    /// drawn. A racer who never sees the rig go down meets each trap for the first time at speed,
+    /// which is the whole reason the phase is worth hiding; a racer whose game disagreed with the
+    /// server about where the traps <i>were</i> would just be a bug.
+    /// </summary>
+    public bool HazardsConcealed { get; private set; }
+
+    /// <summary>Hide or show every hazard on the track, and every one placed after this. Called
+    /// by the match scene as the phases turn.</summary>
+    public void SetHazardsConcealed(bool concealed)
+    {
+        HazardsConcealed = concealed;
+
+        foreach (PlacedHazard placed in _hazards)
+        {
+            if (HazardAt(placed.TileIndex, placed.SlotIndex) is { } hazard)
+                hazard.Visible = !concealed;
+        }
+    }
+
     /// <summary>The hazard slots a placed tile offers, or none — generated tiles have no scene
     /// and so no slots; only authored pieces are slotted.</summary>
     public IReadOnlyList<Tool.PieceSlot> SlotsOf(int tileIndex)
@@ -855,8 +881,22 @@ public partial class TrackController : Node3D
 
         TrackHazard node = TrackHazard.Create((HazardKind)kind);
         node.Name = HazardNodeName(slotIndex);
-        tile.AddChild(node);
+
+        // Hidden before it is ever drawn, not hidden a frame later: on a racer's machine during
+        // the rig this node must never appear, and a single frame of a red plate popping into
+        // existence on the road is exactly the tell the phase is meant to withhold.
+        node.Visible = !HazardsConcealed;
+
+        // Placed before it enters the tree, not after.
+        //
+        // A hazard carrying a physics body that syncs to physics — the spring trap's plate — has
+        // that body registered with the physics server the moment it is added, at whatever global
+        // transform it has then. A parent moved afterwards does not drag it along: the server owns
+        // the body's position from that point, so the plate stayed sitting at the tile's origin
+        // while the rest of the hazard moved off to its slot. Setting the transform first means
+        // the body is registered where it belongs and there is nothing to chase.
         node.Transform = local.Value;
+        tile.AddChild(node);
 
         EmitSignal(SignalName.HazardPlaced, tileIndex, slotIndex, kind);
     }
@@ -924,6 +964,81 @@ public partial class TrackController : Node3D
 
         EmitSignal(SignalName.HazardRemoved, tileIndex, slotIndex);
     }
+
+    /// <summary>
+    /// Client-side intent: fire a rigged device that is already standing on the track.
+    ///
+    /// The third door into the hazard system, and the one the sentry lives in once the race is
+    /// running. It is deliberately <i>not</i> gated on the build phase the way placement and
+    /// removal are — a trap that could only be fired while the track was still being built would
+    /// be a trap nobody ever drove into. Nothing is spent here either: the card was the price,
+    /// and the device's own cooldown is what stops the button being mashed.
+    /// </summary>
+    public void RequestDetonateHazard(int tileIndex, int slotIndex)
+    {
+        if (!Networked)
+        {
+            ApplyHazardDetonation(tileIndex, slotIndex);
+            return;
+        }
+
+        if (Multiplayer.IsServer())
+        {
+            AuthorizeAndBroadcastHazardDetonation(tileIndex, slotIndex, Multiplayer.GetUniqueId());
+            return;
+        }
+
+        RpcId(1, MethodName.ServerDetonateHazard, tileIndex, slotIndex);
+    }
+
+    [Rpc(MultiplayerApi.RpcMode.AnyPeer, CallLocal = false,
+         TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    private void ServerDetonateHazard(int tileIndex, int slotIndex)
+    {
+        if (!NetworkManager.Instance.IsHost)
+            return;
+
+        AuthorizeAndBroadcastHazardDetonation(tileIndex, slotIndex, Multiplayer.GetRemoteSenderId());
+    }
+
+    private void AuthorizeAndBroadcastHazardDetonation(int tileIndex, int slotIndex, int senderId)
+    {
+        if (!MayBuild(senderId))
+            return;
+
+        // Not while the rig is being laid. A device fired during its own setup phase would be
+        // cooling down — or still in the air — when the flag drops, and the one thing the rig
+        // owes the race is that every trap on the board is a loaded one. Outside a Sentry match
+        // there is no phase at all, and the lobby stays free to set one off to see what it does.
+        if (GameManager.Instance.Phase is MatchPhase.Building or MatchPhase.Rigging)
+            return;
+
+        // Refused rather than queued when the device is mid-throw or cooling down, so a peer
+        // whose plate is already in the air never receives a press that would restart the arc
+        // out from under the cars it has just thrown.
+        if (HazardAt(tileIndex, slotIndex) is not { CanDetonate: true, IsReady: true })
+            return;
+
+        Rpc(MethodName.ConfirmHazardDetonated, tileIndex, slotIndex);
+        ApplyHazardDetonation(tileIndex, slotIndex);
+    }
+
+    [Rpc(MultiplayerApi.RpcMode.Authority, CallLocal = false,
+         TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    private void ConfirmHazardDetonated(int tileIndex, int slotIndex)
+        => ApplyHazardDetonation(tileIndex, slotIndex);
+
+    /// <summary>Fire the device on this peer. Every peer runs the same arc from this one call,
+    /// which is what keeps the gap under a hanging plate in the same place on every screen.</summary>
+    private void ApplyHazardDetonation(int tileIndex, int slotIndex)
+        => HazardAt(tileIndex, slotIndex)?.Detonate();
+
+    /// <summary>The hazard node standing in a slot, or null. Public because the board needs to
+    /// ask a hazard whether it is rigged and ready before offering it as a target.</summary>
+    public TrackHazard? HazardAt(int tileIndex, int slotIndex)
+        => GetNodeOrNull(TileNodeName(tileIndex)) is TrackTile tile
+           ? tile.GetNodeOrNull<TrackHazard>(HazardNodeName(slotIndex))
+           : null;
 
     private static string HazardNodeName(int slotIndex) => $"Hazard{slotIndex}";
 

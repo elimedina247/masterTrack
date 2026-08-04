@@ -193,9 +193,25 @@ public partial class TrackMasterController : Node3D
 	/// which is the right answer for an opening hand — the race starts on the deck.
 	/// </summary>
 	public TileHand Hand => _hand ??= new TileHand(HandSlots, DealInterval, StartingTiles,
-												   () => Track?.Grid.HeadHeight ?? 0.0f);
+												   () => Track?.Grid.HeadHeight ?? 0.0f,
+												   StaplesAvailable);
 
 	private TileHand? _hand;
+
+	/// <summary>
+	/// Whether the always-available pieces — a straight and the two corners — are on offer.
+	///
+	/// <b>The one place this is decided</b>, because two things depend on the same answer and a
+	/// disagreement between them is a bug either way round: the palette draws the staples bar off
+	/// it, and <see cref="TileHand"/> bars those pieces from the deal off it. If the bar showed
+	/// without the deck knowing, the hand would keep dealing cards the builder already had for
+	/// free; if the deck knew without the bar showing, they could not be reached at all.
+	///
+	/// Sentry only, and free build never — see the note in <c>TilePalette.BuildStapleTray</c> for
+	/// why Live Build's hand has to stay the whole supply.
+	/// </summary>
+	public bool StaplesAvailable
+		=> !FreeBuild && GameManager.Instance.Mode == GameMode.Sentry;
 
 	/// <summary>
 	/// How many cards the tray has: the hand's slots, or one per catalog tile in free build.
@@ -355,30 +371,8 @@ public partial class TrackMasterController : Node3D
 	/// </summary>
 	public void PlaceFromSlot(int slot)
 	{
-		if (Track == null)
+		if (!TryPlaceCatalogIndex(CatalogIndexAt(slot)))
 			return;
-
-		int catalogIndex = CatalogIndexAt(slot);
-
-		TileDefinition? definition = TileCatalog.At(catalogIndex);
-		if (definition == null)
-			return;
-
-		// The race is as long as the host said it was. Refused here as well as on the server, and
-		// without spending the tile: the Track Master has run out of track, not out of tiles.
-		if (Track.AtTileLimit)
-		{
-			EmitSignal(SignalName.PreviewChanged, false, OutOfTilesMessage);
-			return;
-		}
-
-		// Checked here as well as on the server so an illegal tile says why on the spot,
-		// rather than being silently dropped by the authority a round trip later.
-		if (!Track.Grid.CanPlace(definition.ToTileData(), out string reason))
-		{
-			EmitSignal(SignalName.PreviewChanged, false, reason);
-			return;
-		}
 
 		// Free build spends nothing, so the card under the cursor is still offering the same tile
 		// afterwards. In a match the hand closes up behind the spent tile, and whatever slid into
@@ -389,8 +383,53 @@ public partial class TrackMasterController : Node3D
 
 		_previewIndex = CatalogIndexAt(slot);
 
-		Track.RequestPlaceTile(catalogIndex);
 		EmitSignal(SignalName.HandChanged);
+	}
+
+	/// <summary>
+	/// Place one of <see cref="TileCatalog.StapleIndexes"/> — the straight and the two corners
+	/// that are always on offer. The same placement as a card, minus the spending: a staple is
+	/// not in the hand, so there is no slot to take it out of and nothing closes up behind it.
+	/// </summary>
+	public void PlaceStaple(int catalogIndex)
+	{
+		if (TryPlaceCatalogIndex(catalogIndex))
+			_previewIndex = catalogIndex;
+	}
+
+	/// <summary>
+	/// The part of a placement both doors share: check the tile could actually land, then ask for
+	/// it. Returns whether the request went out, so the caller knows whether to spend anything.
+	///
+	/// Both checks are run here as well as on the server, and in this order, so an illegal tile
+	/// says why on the spot rather than being silently dropped by the authority a round trip
+	/// later — and so a refusal never costs the Track Master a card they waited for.
+	/// </summary>
+	private bool TryPlaceCatalogIndex(int catalogIndex)
+	{
+		if (Track == null)
+			return false;
+
+		TileDefinition? definition = TileCatalog.At(catalogIndex);
+		if (definition == null)
+			return false;
+
+		// The race is as long as the host said it was. The Track Master has run out of track,
+		// not out of tiles.
+		if (Track.AtTileLimit)
+		{
+			EmitSignal(SignalName.PreviewChanged, false, OutOfTilesMessage);
+			return false;
+		}
+
+		if (!Track.Grid.CanPlace(definition.ToTileData(), out string reason))
+		{
+			EmitSignal(SignalName.PreviewChanged, false, reason);
+			return false;
+		}
+
+		Track.RequestPlaceTile(catalogIndex);
+		return true;
 	}
 
 	/// <summary>
@@ -403,9 +442,12 @@ public partial class TrackMasterController : Node3D
 	}
 
 	/// <summary>Called by the palette on hover: show a slot's tile on the head before committing.</summary>
-	public void PreviewSlot(int slot)
+	public void PreviewSlot(int slot) => PreviewCatalogIndex(CatalogIndexAt(slot));
+
+	/// <summary>Ghost a catalog tile onto the head. The hover half of both doors — a card in the
+	/// hand and a staple are the same preview once the index is known.</summary>
+	public void PreviewCatalogIndex(int catalogIndex)
 	{
-		int catalogIndex = CatalogIndexAt(slot);
 		if (_previewIndex == catalogIndex)
 			return;
 
@@ -426,8 +468,6 @@ public partial class TrackMasterController : Node3D
 		if (!FreeBuild && Hand.Tick((float)delta, IsPlaceable))
 			EmitSignal(SignalName.HandChanged);
 
-		TickHazardHand((float)delta);
-
 		if (CameraMode == BoardCameraMode.FreeRoam)
 			UpdateFreeRoam((float)delta);
 		else
@@ -435,6 +475,7 @@ public partial class TrackMasterController : Node3D
 
 		UpdateRacerMarkers((float)delta);
 		UpdateSentryAim();
+		UpdateHazardGhost();
 	}
 
 	// ---- Racer markers ----

@@ -1,0 +1,68 @@
+[gd_scene load_steps=7 format=3]
+
+[ext_resource type="Script" path="res://scripts/tiles/hazards/BombTrapHazard.cs" id="1_bomb"]
+
+[sub_resource type="StandardMaterial3D" id="Mat_drum"]
+albedo_color = Color(0.78, 0.13, 0.11, 1)
+metallic = 0.0
+roughness = 1.0
+shading_mode = 2
+specular_mode = 2
+
+[sub_resource type="StandardMaterial3D" id="Mat_band"]
+albedo_color = Color(0.12, 0.12, 0.13, 1)
+metallic = 0.0
+roughness = 1.0
+shading_mode = 2
+specular_mode = 2
+
+[sub_resource type="StandardMaterial3D" id="Mat_lamp"]
+albedo_color = Color(0.5, 0.09, 0.07, 1)
+metallic = 0.0
+roughness = 1.0
+shading_mode = 2
+specular_mode = 2
+
+[sub_resource type="CylinderMesh" id="Mesh_drum"]
+material = SubResource("Mat_drum")
+top_radius = 1.9
+bottom_radius = 1.9
+height = 3.6
+radial_segments = 10
+rings = 1
+
+[sub_resource type="CylinderMesh" id="Mesh_band"]
+material = SubResource("Mat_band")
+top_radius = 2.05
+bottom_radius = 2.05
+height = 0.5
+radial_segments = 10
+rings = 1
+
+[sub_resource type="SphereMesh" id="Mesh_lamp"]
+material = SubResource("Mat_lamp")
+radius = 0.7
+height = 1.4
+radial_segments = 10
+rings = 5
+
+[node name="BombTrap" type="Node3D"]
+script = ExtResource("1_bomb")
+
+[node name="Drum" type="Node3D" parent="."]
+
+[node name="Body" type="MeshInstance3D" parent="Drum"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.8, 0)
+mesh = SubResource("Mesh_drum")
+
+[node name="BandLow" type="MeshInstance3D" parent="Drum"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
+mesh = SubResource("Mesh_band")
+
+[node name="BandHigh" type="MeshInstance3D" parent="Drum"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.7, 0)
+mesh = SubResource("Mesh_band")
+
+[node name="Lamp" type="MeshInstance3D" parent="Drum"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 3.9, 0)
+mesh = SubResource("Mesh_lamp")

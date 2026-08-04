@@ -73,6 +73,34 @@ public partial class TilePalette : Control
     /// can be re-aimed when the hand shifts under a cursor that hasn't moved.</summary>
     private int _hoveredSlot = -1;
 
+    /// <summary>The two trays that only mean anything while there is road left to lay, kept so
+    /// the rig phase can put them away — see <see cref="SetTilePlacementVisible"/>.</summary>
+    private PanelContainer? _tileTray;
+
+    private PanelContainer? _stapleTray;
+
+    /// <summary>
+    /// Show or hide the tile hand and the staples bar together. Called when the rig phase opens:
+    /// the track is locked by then, so every card in both trays is a card that does nothing, and
+    /// a row of dead cards is worse than no row — it reads as the game being broken rather than
+    /// as the job having changed. The hazard tray stays, because it has just become the whole
+    /// point.
+    /// </summary>
+    public void SetTilePlacementVisible(bool visible)
+    {
+        if (_tileTray != null)
+            _tileTray.Visible = visible;
+
+        if (_stapleTray != null)
+            _stapleTray.Visible = visible;
+
+        if (!visible)
+        {
+            _hoveredSlot = -1;
+            Builder?.ClearPreview();
+        }
+    }
+
     private const string IdleStatus = "Hover a tile to see it on the end of the track — click to place it.";
 
     private const string FreeBuildIdleStatus =
@@ -103,7 +131,8 @@ public partial class TilePalette : Control
         BuildCameraToggle();
         BuildRemainingCounter();
         BuildTray();
-        BuildHazardTray();
+        BuildStapleTray();
+        BuildHazardShop();
 
         // The cards come up wearing their accent swatches and trade them for these portraits as
         // each one is rendered — the tray never waits on the camera.
@@ -113,6 +142,7 @@ public partial class TilePalette : Control
         {
             _thumbs[index] = texture;
             RefreshSlots();
+            RefreshStapleCards();
         });
 
         if (Builder == null)
@@ -124,10 +154,10 @@ public partial class TilePalette : Control
         Builder.PreviewChanged += OnPreviewChanged;
         Builder.CameraModeChanged += OnCameraModeChanged;
         Builder.HandChanged += OnHandChanged;
-        Builder.HazardHandChanged += RefreshHazardSlots;
+        Builder.HazardFundsChanged += OnHazardFunds;
         Builder.HazardStatusChanged += OnHazardStatus;
         OnCameraModeChanged((int)Builder.CameraMode);
-        RefreshHazardSlots();
+        RefreshShop();
 
         // The counter moves when the track grows, which is exactly when the head changes.
         if (Builder.Track != null)
@@ -152,7 +182,7 @@ public partial class TilePalette : Control
         if (Builder == null || !IsInstanceValid(Builder))
             return;
 
-        Builder.HazardHandChanged -= RefreshHazardSlots;
+        Builder.HazardFundsChanged -= OnHazardFunds;
         Builder.HazardStatusChanged -= OnHazardStatus;
 
         if (Builder.Track is { } track && IsInstanceValid(track))
@@ -297,6 +327,7 @@ public partial class TilePalette : Control
         };
         tray.AddThemeStyleboxOverride("panel", Panel(new Color(0.07f, 0.08f, 0.10f, 0.88f)));
         AddChild(tray);
+        _tileTray = tray;
 
         var margin = new MarginContainer();
         margin.AddThemeConstantOverride("margin_left", 16);
@@ -468,123 +499,163 @@ public partial class TilePalette : Control
         int slot = Builder.Hand.CooldownSlot;
         if (slot >= 0 && slot < _slots.Count)
             _slots[slot].Cooldown.Value = Builder.Hand.DealProgress;
-
-        int hazardSlot = Builder.HazardHand.CooldownSlot;
-        if (hazardSlot >= 0 && hazardSlot < _hazardSlots.Count)
-            _hazardSlots[hazardSlot].Cooldown.Value = Builder.HazardHand.DealProgress;
     }
 
-    // ---- The hazard tray ----
-    //
-    // The hazard hand's own little row, docked above the tile tray on the right: the furniture
-    // the builder can bolt onto road that is already down, dealt on its own slow clock. Clicking
-    // a card arms placement — every slot it fits lights up on the road, and the click that
-    // follows happens out on the board, not in here.
+    /// <summary>The wallet moved: repaint the shop, and say by how much.</summary>
+    private void OnHazardFunds(int funds, int delta)
+    {
+        RefreshShop();
 
-    /// <summary>The nodes making up one hazard card.</summary>
-    private sealed class HazardSlotView
+        if (delta != 0)
+            FloatFundsChange(delta);
+    }
+
+    /// <summary>
+    /// A <c>-$85</c> that appears beside the bank and drifts away.
+    ///
+    /// The balance alone is a number that was one thing and is now another, and the builder has
+    /// to work out the difference to know what they just paid. This says it outright, in the one
+    /// place they are already looking. Red down, green up — a refund is the same event backwards
+    /// and deserves the same answer, otherwise lifting a hazard looks like it did nothing.
+    ///
+    /// Built and thrown away per change rather than kept and re-tweened: two purchases in quick
+    /// succession should be two receipts, not one label that flinches twice.
+    /// </summary>
+    private void FloatFundsChange(int delta)
+    {
+        var label = new Label
+        {
+            Text = delta < 0 ? $"-${-delta}" : $"+${delta}",
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+            MouseFilter = MouseFilterEnum.Ignore,
+            // Immediately left of the bank panel, where there is nothing else on screen.
+            AnchorLeft = 1.0f,
+            AnchorRight = 1.0f,
+            OffsetLeft = -ShopWidth - 190,
+            OffsetRight = -ShopWidth - 36,
+            OffsetTop = 24,
+            OffsetBottom = 84,
+            GrowHorizontal = GrowDirection.Begin,
+        };
+        label.AddThemeFontSizeOverride("font_size", 28);
+        label.AddThemeColorOverride("font_color", delta < 0
+            ? new Color(1.0f, 0.34f, 0.30f)
+            : new Color(0.62f, 0.94f, 0.58f));
+        label.AddThemeColorOverride("font_outline_color", new Color(0, 0, 0, 0.75f));
+        label.AddThemeConstantOverride("outline_size", 6);
+        AddChild(label);
+
+        // Up and out. Short — this is a receipt, not an announcement, and it must be gone before
+        // the next purchase wants the same piece of screen.
+        Tween tween = label.CreateTween();
+        tween.SetParallel();
+        tween.TweenProperty(label, "position:y", label.Position.Y - 26.0f, 0.9)
+             .SetTrans(Tween.TransitionType.Cubic).SetEase(Tween.EaseType.Out);
+        tween.TweenProperty(label, "modulate:a", 0.0, 0.9)
+             .SetTrans(Tween.TransitionType.Cubic).SetEase(Tween.EaseType.In);
+        tween.Finished += label.QueueFree;
+    }
+
+    // ---- The staples bar ----
+    //
+    // The straight and the two corners, always there, never dealt, never spent. Its own bar on
+    // the left rather than three permanent cards inside the hand, because they are not part of
+    // the hand's economy at all — mixing them in would say the Track Master had nine slots, six
+    // of which behave differently.
+
+    private sealed class StapleCardView
     {
         public required PanelContainer Card { get; init; }
         public required ColorRect Swatch { get; init; }
-        public required ProgressBar Cooldown { get; init; }
-        public required Label Name { get; init; }
+        public required TextureRect Thumb { get; init; }
+        public required int CatalogIndex { get; init; }
     }
 
-    private readonly List<HazardSlotView> _hazardSlots = new();
+    private readonly List<StapleCardView> _staples = new();
 
-    /// <summary>What the tile tray actually came out at, so the hazard tray can sit clear of it
-    /// even when free build wraps the catalog onto several rows.</summary>
-    private int _trayPixelHeight = 132;
+    private const int StapleCardWidth = 104;
+    private const int StapleCardHeight = 86;
+    private const int StapleThumbHeight = 42;
 
-    private const int HazardCardWidth = 116;
-    private const int HazardCardHeight = 58;
-
-    /// <summary>Each hazard kind's card colour — the same paint its placed node wears, so the
-    /// card and the thing it becomes read as one object.</summary>
-    private static Color HazardAccent(HazardKind kind) => kind switch
+    private void BuildStapleTray()
     {
-        HazardKind.LaunchPad => new Color(0.95f, 0.78f, 0.12f),
-        HazardKind.PopUpRamp => new Color(0.95f, 0.55f, 0.10f),
-        _ => new Color(0.6f, 0.6f, 0.6f),
-    };
-
-    private void BuildHazardTray()
-    {
-        int slots = Builder?.HazardTrayLength ?? 0;
-        if (slots == 0)
+        // Asked of the builder rather than worked out here, because the hand is barred from
+        // dealing these off the same answer — see TrackMasterController.StaplesAvailable.
+        //
+        // It comes out Sentry-only, and that is a balance decision rather than a tidiness one. In
+        // Live Build the hand's scarcity is the entire game: the track has to grow faster than
+        // the cars eat it, and an endless supply of straights would let the builder outrun the
+        // pack forever while never being made to play anything interesting. In Sentry there is
+        // nobody driving yet — a hand of three hairpins is not pressure there, it is a stall
+        // against a clock. Free build already puts the whole catalog on screen either way.
+        if (Builder is not { StaplesAvailable: true } || TileCatalog.StapleIndexes.Count == 0)
             return;
 
         var tray = new PanelContainer
         {
             MouseFilter = MouseFilterEnum.Stop,
-            AnchorLeft = 1.0f,
+            AnchorLeft = 0.0f,
             AnchorTop = 1.0f,
-            AnchorRight = 1.0f,
+            AnchorRight = 0.0f,
             AnchorBottom = 1.0f,
-            // Above the tile tray, hugging the right edge — clear of however tall the tray
-            // actually came out, which in free build is several rows.
-            OffsetLeft = -(slots + 1) * (HazardCardWidth + 10) - 26,
-            OffsetRight = -16,
-            OffsetTop = -_trayPixelHeight - HazardCardHeight - 30,
+            OffsetLeft = 26,
+            OffsetRight = 26 + TileCatalog.StapleIndexes.Count * (StapleCardWidth + 10) + 16,
+            OffsetTop = -_trayPixelHeight - StapleCardHeight - 30,
             OffsetBottom = -_trayPixelHeight - 10,
-            GrowHorizontal = GrowDirection.Begin,
+            GrowHorizontal = GrowDirection.End,
             GrowVertical = GrowDirection.Begin,
         };
         tray.AddThemeStyleboxOverride("panel", Panel(new Color(0.07f, 0.08f, 0.10f, 0.88f)));
         AddChild(tray);
+        _stapleTray = tray;
 
         var margin = new MarginContainer();
-        margin.AddThemeConstantOverride("margin_left", 10);
-        margin.AddThemeConstantOverride("margin_right", 10);
+        margin.AddThemeConstantOverride("margin_left", 8);
+        margin.AddThemeConstantOverride("margin_right", 8);
         margin.AddThemeConstantOverride("margin_top", 6);
         margin.AddThemeConstantOverride("margin_bottom", 6);
         tray.AddChild(margin);
 
-        var row = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.End };
+        var row = new HBoxContainer();
         row.AddThemeConstantOverride("separation", 10);
         margin.AddChild(row);
 
-        for (int i = 0; i < slots; i++)
-            row.AddChild(BuildHazardSlot(i));
+        foreach (int catalogIndex in TileCatalog.StapleIndexes)
+            row.AddChild(BuildStapleCard(catalogIndex));
 
-        // The lift card: takes a placed hazard back into the hand. A card rather than a bound
-        // key, because the tray is the builder's whole vocabulary.
-        var lift = new Button
-        {
-            Text = "Lift",
-            TooltipText = "Take a placed hazard back off the road.\nClick this, then click the hazard.",
-            FocusMode = FocusModeEnum.None,
-            CustomMinimumSize = new Vector2(56, HazardCardHeight),
-        };
-        lift.AddThemeStyleboxOverride("normal", Panel(CardIdle));
-        lift.AddThemeStyleboxOverride("hover", Panel(CardHover));
-        lift.AddThemeStyleboxOverride("pressed", Panel(new Color(0.16f, 0.34f, 0.24f, 0.95f)));
-        lift.Pressed += () => Builder?.ArmHazardLift();
-        row.AddChild(lift);
-
-        RefreshHazardSlots();
+        RefreshStapleCards();
     }
 
-    private PanelContainer BuildHazardSlot(int slot)
+    private PanelContainer BuildStapleCard(int catalogIndex)
     {
         var card = new PanelContainer
         {
-            CustomMinimumSize = new Vector2(HazardCardWidth, HazardCardHeight),
+            CustomMinimumSize = new Vector2(StapleCardWidth, StapleCardHeight),
             MouseFilter = MouseFilterEnum.Stop,
         };
         card.AddThemeStyleboxOverride("panel", Panel(CardIdle));
 
-        int captured = slot;
+        // On press, like the hand's cards: at racing speed the wait for a release is felt.
         card.GuiInput += @event =>
         {
             if (@event is not InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: true })
                 return;
 
-            Builder?.ArmHazardPlacement(captured);
+            Builder?.PlaceStaple(catalogIndex);
             card.AcceptEvent();
         };
-        card.MouseEntered += () => card.AddThemeStyleboxOverride("panel", Panel(CardHover));
-        card.MouseExited += () => card.AddThemeStyleboxOverride("panel", Panel(CardIdle));
+        card.MouseEntered += () =>
+        {
+            card.AddThemeStyleboxOverride("panel", Panel(CardHover));
+            Builder?.PreviewCatalogIndex(catalogIndex);
+        };
+        card.MouseExited += () =>
+        {
+            card.AddThemeStyleboxOverride("panel", Panel(CardIdle));
+            Builder?.ClearPreview();
+            SetStatus(RestingStatus, StatusIdle);
+        };
 
         var margin = new MarginContainer();
         foreach (string side in new[] { "margin_left", "margin_right", "margin_top", "margin_bottom" })
@@ -597,71 +668,346 @@ public partial class TilePalette : Control
 
         var swatch = new ColorRect
         {
-            CustomMinimumSize = new Vector2(0, 16),
+            CustomMinimumSize = new Vector2(0, StapleThumbHeight),
             MouseFilter = MouseFilterEnum.Ignore,
         };
         box.AddChild(swatch);
 
-        var cooldown = new ProgressBar
+        var thumb = new TextureRect
         {
-            CustomMinimumSize = new Vector2(0, 16),
-            MinValue = 0.0,
-            MaxValue = 1.0,
-            ShowPercentage = false,
+            ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
+            StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered,
             MouseFilter = MouseFilterEnum.Ignore,
-            Visible = false,
         };
-        cooldown.AddThemeStyleboxOverride("background", Panel(new Color(0.06f, 0.07f, 0.09f, 0.9f)));
-        cooldown.AddThemeStyleboxOverride("fill", Panel(new Color(0.30f, 0.45f, 0.62f, 0.95f)));
-        box.AddChild(cooldown);
+        thumb.SetAnchorsPreset(LayoutPreset.FullRect);
+        swatch.AddChild(thumb);
 
         var name = new Label
         {
+            Text = TileCatalog.At(catalogIndex)?.DisplayName ?? "",
             HorizontalAlignment = HorizontalAlignment.Center,
             MouseFilter = MouseFilterEnum.Ignore,
         };
         name.AddThemeFontSizeOverride("font_size", 13);
         box.AddChild(name);
 
-        _hazardSlots.Add(new HazardSlotView
+        card.TooltipText = $"{TileCatalog.At(catalogIndex)?.DisplayName}\nAlways available — costs no card.";
+
+        _staples.Add(new StapleCardView
         {
             Card = card,
             Swatch = swatch,
-            Cooldown = cooldown,
-            Name = name,
+            Thumb = thumb,
+            CatalogIndex = catalogIndex,
         });
         return card;
     }
 
-    private void RefreshHazardSlots()
+    /// <summary>Swap each staple's accent for its portrait as the thumbnails arrive, the same way
+    /// the hand's cards do.</summary>
+    private void RefreshStapleCards()
+    {
+        foreach (StapleCardView view in _staples)
+        {
+            bool hasShot = _thumbs.TryGetValue(view.CatalogIndex, out Texture2D? shot);
+            view.Thumb.Texture = hasShot ? shot : null;
+            view.Swatch.Color = hasShot
+                ? ThumbBackdrop
+                : TileCatalog.At(view.CatalogIndex)?.Accent ?? EmptySwatch;
+        }
+    }
+
+    // ---- The hazard shop ----
+    //
+    // A price list down the right-hand side with the builder's money above it, rather than a
+    // hand of cards. Everything is always on the shelf; what is scarce is the budget, not the
+    // draw. Clicking a shelf arms placement — every slot it fits lights up on the road, and the
+    // click that follows happens out on the board, not in here.
+
+    /// <summary>The nodes making up one shelf in the shop.</summary>
+    private sealed class ShopRowView
+    {
+        public required HazardKind Kind { get; init; }
+        public required PanelContainer Row { get; init; }
+        public required ColorRect Swatch { get; init; }
+        public required Label Name { get; init; }
+        public required Label Price { get; init; }
+    }
+
+    private readonly List<ShopRowView> _shopRows = new();
+
+    /// <summary>The big number top right: what the builder has left.</summary>
+    private Label _funds = null!;
+
+    /// <summary>The shelves and the money, kept so the race can put them away — see
+    /// <see cref="SetShopVisible"/>.</summary>
+    private PanelContainer? _shopPanel;
+
+    private PanelContainer? _fundsPanel;
+
+    /// <summary>
+    /// Show or hide the shop and the money together. Called when the race starts: the road is
+    /// locked by then, so nothing can be bought and nothing can be lifted, and a price list you
+    /// cannot buy from is furniture in the way of a race the sentry is trying to watch.
+    ///
+    /// The palette itself deliberately stays up. It carries the camera toggle and the status
+    /// line, and with the sentry bar gone those are the only interface the sentry has left.
+    /// </summary>
+    public void SetShopVisible(bool visible)
+    {
+        if (_shopPanel != null)
+            _shopPanel.Visible = visible;
+
+        if (_fundsPanel != null)
+            _fundsPanel.Visible = visible;
+    }
+
+    /// <summary>What the tile tray actually came out at, so the staples bar can sit clear of it
+    /// even when free build wraps the catalog onto several rows.</summary>
+    private int _trayPixelHeight = 132;
+
+    private const int ShopWidth = 288;
+    private const int ShopRowHeight = 52;
+
+    /// <summary>Each hazard kind's card colour — the same paint its placed node wears, so the
+    /// card and the thing it becomes read as one object.</summary>
+    private static Color HazardAccent(HazardKind kind) => kind switch
+    {
+        HazardKind.LaunchPad => new Color(0.95f, 0.78f, 0.12f),
+        HazardKind.PopUpRamp => new Color(0.95f, 0.55f, 0.10f),
+        HazardKind.SpringTrap => new Color(0.86f, 0.11f, 0.10f),
+        HazardKind.LogTrap => new Color(0.51f, 0.33f, 0.18f),
+        HazardKind.Bullseye => new Color(0.87f, 0.12f, 0.11f),
+        HazardKind.BombTrap => new Color(0.78f, 0.13f, 0.11f),
+        _ => new Color(0.6f, 0.6f, 0.6f),
+    };
+
+    private void BuildHazardShop()
     {
         if (Builder == null)
             return;
 
-        int cooldownSlot = Builder.FreeBuild ? -1 : Builder.HazardHand.CooldownSlot;
+        BuildFundsReadout();
 
-        for (int i = 0; i < _hazardSlots.Count; i++)
+        HazardKind[] kinds = System.Enum.GetValues<HazardKind>();
+
+        // Sized to its contents rather than stretched: the shop is a fixed list, and a panel with
+        // empty space under the last shelf reads as a shelf that failed to load.
+        int height = 34 + kinds.Length * (ShopRowHeight + 6) + 46 + 20;
+
+        var shop = new PanelContainer
         {
-            HazardSlotView view = _hazardSlots[i];
-            int kind = Builder.HazardKindAt(i);
+            MouseFilter = MouseFilterEnum.Stop,
+            AnchorLeft = 1.0f,
+            AnchorRight = 1.0f,
+            AnchorTop = 0.0f,
+            AnchorBottom = 0.0f,
+            OffsetLeft = -ShopWidth - 24,
+            OffsetRight = -24,
+            OffsetTop = 96,
+            OffsetBottom = 96 + height,
+            GrowHorizontal = GrowDirection.Begin,
+            GrowVertical = GrowDirection.End,
+        };
+        shop.AddThemeStyleboxOverride("panel", Panel(new Color(0.07f, 0.08f, 0.10f, 0.88f)));
+        AddChild(shop);
+        _shopPanel = shop;
 
-            bool isCooldown = i == cooldownSlot;
-            view.Cooldown.Visible = isCooldown;
-            view.Swatch.Visible = !isCooldown;
+        var margin = new MarginContainer();
+        margin.AddThemeConstantOverride("margin_left", 10);
+        margin.AddThemeConstantOverride("margin_right", 10);
+        margin.AddThemeConstantOverride("margin_top", 8);
+        margin.AddThemeConstantOverride("margin_bottom", 10);
+        shop.AddChild(margin);
 
-            if (kind != HazardHand.Empty)
-            {
-                view.Swatch.Color = HazardAccent((HazardKind)kind);
-                view.Name.Text = ((HazardKind)kind).DisplayName();
-                view.Card.TooltipText = "Click, then click a lit spot on the road.";
-                continue;
-            }
+        var column = new VBoxContainer();
+        column.AddThemeConstantOverride("separation", 6);
+        margin.AddChild(column);
 
-            view.Swatch.Color = EmptySwatch;
-            view.Name.Text = isCooldown ? "next hazard" : "";
-            view.Card.TooltipText = isCooldown
-                ? "The next hazard is on its way here."
-                : "An empty slot. Hazards arrive on their own.";
+        var title = new Label { Text = "Hazards", MouseFilter = MouseFilterEnum.Ignore };
+        title.AddThemeFontSizeOverride("font_size", 18);
+        title.AddThemeColorOverride("font_color", new Color(0.86f, 0.88f, 0.92f));
+        column.AddChild(title);
+
+        foreach (HazardKind kind in kinds)
+            column.AddChild(BuildShopRow(kind));
+
+        // Lift and Fire live under the shelves rather than among them: they are things done to
+        // hazards already on the road, not things bought.
+        var tools = new HBoxContainer();
+        tools.AddThemeConstantOverride("separation", 8);
+        column.AddChild(tools);
+
+        tools.AddChild(BuildShopTool(
+            "Lift", "Take a placed hazard back off the road, refunded in full.\nClick this, then click the hazard.",
+            new Color(0.16f, 0.34f, 0.24f, 0.95f), () => Builder?.ArmHazardLift()));
+
+        tools.AddChild(BuildShopTool(
+            "Fire", "Set off a rigged trap.\nClick this, then click the trap. Stays armed.",
+            new Color(0.42f, 0.12f, 0.12f, 0.95f), () => Builder?.ArmHazardFire()));
+
+        RefreshShop();
+    }
+
+    /// <summary>The money, top right and bigger than anything else on that side of the screen —
+    /// it is the number every decision in the shop is measured against.</summary>
+    private void BuildFundsReadout()
+    {
+        var panel = new PanelContainer
+        {
+            MouseFilter = MouseFilterEnum.Ignore,
+            AnchorLeft = 1.0f,
+            AnchorRight = 1.0f,
+            OffsetLeft = -ShopWidth - 24,
+            OffsetRight = -24,
+            OffsetTop = 24,
+            OffsetBottom = 84,
+            GrowHorizontal = GrowDirection.Begin,
+        };
+        panel.AddThemeStyleboxOverride("panel", Panel(new Color(0.10f, 0.11f, 0.14f, 0.85f)));
+        AddChild(panel);
+        _fundsPanel = panel;
+
+        var margin = new MarginContainer();
+        margin.AddThemeConstantOverride("margin_left", 12);
+        margin.AddThemeConstantOverride("margin_right", 12);
+        panel.AddChild(margin);
+
+        _funds = new Label
+        {
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+            MouseFilter = MouseFilterEnum.Ignore,
+        };
+        _funds.AddThemeFontSizeOverride("font_size", 34);
+        _funds.AddThemeColorOverride("font_color", new Color(0.62f, 0.94f, 0.58f));
+        _funds.AddThemeColorOverride("font_outline_color", new Color(0, 0, 0, 0.7f));
+        _funds.AddThemeConstantOverride("outline_size", 5);
+        margin.AddChild(_funds);
+    }
+
+    private PanelContainer BuildShopRow(HazardKind kind)
+    {
+        var row = new PanelContainer
+        {
+            CustomMinimumSize = new Vector2(0, ShopRowHeight),
+            MouseFilter = MouseFilterEnum.Stop,
+            TooltipText = $"{kind.DisplayName()} — ${kind.PriceOf()}\n{kind.Blurb()}"
+                          + "\nClick, then click a lit spot on the road.",
+        };
+        row.AddThemeStyleboxOverride("panel", Panel(CardIdle));
+
+        row.GuiInput += @event =>
+        {
+            if (@event is not InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: true })
+                return;
+
+            Builder?.ArmHazardPurchase((int)kind);
+            row.AcceptEvent();
+        };
+        row.MouseEntered += () => row.AddThemeStyleboxOverride("panel", Panel(CardHover));
+        row.MouseExited += () => row.AddThemeStyleboxOverride("panel", Panel(CardIdle));
+
+        var margin = new MarginContainer();
+        margin.AddThemeConstantOverride("margin_left", 8);
+        margin.AddThemeConstantOverride("margin_right", 10);
+        margin.AddThemeConstantOverride("margin_top", 6);
+        margin.AddThemeConstantOverride("margin_bottom", 6);
+        row.AddChild(margin);
+
+        var line = new HBoxContainer { MouseFilter = MouseFilterEnum.Ignore };
+        line.AddThemeConstantOverride("separation", 10);
+        margin.AddChild(line);
+
+        // The hazard's own paint, so the shelf and the thing it becomes on the road read as one
+        // object — the same rule the tile cards' accents follow.
+        var swatch = new ColorRect
+        {
+            Color = HazardAccent(kind),
+            CustomMinimumSize = new Vector2(8, 0),
+            MouseFilter = MouseFilterEnum.Ignore,
+        };
+        line.AddChild(swatch);
+
+        var text = new VBoxContainer
+        {
+            MouseFilter = MouseFilterEnum.Ignore,
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+        };
+        text.AddThemeConstantOverride("separation", 0);
+        line.AddChild(text);
+
+        var name = new Label { Text = kind.DisplayName(), MouseFilter = MouseFilterEnum.Ignore };
+        name.AddThemeFontSizeOverride("font_size", 15);
+        text.AddChild(name);
+
+        var blurb = new Label
+        {
+            Text = kind.Blurb(),
+            MouseFilter = MouseFilterEnum.Ignore,
+            AutowrapMode = TextServer.AutowrapMode.WordSmart,
+        };
+        blurb.AddThemeFontSizeOverride("font_size", 10);
+        blurb.AddThemeColorOverride("font_color", new Color(0.62f, 0.65f, 0.72f));
+        text.AddChild(blurb);
+
+        var price = new Label
+        {
+            Text = $"${kind.PriceOf()}",
+            VerticalAlignment = VerticalAlignment.Center,
+            MouseFilter = MouseFilterEnum.Ignore,
+        };
+        price.AddThemeFontSizeOverride("font_size", 18);
+        line.AddChild(price);
+
+        _shopRows.Add(new ShopRowView
+        {
+            Kind = kind,
+            Row = row,
+            Swatch = swatch,
+            Name = name,
+            Price = price,
+        });
+        return row;
+    }
+
+    private Button BuildShopTool(string text, string tooltip, Color pressed, System.Action onPressed)
+    {
+        var button = new Button
+        {
+            Text = text,
+            TooltipText = tooltip,
+            FocusMode = FocusModeEnum.None,
+            CustomMinimumSize = new Vector2(0, 38),
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+        };
+        button.AddThemeStyleboxOverride("normal", Panel(CardIdle));
+        button.AddThemeStyleboxOverride("hover", Panel(CardHover));
+        button.AddThemeStyleboxOverride("pressed", Panel(pressed));
+        button.Pressed += onPressed;
+        return button;
+    }
+
+    /// <summary>
+    /// Repaint the shop from the wallet. Everything stays on the shelf whatever the balance —
+    /// an unaffordable hazard dims rather than disappearing, so the builder can see what they are
+    /// saving toward instead of watching the shop silently shrink as they spend.
+    /// </summary>
+    private void RefreshShop()
+    {
+        if (Builder == null)
+            return;
+
+        _funds.Text = Builder.FreeBuild ? "free build" : $"${Builder.HazardFunds}";
+
+        foreach (ShopRowView view in _shopRows)
+        {
+            bool affordable = Builder.CanAfford(view.Kind);
+
+            view.Row.Modulate = affordable ? Colors.White : new Color(1, 1, 1, 0.42f);
+            view.Price.AddThemeColorOverride("font_color", affordable
+                ? new Color(0.62f, 0.94f, 0.58f)
+                : new Color(0.95f, 0.55f, 0.52f));
         }
     }
 

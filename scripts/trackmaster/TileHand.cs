@@ -46,6 +46,9 @@ public sealed class TileHand
 	/// <summary>Seconds accumulated toward the next tile.</summary>
 	private float _elapsed;
 
+	/// <summary>Whether the always-available pieces are barred from the draw. See the constructor.</summary>
+	private readonly bool _excludeStaples;
+
 	/// <summary>
 	/// Slack on the descent budget, in metres. The same tolerance <c>TrackGrid.GroundEpsilon</c>
 	/// gives the ground plane, and for the same reason: a climb and the drop that undoes it are
@@ -62,13 +65,20 @@ public sealed class TileHand
 	/// <paramref name="headHeight"/> is how high the track currently ends, in metres. Left out,
 	/// the hand deals as though the track were on the deck at all times, which is the safe reading
 	/// rather than the permissive one — see <see cref="DescentBudget"/>.
+	///
+	/// <paramref name="excludeStaples"/> bars the always-available pieces from the draw. Set
+	/// wherever the staples bar is on screen: a dealt straight is a slot spent on something the
+	/// Track Master could already have had for nothing, which is strictly worse than an empty
+	/// slot — it also occupies the hand until it is thrown away. What the deck is <i>for</i>, once
+	/// the basics are free, is the pieces that make a track interesting.
 	/// </summary>
 	public TileHand(int slotCount, float dealInterval, int startingTiles = 0,
-					Func<float>? headHeight = null)
+					Func<float>? headHeight = null, bool excludeStaples = false)
 	{
 		_slots = new int[Mathf.Max(1, slotCount)];
 		DealInterval = Mathf.Max(0.05f, dealInterval);
 		_headHeight = headHeight;
+		_excludeStaples = excludeStaples;
 		_rng.Randomize();
 
 		// Drawn the same weighted way as everything after them, so an opening hand is a fair
@@ -192,7 +202,11 @@ public sealed class TileHand
 	{
 		float budget = DescentBudget();
 
-		bool Affordable(int index) => CanAfford(budget, index);
+		// The staple bar is folded into the affordability filter rather than checked separately,
+		// so it is carried by every draw below — including the stuck-hand rescue, which would
+		// otherwise reach for a straight and hand back a card the builder already has.
+		bool Affordable(int index)
+			=> CanAfford(budget, index) && !(_excludeStaples && TileCatalog.IsStaple(index));
 
 		if (placeable != null && !HasPlaceable(placeable))
 		{

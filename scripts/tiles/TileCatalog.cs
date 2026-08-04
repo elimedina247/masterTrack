@@ -250,6 +250,57 @@ public static class TileCatalog
 	}
 
 	/// <summary>
+	/// The pieces the Track Master may always reach for, by catalog index — a straight and the
+	/// two ordinary corners.
+	///
+	/// The hand is the game: being dealt a hairpin when you wanted a straight is the pressure the
+	/// whole role runs on. But a hand that deals <i>no</i> way forward is not pressure, it is a
+	/// stall — the builder sits watching a countdown with three pieces they cannot use, and in
+	/// Sentry mode there is not even a race happening to make the wait interesting.
+	/// <see cref="TileHand.TopUp"/> already rescues the dead-hand case; the staples make the
+	/// weaker version of it — a hand that is legal but all wrong — a non-problem too. Everything
+	/// interesting a track does still has to come out of the deck.
+	///
+	/// Missing names are skipped rather than fatal: the catalog is whatever is in the pieces
+	/// folder, and a project mid-rename should lose a convenience, not fail to start.
+	/// </summary>
+	public static readonly IReadOnlyList<int> StapleIndexes = FindStaples();
+
+	/// <summary>Whether a catalog index is one of the always-available pieces. Asked by
+	/// <see cref="TrackMaster.TileHand"/>, which bars them from the draw wherever the staples bar
+	/// is offering them for free — a dealt straight would be a wasted slot.</summary>
+	public static bool IsStaple(int catalogIndex)
+	{
+		for (int i = 0; i < StapleIndexes.Count; i++)
+		{
+			if (StapleIndexes[i] == catalogIndex)
+				return true;
+		}
+
+		return false;
+	}
+
+	private static IReadOnlyList<int> FindStaples()
+	{
+		string[] wanted = { "Straight", "CurveLeft", "CurveRight" };
+		var found = new List<int>();
+
+		foreach (string name in wanted)
+		{
+			for (int i = 0; i < All.Count; i++)
+			{
+				if (All[i].DisplayName != name)
+					continue;
+
+				found.Add(i);
+				break;
+			}
+		}
+
+		return found;
+	}
+
+	/// <summary>
 	/// Declared after <see cref="All"/> on purpose: static field initialisers run in source
 	/// order, so the list has to exist before anything can add its weights up.
 	/// </summary>

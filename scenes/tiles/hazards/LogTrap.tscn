@@ -1,0 +1,147 @@
+[gd_scene load_steps=12 format=3]
+
+[ext_resource type="Script" path="res://scripts/tiles/hazards/LogTrapHazard.cs" id="1_logtrap"]
+
+[sub_resource type="StandardMaterial3D" id="Mat_post"]
+albedo_color = Color(0.36, 0.24, 0.15, 1)
+metallic = 0.0
+roughness = 1.0
+shading_mode = 2
+specular_mode = 2
+
+[sub_resource type="StandardMaterial3D" id="Mat_log"]
+albedo_color = Color(0.51, 0.33, 0.18, 1)
+metallic = 0.0
+roughness = 1.0
+shading_mode = 2
+specular_mode = 2
+
+[sub_resource type="StandardMaterial3D" id="Mat_rope"]
+albedo_color = Color(0.78, 0.71, 0.5, 1)
+metallic = 0.0
+roughness = 1.0
+shading_mode = 2
+specular_mode = 2
+
+[sub_resource type="BoxMesh" id="Mesh_post"]
+material = SubResource("Mat_post")
+size = Vector3(1.6, 14, 1.6)
+
+[sub_resource type="BoxShape3D" id="Shape_post"]
+size = Vector3(1.6, 14, 1.6)
+
+[sub_resource type="BoxMesh" id="Mesh_beam_x"]
+material = SubResource("Mat_post")
+size = Vector3(52.6, 1.4, 1.6)
+
+[sub_resource type="BoxMesh" id="Mesh_beam_z"]
+material = SubResource("Mat_post")
+size = Vector3(1.6, 1.4, 41.6)
+
+[sub_resource type="CylinderMesh" id="Mesh_log"]
+material = SubResource("Mat_log")
+top_radius = 2.2
+bottom_radius = 2.2
+height = 36.0
+radial_segments = 9
+rings = 1
+
+[sub_resource type="CylinderShape3D" id="Shape_log"]
+height = 36.0
+radius = 2.2
+
+[sub_resource type="CylinderMesh" id="Mesh_rope"]
+material = SubResource("Mat_rope")
+top_radius = 0.22
+bottom_radius = 0.22
+height = 10.2
+radial_segments = 5
+rings = 1
+
+[sub_resource type="CylinderShape3D" id="Shape_sweep"]
+height = 37.0
+radius = 3.1
+
+[node name="LogTrap" type="Node3D"]
+script = ExtResource("1_logtrap")
+
+[node name="Frame" type="StaticBody3D" parent="."]
+
+[node name="PostNL" type="MeshInstance3D" parent="Frame"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -25.5, 7, 20)
+mesh = SubResource("Mesh_post")
+
+[node name="PostNLShape" type="CollisionShape3D" parent="Frame"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -25.5, 7, 20)
+shape = SubResource("Shape_post")
+
+[node name="PostNR" type="MeshInstance3D" parent="Frame"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 25.5, 7, 20)
+mesh = SubResource("Mesh_post")
+
+[node name="PostNRShape" type="CollisionShape3D" parent="Frame"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 25.5, 7, 20)
+shape = SubResource("Shape_post")
+
+[node name="PostFL" type="MeshInstance3D" parent="Frame"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -25.5, 7, -20)
+mesh = SubResource("Mesh_post")
+
+[node name="PostFLShape" type="CollisionShape3D" parent="Frame"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -25.5, 7, -20)
+shape = SubResource("Shape_post")
+
+[node name="PostFR" type="MeshInstance3D" parent="Frame"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 25.5, 7, -20)
+mesh = SubResource("Mesh_post")
+
+[node name="PostFRShape" type="CollisionShape3D" parent="Frame"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 25.5, 7, -20)
+shape = SubResource("Shape_post")
+
+[node name="BeamNear" type="MeshInstance3D" parent="Frame"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 13.5, 20)
+mesh = SubResource("Mesh_beam_x")
+
+[node name="BeamFar" type="MeshInstance3D" parent="Frame"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 13.5, -20)
+mesh = SubResource("Mesh_beam_x")
+
+[node name="BeamLeft" type="MeshInstance3D" parent="Frame"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -25.5, 13.5, 0)
+mesh = SubResource("Mesh_beam_z")
+
+[node name="BeamRight" type="MeshInstance3D" parent="Frame"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 25.5, 13.5, 0)
+mesh = SubResource("Mesh_beam_z")
+
+[node name="BeamPivot" type="MeshInstance3D" parent="Frame"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 13.2, 0)
+mesh = SubResource("Mesh_beam_z")
+
+[node name="Pivot" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 13.2, 0)
+
+[node name="RopeL" type="MeshInstance3D" parent="Pivot"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -5.1, -14)
+mesh = SubResource("Mesh_rope")
+
+[node name="RopeR" type="MeshInstance3D" parent="Pivot"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -5.1, 14)
+mesh = SubResource("Mesh_rope")
+
+[node name="Log" type="AnimatableBody3D" parent="Pivot"]
+transform = Transform3D(1, 0, 0, 0, 0, 1, 0, -1, 0, 0, -10.2, 0)
+sync_to_physics = false
+
+[node name="Mesh" type="MeshInstance3D" parent="Pivot/Log"]
+mesh = SubResource("Mesh_log")
+
+[node name="Shape" type="CollisionShape3D" parent="Pivot/Log"]
+shape = SubResource("Shape_log")
+
+[node name="Sweep" type="Area3D" parent="Pivot/Log"]
+collision_mask = 4294967295
+
+[node name="Shape" type="CollisionShape3D" parent="Pivot/Log/Sweep"]
+shape = SubResource("Shape_sweep")

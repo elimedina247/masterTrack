@@ -319,6 +319,13 @@ public partial class TrackMasterController
 		if (@event is not InputEventMouseButton { Pressed: true } mouse)
 			return false;
 
+		// The same rule the hazard gestures follow: in free roam the right button is the look,
+		// not a cancel. This is what the class note above always claimed — that camera events
+		// fall through so aiming never costs the sentry their view — and it was only ever true
+		// of the wheel until now.
+		if (mouse.ButtonIndex == MouseButton.Right && CameraMode == BoardCameraMode.FreeRoam)
+			return false;
+
 		switch (mouse.ButtonIndex)
 		{
 			case MouseButton.Right:

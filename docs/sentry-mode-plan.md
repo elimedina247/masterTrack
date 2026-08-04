@@ -15,6 +15,122 @@ works in every mode, and fixes an economy that the regen change quietly broke.
 
 ---
 
+# ⚑ PIVOT (2026-08-03): rig, then detonate
+
+**This supersedes the race-phase design in the phases below.** Everything about the hazard
+*framework* (Phases 3–4: slots, components, the placement gesture) stands unchanged and is what
+the pivot is built on. What changes is **what the sentry does during the race**.
+
+## The problem it fixes
+
+The race phase was a shop: eleven tools, a pool, cooldowns, and a camera swimming over a moving
+pack, all live, all at once. That is decision overload rather than chaos, and it is why the mode
+did not feel fun. Nothing the sentry did in the build phase paid off, either — the track was laid
+and then forgotten.
+
+## The shape *(built 2026-08-03)*
+
+Three phases instead of two — `MatchPhase.Rigging` sits between the other two, and the track
+being finished no longer starts the race:
+
+1. **Build** — the track, and only the track. The last tile of the budget opens the rig rather
+   than dropping the flag. Alongside the dealt hand the builder now has a **staples bar**: a
+   straight and the two corners, always available, never spent, so a hand full of hairpins is
+   pressure rather than a stall (`TileCatalog.StapleIndexes`).
+2. **Rig** — the track locks, the tile trays go away, and the **hazard shop** becomes the whole
+   job: a price list down the right-hand side with the builder's money above it.
+3. **Race** — the flag drops, the rig is revealed, and the sentry starts holding **Fire**. An
+   armed sentry tool still takes the click first, so aiming a missile and pressing a trap never
+   fight.
+
+Each phase opens with a title card for the builder — "Phase 1. BUILD!", "Phase 2. Set up traps",
+"Phase 3. Trigger traps to cause chaos!" (`PhaseIntro`). The builder's job changes completely
+three times in one match, and nothing used to say so.
+
+**The racers never see the rig go in.** They watch the *track* being built — a course nobody has
+seen the shape of is not one they can be excited about — and then the hazards stop rendering on
+their machines until the flag drops (`TrackController.SetHazardsConcealed`). Concealment is local
+rendering only: every peer still receives every placement and builds the identical node, because
+a racer whose game disagreed with the server about where the traps *were* would just be a bug.
+Meeting each trap for the first time at speed is the point.
+
+## Why this is the fun version
+
+- **Anticipation is the point of a trap.** Knowing it is there and waiting for the pack to reach
+  it is the whole pleasure, and the old design had none of it.
+- **Timing replaces aiming precision**, which is what lets the camera stand still. A static
+  overlook is unusable for clicking a spot on the road at 200 km/h and perfect for pressing a
+  button at the right instant.
+- **Four to six real decisions** beat eleven reactive ones.
+- **The rig phase visibly pays off**, which the build phase never did.
+- **Racers get counterplay.** A dormant device is *visible* — that is the contract. A racer who
+  reads the road sees the trap and crosses it fast; a hidden trap would just be a dice roll.
+
+## Rules for every rigged device
+
+These are the through-line, and each device below is a variation on them:
+
+- **Visible while dormant, from both cameras.** Big enough and vertical enough that a driver
+  reads it at 55 m/s, and coloured loudly enough that the board reads it from altitude.
+- **A short wind-up on detonation, not the 2 s `LeadSeconds` fuse.** The permanent visibility
+  *is* the warning; a two-second fuse on top of that just lets racers brake. ~0.3 s of visible
+  compression is the "oh no" beat.
+- **Free to detonate, cooldown-gated.** The card was the price. Charging twice makes the sentry
+  hoard.
+- **A gift to somebody.** Every device that punishes one racer should reward another — that is
+  what keeps it a toy instead of a wall.
+- **Velocity-level kicks only** — the grip solve eats forces. Standing rule, unchanged.
+
+## The devices
+
+**Spring trap** *(first one, being built now)* — a red square plate ringed with yellow/black
+caution tape, set into the road. Dormant, it is a low dais racers hop over. Detonated, the plate
+punches straight up on a spring and throws whoever was standing on it into the air; the plate
+hangs, and **racers behind can drive underneath through the gap** — the reward half. Then it
+falls, slams, and re-arms. See `SpringTrapHazard`.
+
+**Log trap** — a gantry over the road: four posts at the corners of a tile section, a top frame,
+and a log slung from ropes at one side. Fired, the ropes let go and the log falls into a pendulum
+swing along the direction of travel, sweeping the full width of the road. Winches itself back up
+and re-arms. See `LogTrapHazard`.
+
+It is the first **`FullWidth`** hazard, and that mounting is what makes it tile-scale: a piece
+either declares the gantry slot or cannot take one, and a piece that does gives its whole middle
+to it. `Straight` declares one at its centre. The swing is a scripted pendulum rather than a
+physics joint, the spring plate's rule and reason — every peer has to see the log in the same
+place at the same instant, and a real constrained body diverges inside a second.
+
+**Not a tile variant.** The original ask was for an authored `LogTrapStraight.tscn` — a whole
+piece with the trap built in, swapped for the plain straight on placement. That is Phase 6's
+variant table and it is still unbuilt; what shipped is composition, which reaches the same
+picture through the slot system that already exists. The variant path is now *safer* than the
+plan assumed, though, and worth revisiting: it was ruled out because swapping a tile from under
+moving cars at race time meant a frame with no collision, and the rig phase has no cars on the
+track at all.
+
+Still to be fleshed out into the same shape:
+
+- **Pop-up ramp** — becomes rigged. Hinges up from a housing that is in the road all along.
+- **Launch pad** — becomes rigged, and needs a vertical tell; a flat plate is invisible at speed.
+- Crusher, spinner, gate slam, log trap — all natural rigged devices.
+
+## Still open
+
+- **The camera.** Untouched, and still the swimming `PackCenter` average. Leading option is
+  **camera stations**: 2–4 fixed overlooks computed once the track is finished, cut between
+  rather than glided. `Watch` should stop hijacking the main camera — a corner viewport instead.
+- **Price tuning.** The shop replaced the dealt hand — everything is always on the shelf, and
+  what is scarce is money rather than the draw (`HazardKind.PriceOf`, `HazardFunds`). The
+  budget is `150 + 18/tile`, so a twenty-tile track carries roughly six to twelve devices at
+  $40–$85 each. Whether that is a rig or a litter is the thing to judge in play; the readability
+  cap — a track of sixty hazards is soup at 200 km/h — is what the prices are really enforcing.
+- **The race kit.** Still all eleven `SentryActionKind`s. Several of them should become rig-phase
+  cards instead, leaving a handful of genuinely reactive tools.
+- **Racer recon.** They currently watch the rig phase through the build spectator camera with
+  nothing to do. A flyover of the clean track is the intended answer.
+
+---
+
 ## Phase 0 — done
 
 Landed already, in `SentryActions`, `SentryBarrelBomb`, `SentryMissile`, `SentryManager`,

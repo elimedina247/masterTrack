@@ -14,11 +14,28 @@ namespace MasterTrack.UI;
 /// </summary>
 public partial class BuildPhasePanel : Control
 {
-    /// <summary>Whether this machine gets the "Start the race" button. The builder does.</summary>
+    /// <summary>Whether this machine gets the button that ends the phase early. The builder does.</summary>
     public bool ShowDoneButton { get; set; }
+
+    /// <summary>Which phase this panel is describing. Set before adding to the tree — the two
+    /// timed phases wear the same furniture and differ only in what the words say.</summary>
+    public MatchPhase Phase { get; set; } = MatchPhase.Building;
 
     private Label _timer = null!;
     private Button _done = null!;
+
+    /// <summary>What the caption says, for each phase and each role. The racers' half is
+    /// deliberately vague about the rig: "setting traps" tells them a thing is being done to
+    /// them, and telling them <i>what</i> is the sentry's job to do with a spring, later.</summary>
+    private string Caption => (Phase, ShowDoneButton) switch
+    {
+        (MatchPhase.Rigging, true) => "Set your traps.",
+        (MatchPhase.Rigging, false) => "The Track Master is setting traps...",
+        (_, true) => "Build the track!",
+        (_, false) => "The Track Master is building the track...",
+    };
+
+    private string DoneText => Phase == MatchPhase.Rigging ? "Start the race" : "Done building";
 
     public override void _Ready()
     {
@@ -44,9 +61,7 @@ public partial class BuildPhasePanel : Control
         AddChild(box);
 
         Label caption = AddLabel(box, 24);
-        caption.Text = ShowDoneButton
-            ? "Build the track!"
-            : "The Track Master is building the track...";
+        caption.Text = Caption;
 
         _timer = AddLabel(box, 32);
 
@@ -54,7 +69,7 @@ public partial class BuildPhasePanel : Control
         {
             _done = new Button
             {
-                Text = "Start the race",
+                Text = DoneText,
                 // The builder's hands are on the board; a focused button would eat the space bar.
                 FocusMode = FocusModeEnum.None,
             };

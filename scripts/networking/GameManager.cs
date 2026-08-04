@@ -67,6 +67,16 @@ public enum MatchPhase
     None,
     Building,
     Racing,
+
+    /// <summary>
+    /// Between the two: the track is finished and locked, and the Track Master is planting the
+    /// dormant devices they will fire during the race. Nobody is driving yet, and the racers
+    /// cannot see what is being planted — see <c>docs/sentry-mode-plan.md</c>.
+    ///
+    /// Appended rather than slotted between <see cref="Building"/> and <see cref="Racing"/>
+    /// where it belongs in time, because the phase crosses the wire as its integer value.
+    /// </summary>
+    Rigging,
 }
 
 /// <summary>
@@ -197,11 +207,22 @@ public partial class GameManager : Node
     private const float BuildSecondsBase = 60.0f;
     private const float BuildSecondsPerTile = 6.0f;
 
-    /// <summary>When the build phase ends, on this machine's clock. Set from the phase RPC.</summary>
+    // The rig clock. Shorter and flatter than the build's, because rigging is a handful of
+    // decisions about a track that already exists rather than a track's worth of building —
+    // and because everybody else is now waiting on a finished course they cannot drive yet.
+    private const float RigSecondsBase = 40.0f;
+    private const float RigSecondsPerTile = 1.5f;
+
+    /// <summary>When the running phase ends, on this machine's clock. Set from the phase RPC.</summary>
     private ulong _buildEndsAtMsec;
 
-    /// <summary>Seconds of build time left, for countdown labels. 0 outside the build phase.</summary>
-    public float BuildSecondsLeft => Phase == MatchPhase.Building
+    /// <summary>Whether the phase currently running is one with a clock the builder works against.</summary>
+    public bool IsTimedPhase => Phase is MatchPhase.Building or MatchPhase.Rigging;
+
+    /// <summary>Seconds left in the current timed phase, for countdown labels. 0 outside one.
+    /// Serves the rig phase as well as the build — one deadline is set per phase, and which
+    /// phase it belongs to is whichever one is running.</summary>
+    public float BuildSecondsLeft => IsTimedPhase
         ? Mathf.Max(0.0f, (_buildEndsAtMsec - (float)Time.GetTicksMsec()) / 1000.0f)
         : 0.0f;
 
@@ -440,11 +461,15 @@ public partial class GameManager : Node
     }
 
     /// <summary>
-    /// Server only. Close the build phase and let the race begin. Reached three ways — the
-    /// builder's Done button, the build clock running out, or the tile budget being spent —
-    /// and idempotent, because two of those can land on the same frame.
+    /// Server only. Close the build phase and open the rig. Reached three ways — the builder's
+    /// Done button, the build clock running out, or the tile budget being spent — and idempotent,
+    /// because two of those can land on the same frame.
+    ///
+    /// The track being finished no longer means the race starts. It means the builder stops
+    /// laying road and starts laying traps, with the whole course in front of them for the first
+    /// time; that is the point of splitting the phase at all.
     /// </summary>
-    public void BeginRacePhase()
+    public void BeginRigPhase()
     {
         if (NetworkManager.Instance.IsNetworked && !NetworkManager.Instance.IsHost)
             return;
@@ -452,33 +477,60 @@ public partial class GameManager : Node
         if (Phase != MatchPhase.Building)
             return;
 
+        float seconds = RigSecondsBase + RaceLength * RigSecondsPerTile;
+        GD.Print($"[GameManager] Build over; rig phase open for {seconds:0}s.");
+
+        SetPhase(MatchPhase.Rigging, seconds);
+        SetProcess(true);
+    }
+
+    /// <summary>
+    /// Server only. Close the rig and let the race begin — the builder's Ready button or the rig
+    /// clock running out.
+    /// </summary>
+    public void BeginRacePhase()
+    {
+        if (NetworkManager.Instance.IsNetworked && !NetworkManager.Instance.IsHost)
+            return;
+
+        if (Phase != MatchPhase.Rigging)
+            return;
+
         SetProcess(false);
-        GD.Print("[GameManager] Build phase over; the race is on.");
+        GD.Print("[GameManager] Rig phase over; the race is on.");
         SetPhase(MatchPhase.Racing, 0.0f);
     }
 
-    /// <summary>The build clock. Only ever running on the server, and only while building.</summary>
+    /// <summary>The phase clock. Only ever running on the server, and only while a timed phase
+    /// is. Each expiry advances to the next phase, so one clock serves both.</summary>
     public override void _Process(double delta)
     {
-        if (Phase != MatchPhase.Building)
+        if (!IsTimedPhase)
         {
             SetProcess(false);
             return;
         }
 
-        if (BuildSecondsLeft <= 0.0f)
+        if (BuildSecondsLeft > 0.0f)
+            return;
+
+        if (Phase == MatchPhase.Building)
+            BeginRigPhase();
+        else
             BeginRacePhase();
     }
 
     /// <summary>
-    /// The builder says the track is finished. Anyone may call; the server checks the asker
-    /// really is the Track Master before ending the phase.
+    /// The builder says they are done with whatever phase they are in — the track is finished, or
+    /// the rig is. One button, two meanings, because from the builder's side it is the same
+    /// sentence both times. Anyone may call; the server checks the asker really is the Track
+    /// Master before advancing anything.
     /// </summary>
     public void RequestFinishBuilding()
     {
         if (!NetworkManager.Instance.IsNetworked)
         {
-            BeginRacePhase();
+            AdvanceTimedPhase();
             return;
         }
 
@@ -505,7 +557,17 @@ public partial class GameManager : Node
             return;
         }
 
-        BeginRacePhase();
+        AdvanceTimedPhase();
+    }
+
+    /// <summary>Move the builder on to whatever comes next: build to rig, rig to race. A no-op
+    /// anywhere else, which is what makes the Done button safe to press twice.</summary>
+    private void AdvanceTimedPhase()
+    {
+        if (Phase == MatchPhase.Building)
+            BeginRigPhase();
+        else if (Phase == MatchPhase.Rigging)
+            BeginRacePhase();
     }
 
     /// <summary>

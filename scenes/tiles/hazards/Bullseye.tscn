@@ -1,0 +1,82 @@
+[gd_scene load_steps=9 format=3]
+
+[ext_resource type="Script" path="res://scripts/tiles/hazards/BullseyeHazard.cs" id="1_bullseye"]
+
+[sub_resource type="StandardMaterial3D" id="Mat_red"]
+albedo_color = Color(0.87, 0.12, 0.11, 1)
+metallic = 0.0
+roughness = 1.0
+shading_mode = 2
+specular_mode = 2
+
+[sub_resource type="StandardMaterial3D" id="Mat_pale"]
+albedo_color = Color(0.93, 0.93, 0.9, 1)
+metallic = 0.0
+roughness = 1.0
+shading_mode = 2
+specular_mode = 2
+
+[sub_resource type="CylinderMesh" id="Mesh_ring0"]
+material = SubResource("Mat_red")
+top_radius = 14.0
+bottom_radius = 14.0
+height = 0.05
+radial_segments = 24
+rings = 1
+
+[sub_resource type="CylinderMesh" id="Mesh_ring1"]
+material = SubResource("Mat_pale")
+top_radius = 10.8
+bottom_radius = 10.8
+height = 0.05
+radial_segments = 22
+rings = 1
+
+[sub_resource type="CylinderMesh" id="Mesh_ring2"]
+material = SubResource("Mat_red")
+top_radius = 7.6
+bottom_radius = 7.6
+height = 0.05
+radial_segments = 20
+rings = 1
+
+[sub_resource type="CylinderMesh" id="Mesh_ring3"]
+material = SubResource("Mat_pale")
+top_radius = 4.6
+bottom_radius = 4.6
+height = 0.05
+radial_segments = 18
+rings = 1
+
+[sub_resource type="CylinderMesh" id="Mesh_bull"]
+material = SubResource("Mat_red")
+top_radius = 2.0
+bottom_radius = 2.0
+height = 0.05
+radial_segments = 16
+rings = 1
+
+[node name="Bullseye" type="Node3D"]
+script = ExtResource("1_bullseye")
+
+[node name="Rings" type="Node3D" parent="."]
+
+[node name="Ring0" type="MeshInstance3D" parent="Rings"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.03, 0)
+mesh = SubResource("Mesh_ring0")
+
+[node name="Ring1" type="MeshInstance3D" parent="Rings"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.06, 0)
+mesh = SubResource("Mesh_ring1")
+
+[node name="Ring2" type="MeshInstance3D" parent="Rings"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.09, 0)
+mesh = SubResource("Mesh_ring2")
+
+[node name="Ring3" type="MeshInstance3D" parent="Rings"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.12, 0)
+mesh = SubResource("Mesh_ring3")
+
+[node name="Bull" type="MeshInstance3D" parent="Rings"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.15, 0)
+mesh = SubResource("Mesh_bull")

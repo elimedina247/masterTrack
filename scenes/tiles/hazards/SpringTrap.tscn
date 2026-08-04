@@ -1,0 +1,91 @@
+[gd_scene load_steps=9 format=3]
+
+[ext_resource type="Script" path="res://scripts/tiles/hazards/SpringTrapHazard.cs" id="1_spring"]
+[ext_resource type="Shader" path="res://resources/tiles/styles/caution_tape.gdshader" id="2_tape"]
+
+[sub_resource type="ShaderMaterial" id="Mat_tape"]
+shader = ExtResource("2_tape")
+shader_parameter/stripe_warm = Color(0.98, 0.76, 0.06, 1)
+shader_parameter/stripe_dark = Color(0.07, 0.07, 0.08, 1)
+shader_parameter/stripe_pitch = 2.2
+shader_parameter/scroll_speed = 0.0
+shader_parameter/glow = 0.0
+
+[sub_resource type="StandardMaterial3D" id="Mat_plate"]
+albedo_color = Color(0.86, 0.11, 0.1, 1)
+metallic = 0.0
+roughness = 1.0
+shading_mode = 2
+specular_mode = 2
+
+[sub_resource type="StandardMaterial3D" id="Mat_coil"]
+albedo_color = Color(0.62, 0.07, 0.07, 1)
+metallic = 0.0
+roughness = 1.0
+shading_mode = 2
+specular_mode = 2
+
+[sub_resource type="BoxMesh" id="Mesh_slab"]
+material = SubResource("Mat_plate")
+size = Vector3(16, 1.2, 16)
+
+[sub_resource type="BoxShape3D" id="Shape_plate"]
+size = Vector3(16, 1.2, 16)
+
+[sub_resource type="TorusMesh" id="Mesh_coil"]
+material = SubResource("Mat_coil")
+inner_radius = 3.3
+outer_radius = 4.5
+rings = 8
+ring_segments = 5
+
+[sub_resource type="BoxShape3D" id="Shape_trigger"]
+size = Vector3(16, 4, 16)
+
+[node name="SpringTrap" type="Node3D"]
+script = ExtResource("1_spring")
+
+[node name="TapeRing" type="CSGCombiner3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.035, 0)
+material_override = SubResource("Mat_tape")
+
+[node name="Outer" type="CSGBox3D" parent="TapeRing"]
+size = Vector3(19.6, 0.06, 19.6)
+
+[node name="Inner" type="CSGBox3D" parent="TapeRing"]
+operation = 2
+size = Vector3(16, 0.6, 16)
+
+[node name="Plate" type="AnimatableBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.54, 0)
+sync_to_physics = true
+
+[node name="Shape" type="CollisionShape3D" parent="Plate"]
+shape = SubResource("Shape_plate")
+
+[node name="Slab" type="MeshInstance3D" parent="Plate"]
+mesh = SubResource("Mesh_slab")
+
+[node name="Coil" type="Node3D" parent="."]
+
+[node name="Ring0" type="MeshInstance3D" parent="Coil"]
+mesh = SubResource("Mesh_coil")
+
+[node name="Ring1" type="MeshInstance3D" parent="Coil"]
+mesh = SubResource("Mesh_coil")
+
+[node name="Ring2" type="MeshInstance3D" parent="Coil"]
+mesh = SubResource("Mesh_coil")
+
+[node name="Ring3" type="MeshInstance3D" parent="Coil"]
+mesh = SubResource("Mesh_coil")
+
+[node name="Ring4" type="MeshInstance3D" parent="Coil"]
+mesh = SubResource("Mesh_coil")
+
+[node name="Trigger" type="Area3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 0)
+collision_mask = 4294967295
+
+[node name="Shape" type="CollisionShape3D" parent="Trigger"]
+shape = SubResource("Shape_trigger")

@@ -72,6 +72,35 @@ public static class Sfx
 	}
 
 	/// <summary>
+	/// Play a sample once with no position at all — the same volume wherever the camera is.
+	///
+	/// For interface sounds rather than world ones. A cash register answering a purchase is a
+	/// fact about the builder's wallet, not an event at a place: putting it through
+	/// <see cref="PlayAt"/> would quietly make it quieter whenever the board camera happened to
+	/// be zoomed out, which is a volume that means nothing.
+	/// </summary>
+	public static void PlayUi(Node context, string path, float volumeDb = 0.0f,
+							  float pitchJitter = 0.0f)
+	{
+		if (Load(path) is not { } stream || !context.IsInsideTree())
+			return;
+
+		var player = new AudioStreamPlayer
+		{
+			Stream = stream,
+			Bus = "SFX",
+			VolumeDb = volumeDb,
+			PitchScale = 1.0f + (float)GD.RandRange(-pitchJitter, pitchJitter),
+			Autoplay = true,
+		};
+		player.Finished += player.QueueFree;
+
+		// Parented to the root and deferred, PlayAt's rule: whatever fired this may well be
+		// rebuilding the control it lived on during this same frame.
+		context.GetTree().Root.CallDeferred(Node.MethodName.AddChild, player);
+	}
+
+	/// <summary>
 	/// A player that rides <paramref name="parent"/>, starts as soon as it enters the tree,
 	/// and dies with it — the whistle on a falling missile, the wind under a falling tile.
 	/// Returns null (after one warning) if the stream is missing.

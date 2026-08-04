@@ -268,10 +268,40 @@ public partial class Game : Node3D
                 EnterBuildPhase();
                 break;
 
+            case MatchPhase.Rigging:
+                EnterRigPhase();
+                break;
+
             case MatchPhase.Racing:
                 EnterRacePhase();
                 break;
         }
+    }
+
+    /// <summary>
+    /// Announce a phase to the Track Master. Builder only — see <see cref="PhaseIntro"/> for why
+    /// the racers get told something different, and by somebody else.
+    /// </summary>
+    private void ShowPhaseIntro(string title)
+    {
+        if (_localRole != PlayerRole.TrackMaster)
+            return;
+
+        GetNode("HUD").AddChild(new PhaseIntro { Name = "PhaseIntro", Title = title });
+    }
+
+    /// <summary>Put the phase panel up for whichever phase has just opened, replacing whatever
+    /// the last one left behind.</summary>
+    private void ShowPhasePanel(MatchPhase phase)
+    {
+        _buildPanel?.QueueFree();
+        _buildPanel = new BuildPhasePanel
+        {
+            Name = "BuildPhasePanel",
+            ShowDoneButton = _localRole == PlayerRole.TrackMaster,
+            Phase = phase,
+        };
+        GetNode("HUD").AddChild(_buildPanel);
     }
 
     /// <summary>
@@ -283,8 +313,13 @@ public partial class Game : Node3D
     {
         bool isBuilder = _localRole == PlayerRole.TrackMaster;
 
-        _buildPanel = new BuildPhasePanel { Name = "BuildPhasePanel", ShowDoneButton = isBuilder };
-        GetNode("HUD").AddChild(_buildPanel);
+        ShowPhasePanel(MatchPhase.Building);
+        ShowPhaseIntro("Phase 1. BUILD!");
+
+        // Racers watch the track go down — that half is not a secret, and a course nobody has
+        // seen the shape of is not a course they can be excited about. What they must not see is
+        // the rig, so their hazards are hidden from here until the flag drops.
+        _track.SetHazardsConcealed(!isBuilder);
 
         if (isBuilder)
         {
@@ -297,6 +332,37 @@ public partial class Game : Node3D
     }
 
     /// <summary>
+    /// The road is finished and locked; now the traps go in. The builder keeps the board and the
+    /// hazard tray and loses the tile hand — there is nothing left to build — and the racers keep
+    /// watching a track whose furniture they cannot see arriving.
+    /// </summary>
+    private void EnterRigPhase()
+    {
+        // Every peer locks its own copy off the same broadcast, so no tile can land during the
+        // rig however the phase was reached — the clock, the Done button, or the last tile.
+        _track.LockTrack();
+
+        ShowPhasePanel(MatchPhase.Rigging);
+        ShowPhaseIntro("Phase 2. Set up traps");
+
+        if (_localRole != PlayerRole.TrackMaster)
+            return;
+
+        // The tile half of the tray is spent furniture now; the hazard half is the whole job.
+        _builder.ClearPreview();
+        _palette?.SetTilePlacementVisible(false);
+
+        // Off the rails and into free flight. Every other phase has one place the builder needs
+        // to be looking — the head of the track while building, the pack once racing — and the
+        // follow cameras take them there. Rigging is the opposite: the track is finished and
+        // still, and the job is to go and look at all of it, from wherever a given trap wants
+        // looking at. That is the free camera's entire purpose, and it should not have to be
+        // found on a toggle first.
+        _builder.SetCameraMode(TrackMasterController.BoardCameraMode.FreeRoam);
+
+    }
+
+    /// <summary>
     /// The build is over: the track locks as it stands, the cars arrive, and the builder turns
     /// sentry. Runs on every peer; the spawn itself is the server's alone, as always.
     /// </summary>
@@ -305,9 +371,15 @@ public partial class Game : Node3D
         _buildPanel?.QueueFree();
         _buildPanel = null;
 
-        // Every peer locks its own copy off the same broadcast — the bar at the head is the
-        // finish now, and the server's placement check starts refusing tiles by itself.
+        ShowPhaseIntro("Phase 3. Trigger traps to cause chaos!");
+
+        // Already locked on the way into the rig; harmless and idempotent, and it keeps this the
+        // one place that is true whatever route a match took to get here.
         _track.LockTrack();
+
+        // The rig comes out of hiding. Whatever the sentry planted is on the road from this
+        // moment, and every racer meets it at speed — which was the point of concealing it.
+        _track.SetHazardsConcealed(false);
 
         if (IsServer)
         {
@@ -317,16 +389,30 @@ public partial class Game : Node3D
                 SpawnSolo();
         }
 
-        if (_localRole != PlayerRole.TrackMaster || _sentry == null)
+        if (_localRole != PlayerRole.TrackMaster)
             return;
 
-        // The hand is history — the sentry bar takes the palette's spot on the screen.
-        _palette?.Hide();
+        // The shop closes: the road is locked and nothing more can be bought or lifted. The
+        // palette itself stays — it carries the camera toggle and the status line, and the
+        // sentry needs both for the whole race.
+        _palette?.SetShopVisible(false);
         _builder.ClearPreview();
 
-        _builder.EnableSentry(_sentry);
-        _sentryBar = new SentryBar { Name = "SentryBar", Board = _builder, Sentry = _sentry };
-        GetNode("HUD").AddChild(_sentryBar);
+        // Firing the rig is the phase, and now it is the *whole* phase — see the note on
+        // SentryBar below. The sentry starts holding Fire rather than having to go and find it,
+        // and right-click keeps handing it back, so there is no state to fall out of.
+        _builder.ArmHazardFire();
+
+        // The live sentry kit — the eleven-tool bar, the points pool, the cooldowns — is
+        // deliberately not brought up. The mode's whole shape is now "rig it in phase two, play
+        // it in phase three", and a shop window of instant-cast abilities beside that is a
+        // second, unrelated game competing with the traps for the sentry's attention. What was
+        // once eight buttons of "pick a car, make it worse" is now a board the sentry authored
+        // and has to time.
+        //
+        // Switched off at the wiring rather than deleted: SentryManager and everything under it
+        // still exist and still work, so this is one line to undo if a race without them turns
+        // out to be short of things to do.
     }
 
     /// <summary>
@@ -541,10 +627,12 @@ public partial class Game : Node3D
 
         // A Sentry build has nobody on the road to warn. What a placement can do instead is
         // finish the build: the budget's last tile is the builder's Done button pressed for them.
+        // That now opens the rig rather than starting the race — the track being finished is the
+        // cue to start trapping it, not to send the cars.
         if (SentryMode)
         {
             if (GameManager.Instance.Phase == MatchPhase.Building && _track.AtTileLimit)
-                GameManager.Instance.BeginRacePhase();
+                GameManager.Instance.BeginRigPhase();
             return;
         }
 
