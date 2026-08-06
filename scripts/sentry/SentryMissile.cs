@@ -51,7 +51,7 @@ public partial class SentryMissile : Node3D
 	/// <summary>The cartoon whistle of the drop — the audible half of the warning ring. It
 	/// rides the falling body, so it descends on the racers it is aimed at, and it dies with
 	/// the missile: the cut into the bang <i>is</i> the impact.</summary>
-	private const string WhistleSfxPath = "res://assets/audio/hazards/missile_whistle.mp3";
+	public const string WhistleSfxPath = "res://assets/audio/hazards/missile_whistle.mp3";
 
 	private Node3D _body = null!;
 	private StandardMaterial3D _ringMaterial = null!;

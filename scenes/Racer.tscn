@@ -40,6 +40,8 @@ NitroDuration = 0.5
 HopImpulse = 14.0
 AirNitroForce = 1000000.0
 AirNitroDuration = 0.07
+MaxFallSpeed = 130.0
+FallGravityMultiplier = 2.0
 
 [node name="FlatShade" type="Node" parent="." unique_id=610255931]
 script = ExtResource("13_flatshade")

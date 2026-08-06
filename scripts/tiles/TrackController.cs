@@ -881,6 +881,7 @@ public partial class TrackController : Node3D
 
         TrackHazard node = TrackHazard.Create((HazardKind)kind);
         node.Name = HazardNodeName(slotIndex);
+        node.Address = (tileIndex, slotIndex);
 
         // Hidden before it is ever drawn, not hidden a frame later: on a racer's machine during
         // the rig this node must never appear, and a single frame of a red plate popping into

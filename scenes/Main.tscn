@@ -417,6 +417,44 @@ theme_override_colors/font_color = Color(0.4275, 0.3961, 0.5176, 1)
 theme_override_font_sizes/font_size = 15
 text = "Solo — build, then defend"
 
+[node name="TowersButton" type="Button" parent="Layout/Rail/RailMargin/RailVBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 72)
+layout_mode = 2
+theme_override_styles/focus = SubResource("sb_menu_focus")
+theme_override_styles/disabled = SubResource("sb_menu_normal")
+theme_override_styles/hover = SubResource("sb_menu_hover")
+theme_override_styles/pressed = SubResource("sb_menu_focus")
+theme_override_styles/normal = SubResource("sb_menu_normal")
+
+[node name="Box" type="MarginContainer" parent="Layout/Rail/RailMargin/RailVBox/TowersButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_constants/margin_left = 18
+
+[node name="V" type="VBoxContainer" parent="Layout/Rail/RailMargin/RailVBox/TowersButton/Box"]
+layout_mode = 2
+mouse_filter = 2
+alignment = 1
+theme_override_constants/separation = 0
+
+[node name="T" type="Label" parent="Layout/Rail/RailMargin/RailVBox/TowersButton/Box/V"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9255, 0.9098, 0.9569, 1)
+theme_override_font_sizes/font_size = 26
+text = "TOWER DEFENSE"
+
+[node name="D" type="Label" parent="Layout/Rail/RailMargin/RailVBox/TowersButton/Box/V"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.4275, 0.3961, 0.5176, 1)
+theme_override_font_sizes/font_size = 15
+text = "Solo — build, then place turrets"
+
 [node name="SessionGap" type="Control" parent="Layout/Rail/RailMargin/RailVBox"]
 layout_mode = 2
 size_flags_vertical = 3

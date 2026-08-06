@@ -211,7 +211,7 @@ public partial class TrackMasterController : Node3D
 	/// why Live Build's hand has to stay the whole supply.
 	/// </summary>
 	public bool StaplesAvailable
-		=> !FreeBuild && GameManager.Instance.Mode == GameMode.Sentry;
+		=> !FreeBuild && GameManager.Instance.IsPhasedMode;
 
 	/// <summary>
 	/// How many cards the tray has: the hand's slots, or one per catalog tile in free build.
@@ -260,8 +260,11 @@ public partial class TrackMasterController : Node3D
 	private const float MinFreeSpeedScale = 0.15f;
 	private const float MaxFreeSpeedScale = 8.0f;
 
-	private static readonly Color ValidTint = new(0.35f, 1.0f, 0.45f);
-	private static readonly Color InvalidTint = new(1.0f, 0.35f, 0.35f);
+	// Alpha is how hard the tint is laid over an authored piece's own colours — generated ghosts
+	// ignore it and take the tint flat. Invalid is much stronger on purpose: a placement that will
+	// be refused has to read as refused at a glance, from across the board, mid-hover.
+	private static readonly Color ValidTint = new(0.35f, 1.0f, 0.45f, 0.30f);
+	private static readonly Color InvalidTint = new(1.0f, 0.30f, 0.30f, 0.85f);
 
 	/// <summary>
 	/// What the board says once the race's tiles have all been laid. Deliberately not phrased as a

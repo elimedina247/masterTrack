@@ -193,13 +193,18 @@ public partial class LobbyPanel : Control
 
         _mode.AddItem(ModeName(GameMode.LiveBuild), (int)GameMode.LiveBuild);
         _mode.AddItem(ModeName(GameMode.Sentry), (int)GameMode.Sentry);
+        _mode.AddItem(ModeName(GameMode.TowerDefense), (int)GameMode.TowerDefense);
 
         _mode.ItemSelected += OnModePicked;
         row.AddChild(_mode);
     }
 
-    private static string ModeName(GameMode mode) =>
-        mode == GameMode.Sentry ? "Build then Sentry" : "Live build";
+    private static string ModeName(GameMode mode) => mode switch
+    {
+        GameMode.Sentry => "Build then Sentry",
+        GameMode.TowerDefense => "Tower Defense",
+        _ => "Live build",
+    };
 
     private void OnModePicked(long index)
         => GameManager.Instance.SetGameMode((GameMode)_mode.GetItemId((int)index));

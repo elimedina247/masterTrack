@@ -374,7 +374,25 @@ public partial class TrackTile : StaticBody3D
 	/// A scene piece shown as a placement preview: see-through, tinted the verdict's colour, and
 	/// solid to nothing — the same rules every generated ghost already follows.
 	/// </summary>
-	private void GhostifyPiece(Node node)
+	private void GhostifyPiece(Node node) => GhostifyPiece(node, GhostOverlay());
+
+	/// <summary>
+	/// The verdict colour, as a pass laid over whatever the piece already wears.
+	///
+	/// An overlay rather than an override because an authored piece is the thing being previewed:
+	/// replacing its materials outright would show the Track Master a coloured slab instead of the
+	/// tile they are about to place. The tint's own alpha decides how much of the piece survives —
+	/// a legal placement gets a wash, an illegal one gets buried in red.
+	/// </summary>
+	private StandardMaterial3D GhostOverlay() => new()
+	{
+		AlbedoColor = _ghostTint,
+		Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+		ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+		SpecularMode = BaseMaterial3D.SpecularModeEnum.Disabled,
+	};
+
+	private void GhostifyPiece(Node node, StandardMaterial3D tint)
 	{
 		switch (node)
 		{
@@ -389,11 +407,12 @@ public partial class TrackTile : StaticBody3D
 
 			case GeometryInstance3D geometry:
 				geometry.Transparency = 0.55f;
+				geometry.MaterialOverlay = tint;
 				break;
 		}
 
 		foreach (Node child in node.GetChildren())
-			GhostifyPiece(child);
+			GhostifyPiece(child, tint);
 	}
 
 	/// <summary>

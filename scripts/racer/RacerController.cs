@@ -326,6 +326,10 @@ public partial class RacerController : Vehicle
 		// The owning peer is the movement authority for its own car. Recursive by default, so
 		// this covers the synchronizer added just above.
 		SetMultiplayerAuthority(peerId);
+
+		// Deliberately after that hand-over, so the gate keeps the server's authority while the
+		// pose channel goes to the driver. See BuildSpawnGate for why the server needs one.
+		AddChild(BuildSpawnGate());
 	}
 
 	/// <summary>
@@ -602,10 +606,11 @@ public partial class RacerController : Vehicle
 		if (manager.WinnerPeerId != 0 || manager.MatchUnfinished || manager.HasFinished(OwnerPeerId))
 			return false;
 
-		// Sentry mode: while the race runs, the void is the void. Every tool in the sentry's
-		// kit that throws, drags or launches a car is lethal exactly when it puts you off the
-		// road — which is the whole reason placement is a skill.
-		if (manager.Mode == GameMode.Sentry)
+		// The phased modes: while the race runs, the void is the void. Everything the builder
+		// owns that throws, drags or launches a car is lethal exactly when it puts you off the
+		// road — which is the whole reason placement is a skill. A turret's rocket earns the
+		// same right as a sentry's missile.
+		if (manager.IsPhasedMode)
 			return manager.Phase == MatchPhase.Racing;
 
 		// Live Build: fatal only when the road this car was on has already crumbled away. An
@@ -669,12 +674,79 @@ public partial class RacerController : Vehicle
 			config.PropertySetReplicationMode(property, SceneReplicationConfig.ReplicationMode.Always);
 		}
 
-		return new MultiplayerSynchronizer
+		var sync = new MultiplayerSynchronizer
 		{
 			Name = "PoseSync",
 			ReplicationConfig = config,
 			ReplicationInterval = SyncInterval,
 		};
+
+		// The same gate the car carries below, on this channel too. On the server's *own* car
+		// this synchronizer is the one the replication layer asks first, and a "yes" here settles
+		// the question before the gate is ever consulted.
+		sync.AddVisibilityFilter(Callable.From<int, bool>(HasSceneFor));
+		return sync;
+	}
+
+	/// <summary>
+	/// A synchronizer that replicates nothing at all. It exists only for its <i>visibility</i>,
+	/// which is the single lever Godot gives the server over <b>when</b> a car's spawn packet is
+	/// sent to a given peer.
+	///
+	/// Without it the engine pushes every car that already exists at a peer the instant that peer
+	/// connects — while it is still on the main menu, with no lobby scene loaded. A spawn packet
+	/// names its spawner by a cached id, so the client is first handed the path to cache; it
+	/// cannot resolve <c>TestArea/RacerArena/RacerSpawner</c> in a scene it hasn't loaded, so it
+	/// never confirms the id — and the server, having offered that path once, never offers it
+	/// again. Every later spawn to that peer is then dropped, <i>including its own car</i>. The
+	/// result is a player standing in the lobby with no car, and since the camera rides on the
+	/// car, no camera either: a grey screen. That is the bug this exists to prevent, and it is
+	/// the same one <c>GameManager</c>'s scene-ready handshake was written for — the handshake
+	/// governs what the game spawns, and this governs what the engine sends unasked.
+	///
+	/// Its authority is left as the server's, because a synchronizer is only consulted on the
+	/// machine that owns it, and the machine deciding what to send is the server. The pose
+	/// channel belongs to the driver instead, which is why it cannot do this job alone: for a
+	/// client's car the server owns none of it, and the answer defaults to "send it".
+	/// </summary>
+	private MultiplayerSynchronizer BuildSpawnGate()
+	{
+		var gate = new MultiplayerSynchronizer
+		{
+			Name = "SpawnGate",
+			// An empty config rather than none: a synchronizer without one is an error the
+			// replication layer reports on every sync tick for as long as the car exists.
+			ReplicationConfig = new SceneReplicationConfig(),
+			// It has nothing to say, so it never needs a turn in which to say it.
+			ReplicationInterval = GateSyncInterval,
+		};
+
+		gate.AddVisibilityFilter(Callable.From<int, bool>(HasSceneFor));
+		return gate;
+	}
+
+	/// <summary>How often the gate is given a sync slot, in seconds. Long, because it carries
+	/// no properties — see <see cref="BuildSpawnGate"/>.</summary>
+	private const float GateSyncInterval = 60.0f;
+
+	/// <summary>
+	/// Whether <paramref name="peerId"/> has the scene this car lives in loaded, and so can be
+	/// sent a car at all. Only the server tracks that; everywhere else the question is not this
+	/// machine's to answer and the honest reply is yes — a client evaluating this is deciding
+	/// where to send its own car's pose, which has nothing to do with anybody's loading.
+	/// </summary>
+	private static bool HasSceneFor(int peerId) =>
+		!NetworkManager.Instance.IsHost || GameManager.Instance.IsSceneReady(peerId);
+
+	/// <summary>
+	/// Server only. Re-ask whether this car may be shown to a peer. Called when that peer's scene
+	/// finally turns up, because the gate's answer has just changed and the car is already
+	/// standing on the pad — nothing else would go back and look.
+	/// </summary>
+	public void RefreshSpawnVisibility(int peerId)
+	{
+		foreach (Node child in GetChildren())
+			(child as MultiplayerSynchronizer)?.UpdateVisibility(peerId);
 	}
 
 	public override void _PhysicsProcess(double delta)

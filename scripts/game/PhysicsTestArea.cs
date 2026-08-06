@@ -150,6 +150,11 @@ public partial class PhysicsTestArea : Node3D
 		if (_arena == null || _slots.ContainsKey(peerId))
 			return;
 
+		// Everyone already parked on the pad was held back while this peer was still loading —
+		// a spawn packet sent into a scene that doesn't exist yet costs that peer *every* car it
+		// would ever be sent, its own included. Now there is somewhere to put them.
+		_arena.RevealTo(peerId);
+
 		_slots[peerId] = NextFreeSlot();
 		_arena.Spawn(peerId, _slots[peerId], RingSlots);
 

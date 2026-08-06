@@ -61,7 +61,13 @@ public partial class Game : Node3D
     /// is no race to pace the track against, only people waiting for it to be finished.</summary>
     private const float SentryBuildDealInterval = 1.5f;
 
-    private static bool SentryMode => GameManager.Instance.Mode == GameMode.Sentry;
+    /// <summary>Whether this match runs build → rig → race. Named for the mode that introduced
+    /// the shape; Tower Defense now shares every bit of it.</summary>
+    private static bool SentryMode => GameManager.Instance.IsPhasedMode;
+
+    /// <summary>Whether the builder's rig plays itself — which changes what the phase cards
+    /// promise, and nothing else about the flow.</summary>
+    private static bool TowerMode => GameManager.Instance.Mode == GameMode.TowerDefense;
 
     private bool IsServer => !NetworkManager.Instance.IsNetworked || Multiplayer.IsServer();
 
@@ -343,7 +349,7 @@ public partial class Game : Node3D
         _track.LockTrack();
 
         ShowPhasePanel(MatchPhase.Rigging);
-        ShowPhaseIntro("Phase 2. Set up traps");
+        ShowPhaseIntro(TowerMode ? "Phase 2. Build your defenses" : "Phase 2. Set up traps");
 
         if (_localRole != PlayerRole.TrackMaster)
             return;
@@ -371,7 +377,9 @@ public partial class Game : Node3D
         _buildPanel?.QueueFree();
         _buildPanel = null;
 
-        ShowPhaseIntro("Phase 3. Trigger traps to cause chaos!");
+        ShowPhaseIntro(TowerMode
+            ? "Phase 3. Let them run the gauntlet!"
+            : "Phase 3. Trigger traps to cause chaos!");
 
         // Already locked on the way into the rig; harmless and idempotent, and it keeps this the
         // one place that is true whatever route a match took to get here.
@@ -401,7 +409,12 @@ public partial class Game : Node3D
         // Firing the rig is the phase, and now it is the *whole* phase — see the note on
         // SentryBar below. The sentry starts holding Fire rather than having to go and find it,
         // and right-click keeps handing it back, so there is no state to fall out of.
-        _builder.ArmHazardFire();
+        //
+        // Tower Defense skips it, because its rig has nothing to press: the turrets are already
+        // tracking. The builder's job there ended when the clock did, and the race is the answer
+        // to what they spent it on.
+        if (_builder.FireToolAvailable)
+            _builder.ArmHazardFire();
 
         // The live sentry kit — the eleven-tool bar, the points pool, the cooldowns — is
         // deliberately not brought up. The mode's whole shape is now "rig it in phase two, play

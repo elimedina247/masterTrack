@@ -22,6 +22,17 @@ public abstract partial class TrackHazard : Node3D
     public HazardKind Kind { get; private set; }
 
     /// <summary>
+    /// Where this hazard sits on the track — the same (tile, slot) pair the wire addresses it by.
+    /// Set by <see cref="TrackController"/> as it stands the node up; <c>(-1, -1)</c> on a ghost
+    /// or an authored one that was never placed.
+    ///
+    /// Only a device that has to <i>send</i> something needs this — a hazard that is fired at is
+    /// found by its address, but a turret that fires on its own has to name itself in the
+    /// broadcast. Everything else can go on ignoring where it is.
+    /// </summary>
+    public (int TileIndex, int SlotIndex) Address { get; internal set; } = (-1, -1);
+
+    /// <summary>
     /// Whether this is a <i>rigged</i> device — planted dormant and fired by hand — rather than
     /// one that goes off on contact. False by default, so the contact hazards say nothing about
     /// a mechanic they do not have, and <see cref="TrackController"/> never needs the concrete
@@ -76,6 +87,7 @@ public abstract partial class TrackHazard : Node3D
         {
             HazardKind.LaunchPad => new Hazards.LaunchPadHazard(),
             HazardKind.PopUpRamp => new Hazards.PopUpRampHazard(),
+            HazardKind.RocketTower => new Hazards.RocketTowerHazard(),
             _ => new Hazards.LaunchPadHazard(),
         };
 

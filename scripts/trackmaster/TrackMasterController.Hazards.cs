@@ -92,6 +92,51 @@ public partial class TrackMasterController
 	/// the lobby is a tool, not a game, and pricing it would only be in the way.</summary>
 	public bool CanAfford(HazardKind kind) => FreeBuild || HazardFunds >= kind.PriceOf();
 
+	/// <summary>
+	/// What is on the shelves this match. <b>This is where the two phased modes actually differ.</b>
+	///
+	/// They share the flow, the clock, the camera, the money and the placement gesture; what
+	/// makes Tower Defense a different game is that its rig phase sells things that play
+	/// themselves, and Sentry's sells things the builder has to time by hand. Mixing the two
+	/// shelves would blur both — a sentry with turrets stops watching the road, and a tower
+	/// defense with hand-fired traps is just Sentry with taller scenery.
+	///
+	/// Free build ignores the split and shows everything, the way it ignores the prices: the
+	/// lobby board is for looking at things.
+	/// </summary>
+	public IReadOnlyList<HazardKind> ShopKinds
+	{
+		get
+		{
+			bool towersOnly = !FreeBuild
+							  && GameManager.Instance.Mode == GameMode.TowerDefense;
+			var kinds = new List<HazardKind>();
+
+			foreach (HazardKind kind in System.Enum.GetValues<HazardKind>())
+			{
+				bool isTower = kind == HazardKind.RocketTower;
+				if (FreeBuild || isTower == towersOnly)
+					kinds.Add(kind);
+			}
+
+			return kinds;
+		}
+	}
+
+	/// <summary>What the shop calls itself. The shelves are the mode, so the sign is too.</summary>
+	public string ShopTitle
+		=> !FreeBuild && GameManager.Instance.Mode == GameMode.TowerDefense
+			? "Turrets"
+			: "Hazards";
+
+	/// <summary>
+	/// Whether the Fire tool belongs on screen. Tower Defense has nothing to fire by hand — its
+	/// devices do their own timing — and a button that could never do anything is worse than no
+	/// button: it reads as a mechanic the player has failed to find.
+	/// </summary>
+	public bool FireToolAvailable
+		=> FreeBuild || GameManager.Instance.Mode != GameMode.TowerDefense;
+
 	private bool _hazardArmed;
 	private HazardKind _armedHazard;
 

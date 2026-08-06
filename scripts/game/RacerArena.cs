@@ -171,6 +171,17 @@ public partial class RacerArena : Node3D
     }
 
     /// <summary>
+    /// Server only. A peer now has a scene to put cars in, so re-ask every car already out there
+    /// whether it may be shown to them. Held back until this point on purpose — see
+    /// <c>RacerController.BuildSpawnGate</c> — and this is what lets them through.
+    /// </summary>
+    public void RevealTo(int peerId)
+    {
+        foreach (Node child in Racers.GetChildren())
+            (child as RacerController)?.RefreshSpawnVisibility(peerId);
+    }
+
+    /// <summary>
     /// Server only. Take away the car belonging to a peer that has left. The spawner mirrors the
     /// removal, so nobody is left staring at an abandoned car parked on the pad.
     /// </summary>

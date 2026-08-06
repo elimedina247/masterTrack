@@ -94,6 +94,19 @@ public partial class TrackPiece : StaticBody3D
 	public string DeckDescription { get; set; } = "";
 
 	/// <summary>
+	/// Whether a turret may stand on a column beside this piece. On by default, because the point
+	/// of deriving the mounting rather than authoring it is that nearly every piece gets one for
+	/// nothing — see <c>PieceCatalog.WithPylons</c>, which computes a pair off the route this
+	/// piece already publishes.
+	///
+	/// Untick it for a piece where the space either side of the road is not really empty: a
+	/// corkscrew wrapping back over itself, or anything whose shape a column would stand inside.
+	/// Costs nothing to change — the catalog reads it straight out of the saved scene.
+	/// </summary>
+	[Export]
+	public bool AllowsPylons { get; set; } = true;
+
+	/// <summary>
 	/// How hard <see cref="BankWaypoints"/> rolls the road into its corners, in degrees.
 	///
 	/// The number is a speed, and the equation is the one the hand-built corners were written

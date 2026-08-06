@@ -779,6 +779,7 @@ public partial class TilePalette : Control
         HazardKind.LogTrap => new Color(0.51f, 0.33f, 0.18f),
         HazardKind.Bullseye => new Color(0.87f, 0.12f, 0.11f),
         HazardKind.BombTrap => new Color(0.78f, 0.13f, 0.11f),
+        HazardKind.RocketTower => new Color(0.42f, 0.45f, 0.50f),
         _ => new Color(0.6f, 0.6f, 0.6f),
     };
 
@@ -789,11 +790,13 @@ public partial class TilePalette : Control
 
         BuildFundsReadout();
 
-        HazardKind[] kinds = System.Enum.GetValues<HazardKind>();
+        // Asked of the builder, not worked out here: which shelves a mode stocks is a design
+        // decision and it lives with the rest of them — see TrackMasterController.ShopKinds.
+        System.Collections.Generic.IReadOnlyList<HazardKind> kinds = Builder.ShopKinds;
 
         // Sized to its contents rather than stretched: the shop is a fixed list, and a panel with
         // empty space under the last shelf reads as a shelf that failed to load.
-        int height = 34 + kinds.Length * (ShopRowHeight + 6) + 46 + 20;
+        int height = 34 + kinds.Count * (ShopRowHeight + 6) + 46 + 20;
 
         var shop = new PanelContainer
         {
@@ -824,7 +827,7 @@ public partial class TilePalette : Control
         column.AddThemeConstantOverride("separation", 6);
         margin.AddChild(column);
 
-        var title = new Label { Text = "Hazards", MouseFilter = MouseFilterEnum.Ignore };
+        var title = new Label { Text = Builder.ShopTitle, MouseFilter = MouseFilterEnum.Ignore };
         title.AddThemeFontSizeOverride("font_size", 18);
         title.AddThemeColorOverride("font_color", new Color(0.86f, 0.88f, 0.92f));
         column.AddChild(title);
@@ -842,9 +845,10 @@ public partial class TilePalette : Control
             "Lift", "Take a placed hazard back off the road, refunded in full.\nClick this, then click the hazard.",
             new Color(0.16f, 0.34f, 0.24f, 0.95f), () => Builder?.ArmHazardLift()));
 
-        tools.AddChild(BuildShopTool(
-            "Fire", "Set off a rigged trap.\nClick this, then click the trap. Stays armed.",
-            new Color(0.42f, 0.12f, 0.12f, 0.95f), () => Builder?.ArmHazardFire()));
+        if (Builder.FireToolAvailable)
+            tools.AddChild(BuildShopTool(
+                "Fire", "Set off a rigged trap.\nClick this, then click the trap. Stays armed.",
+                new Color(0.42f, 0.12f, 0.12f, 0.95f), () => Builder?.ArmHazardFire()));
 
         RefreshShop();
     }

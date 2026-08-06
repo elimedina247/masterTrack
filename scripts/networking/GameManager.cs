@@ -56,6 +56,18 @@ public enum GameMode
     /// currently is.
     /// </summary>
     Sentry,
+
+    /// <summary>
+    /// Tower Defense. The same three phases as <see cref="Sentry"/> — build the track, furnish
+    /// it, then watch — but what the builder furnishes it with plays itself: rocket turrets on
+    /// columns beside the road, which acquire and fire on their own.
+    ///
+    /// The difference from Sentry is about <i>when the decisions happen</i>. Sentry keeps the
+    /// builder's hands busy through the race, pressing traps at the right moment; here the whole
+    /// game is spending the rig phase well, and the race is the answer coming back. Which of the
+    /// two is more fun is exactly what having both is for.
+    /// </summary>
+    TowerDefense,
 }
 
 /// <summary>
@@ -197,8 +209,19 @@ public partial class GameManager : Node
     /// <summary>Which shape of match the host picked. Replicated; see <see cref="SetGameMode"/>.</summary>
     public GameMode Mode { get; private set; } = GameMode.LiveBuild;
 
-    /// <summary>Where a Sentry match currently is. <see cref="MatchPhase.None"/> outside one.</summary>
+    /// <summary>Where a phased match currently is. <see cref="MatchPhase.None"/> outside one.</summary>
     public MatchPhase Phase { get; private set; } = MatchPhase.None;
+
+    /// <summary>
+    /// Whether this mode runs build → rig → race rather than building live under the wheels.
+    ///
+    /// Asked rather than comparing against <see cref="GameMode.Sentry"/> by name, because the
+    /// phase machine was never really about the sentry: it is about a match where the track is
+    /// finished before anybody drives on it, and Tower Defense wants exactly the same shape. Any
+    /// mode added later that furnishes a finished track gets the whole flow by answering true
+    /// here. What the modes actually differ on is what the rig phase sells.
+    /// </summary>
+    public bool IsPhasedMode => Mode is GameMode.Sentry or GameMode.TowerDefense;
 
     // The build clock. A flat floor plus a per-tile allowance, because the builder's job scales
     // with the race length the host picked: a 50-tile track deserves more wall time than a
@@ -450,7 +473,7 @@ public partial class GameManager : Node
         if (NetworkManager.Instance.IsNetworked && !NetworkManager.Instance.IsHost)
             return;
 
-        if (Mode != GameMode.Sentry || Phase != MatchPhase.None)
+        if (!IsPhasedMode || Phase != MatchPhase.None)
             return;
 
         float seconds = BuildSecondsBase + RaceLength * BuildSecondsPerTile;
@@ -840,9 +863,10 @@ public partial class GameManager : Node
             }
         }
 
-        // Everybody died. In Sentry mode that is not a draw, it is the sentry's win — wiping the
-        // pack is the role's fantasy and the board should say so with their name on it.
-        if (Mode == GameMode.Sentry && TrackMasterPeerId != 0)
+        // Everybody died. In the phased modes that is not a draw, it is the builder's win —
+        // wiping the pack is the role's fantasy and the board should say so with their name on
+        // it, whether they did it by hand or by turret.
+        if (IsPhasedMode && TrackMasterPeerId != 0)
         {
             GD.Print($"[GameManager] Every racer is down — the sentry (peer {TrackMasterPeerId}) wins.");
             DeclareWinner(TrackMasterPeerId);
@@ -1077,8 +1101,11 @@ public partial class GameManager : Node
                     Mode = GameMode.Sentry;
                 else if (value.Equals("livebuild", System.StringComparison.OrdinalIgnoreCase))
                     Mode = GameMode.LiveBuild;
+                else if (value.Equals("towers", System.StringComparison.OrdinalIgnoreCase))
+                    Mode = GameMode.TowerDefense;
                 else
-                    GD.PushWarning($"[GameManager] Unknown --mode value '{value}'. Use sentry or livebuild.");
+                    GD.PushWarning($"[GameManager] Unknown --mode value '{value}'. "
+                                   + "Use sentry, towers or livebuild.");
 
                 GD.Print($"[GameManager] Game mode set from command line: {Mode}.");
             }
@@ -1218,6 +1245,14 @@ public partial class GameManager : Node
         EmitSignal(SignalName.PeerSceneReady, peerId);
         EvaluateSceneReady();
     }
+
+    /// <summary>
+    /// Server only. Whether a peer has reported its current scene loaded, and so has somewhere
+    /// to put anything we send it. Read by the replication gate every car carries — see
+    /// <c>RacerController.BuildSpawnGate</c> — which is what stops the engine pushing cars at a
+    /// peer that is still on the main menu. Always false on a client, which never counts.
+    /// </summary>
+    public bool IsSceneReady(int peerId) => _sceneReadyPeers.Contains(peerId);
 
     /// <summary>Server only. Publish the count, and release the spawn once it is everyone.</summary>
     private void EvaluateSceneReady()

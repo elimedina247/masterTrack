@@ -31,6 +31,7 @@ public partial class MainMenu : Control
     private Button _soloButton = null!;
     private Button _buildButton = null!;
     private Button _sentryButton = null!;
+    private Button _towersButton = null!;
     private Label _statusLabel = null!;
     private CheckBox _steamCheck = null!;
     private Label _steamIdLabel = null!;
@@ -59,6 +60,8 @@ public partial class MainMenu : Control
         _buildButton.Pressed += OnBuildPressed;
         _sentryButton = GetNode<Button>("%SentryButton");
         _sentryButton.Pressed += OnSentryPressed;
+        _towersButton = GetNode<Button>("%TowersButton");
+        _towersButton.Pressed += OnTowersPressed;
 
         // The garage pane on the right — see MainMenu.Showcase.cs.
         SetupShowcase();
@@ -250,6 +253,15 @@ public partial class MainMenu : Control
         SceneFader.Instance.TransitionTo(GameScenePath);
     }
 
+    /// <summary>The same solo match in Tower Defense shape: build the track, then spend the rig
+    /// phase putting turrets on the columns beside it and watch them work.</summary>
+    private void OnTowersPressed()
+    {
+        GameManager.Instance.SoloRole = PlayerRole.TrackMaster;
+        GameManager.Instance.SetGameMode(GameMode.TowerDefense);
+        SceneFader.Instance.TransitionTo(GameScenePath);
+    }
+
     // ---- Network callbacks ----
 
     /// <summary>
@@ -292,6 +304,7 @@ public partial class MainMenu : Control
         _soloButton.Disabled = true;
         _buildButton.Disabled = true;
         _sentryButton.Disabled = true;
+        _towersButton.Disabled = true;
     }
 
     private void UnlockLobbyButtons()
@@ -301,5 +314,6 @@ public partial class MainMenu : Control
         _soloButton.Disabled = false;
         _buildButton.Disabled = false;
         _sentryButton.Disabled = false;
+        _towersButton.Disabled = false;
     }
 }

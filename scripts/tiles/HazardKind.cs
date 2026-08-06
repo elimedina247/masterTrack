@@ -40,6 +40,13 @@ public enum HazardKind
     /// <summary>A charge on the road that the sentry lights by hand: a short fuse, then a blast
     /// that owns the whole stretch it sits on.</summary>
     BombTrap,
+
+    /// <summary>
+    /// A rocket turret on a column beside the road, reached by a short bridge. The first hazard
+    /// that plays itself: it acquires, leads and fires without anybody pressing anything, which
+    /// is what Tower Defense mode is about — the builder's whole decision is <i>where</i>.
+    /// </summary>
+    RocketTower,
 }
 
 /// <summary>
@@ -60,6 +67,21 @@ public enum HazardSlotKind
 
     /// <summary>Spans the full width: gates, log traps.</summary>
     FullWidth,
+
+    /// <summary>
+    /// Off the side of the road entirely: a column standing in the air beside the tile, joined
+    /// to it by a short bridge. The first mounting that is <b>derived rather than authored</b> —
+    /// <see cref="Tool.PieceCatalog"/> computes one of these on each side of every piece from the
+    /// route it already reads, so a turret can go beside nearly any tile without twenty piece
+    /// scenes being opened. See <c>DerivePylonSlots</c>.
+    ///
+    /// <b>Its frame breaks the usual convention on purpose:</b> local <c>+X</c> points at the
+    /// road rather than <c>-Z</c> pointing along travel, because what a thing on a column needs
+    /// to know is which way the road is, and the two sides of a tile disagree about that. Nothing
+    /// that mounts here cares about the direction of travel — a turret turns to face whatever it
+    /// is shooting at.
+    /// </summary>
+    Pylon,
 }
 
 public static class HazardKindExtensions
@@ -73,6 +95,7 @@ public static class HazardKindExtensions
         HazardKind.LogTrap => "Log Trap",
         HazardKind.Bullseye => "Bullseye",
         HazardKind.BombTrap => "Bomb Trap",
+        HazardKind.RocketTower => "Rocket Tower",
         _ => kind.ToString(),
     };
 
@@ -104,6 +127,21 @@ public static class HazardKindExtensions
         // The cheap decisive one: no throw, no machinery, just a circle of road nobody may be
         // standing in two seconds from now.
         HazardKind.BombTrap => 65,
+        // Cheap, and priced by a different rule from everything above it.
+        //
+        // The traps are priced as *moments* — a spring trap is one decision the sentry makes at
+        // one instant, and six of them is a full rig. A turret is not a moment, it is a stretch
+        // of road that is now dangerous, and tower defense is a genre about a **line** of them:
+        // the pleasure is watching a route you covered do its work, and you cannot cover a route
+        // with four of anything. At this price a twenty-tile track carries about a dozen, which
+        // is roughly one every other tile — sparse enough to leave gaps worth finding, dense
+        // enough to read as a gauntlet.
+        //
+        // It was 110 on the argument that a turret asks nothing of the builder after purchase and
+        // should pay for that. True, and beside the point: that argument sets the price of the
+        // builder's attention when what the mode needed was a price that buys enough turrets to
+        // be a plan.
+        HazardKind.RocketTower => 40,
         _ => 50,
     };
 
@@ -116,6 +154,7 @@ public static class HazardKindExtensions
         HazardKind.LogTrap => "You cut it loose. Sweeps the middle of the road.",
         HazardKind.Bullseye => "You call it in. A missile lands on the mark.",
         HazardKind.BombTrap => "You light it. Two seconds, then it takes the road.",
+        HazardKind.RocketTower => "Stands beside the road and shoots whoever is closest.",
         _ => "",
     };
 
@@ -131,6 +170,8 @@ public static class HazardKindExtensions
         HazardKind.LogTrap => HazardSlotKind.FullWidth,
         HazardKind.Bullseye => HazardSlotKind.Surface,
         HazardKind.BombTrap => HazardSlotKind.Surface,
+        // The only thing that mounts off the road, and the reason the mounting exists.
+        HazardKind.RocketTower => HazardSlotKind.Pylon,
         _ => HazardSlotKind.Surface,
     };
 }

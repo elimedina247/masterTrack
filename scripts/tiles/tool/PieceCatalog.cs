@@ -255,15 +255,17 @@ public static class PieceCatalog
 				continue;
 			}
 
-			(float weight, string description) = ReadDeck(state);
+			(float weight, string description, bool pylons) = ReadDeck(state);
+
+			IReadOnlyList<Vector3> route = ReadRoute(state, seams);
 
 			entries.Add(new PieceEntry
 			{
 				ScenePath = path,
 				Name = path.GetFile().GetBaseName(),
 				Seams = seams,
-				Slots = ReadSlots(state, seams),
-				Route = ReadRoute(state, seams),
+				Slots = WithPylons(ReadSlots(state, seams), route, pylons),
+				Route = route,
 				DeckWeight = weight,
 				DeckDescription = description,
 				IsBaked = HasNodeNamed(state, "BakedMesh"),
@@ -288,13 +290,14 @@ public static class PieceCatalog
 	/// The deck settings off the scene's root node. A scene file only stores what differs from the
 	/// class defaults, so the fallbacks here are exactly <see cref="TrackPiece"/>'s own.
 	/// </summary>
-	private static (float Weight, string Description) ReadDeck(SceneState state)
+	private static (float Weight, string Description, bool Pylons) ReadDeck(SceneState state)
 	{
 		var weight = 4.0f;
 		var description = "";
+		var pylons = true;
 
 		if (state.GetNodeCount() == 0)
-			return (weight, description);
+			return (weight, description, pylons);
 
 		// The root is always the scene state's first node — no path spelling to second-guess.
 		for (var p = 0; p < state.GetNodePropertyCount(0); p++)
@@ -308,10 +311,112 @@ public static class PieceCatalog
 				case "DeckDescription":
 					description = state.GetNodePropertyValue(0, p).AsString();
 					break;
+
+				case "AllowsPylons":
+					pylons = state.GetNodePropertyValue(0, p).AsBool();
+					break;
 			}
 		}
 
-		return (weight, description);
+		return (weight, description, pylons);
+	}
+
+	/// <summary>How far out from the road's spine a pylon stands, in metres. Half the road plus a
+	/// gap the bridge spans — see <see cref="TrackPiece.AllowsPylons"/> for why this is derived
+	/// rather than authored.</summary>
+	public const float PylonOffset = TileCatalog.TileSize * 0.5f + 9.0f;
+
+	/// <summary>How far along the route the pair sits, as a fraction of its length. The middle:
+	/// the one point on any piece — straight, corner, hairpin — that is unambiguously "beside
+	/// this tile" rather than beside the join with the next one.</summary>
+	private const float PylonAlong = 0.5f;
+
+	/// <summary>
+	/// Append the derived <see cref="HazardSlotKind.Pylon"/> pair to a piece's authored slots:
+	/// one on each side of the road, level with it, at the middle of the route.
+	///
+	/// <b>Derived rather than authored, and that is the whole trick.</b> A turret needs somewhere
+	/// to stand beside nearly every piece in the catalog, and hand-placing a marker into twenty
+	/// scenes would be twenty chances to get it wrong and twenty files to redo whenever the road
+	/// width moves. Everything needed is already here: <see cref="PieceEntry.Route"/> is the road's
+	/// course in the entry frame, and a point either side of its midpoint is exactly what a column
+	/// wants. A piece opts out with <see cref="TrackPiece.AllowsPylons"/>.
+	///
+	/// This is safe to put on the wire for the same reason the seams are: it is computed from the
+	/// same byte-identical scene file on every machine, by this same code, so every peer numbers
+	/// the slots identically. <b>Appended after the authored slots</b>, so no existing slot index
+	/// moves and hazards placed by an older build still address what they always did.
+	/// </summary>
+	private static IReadOnlyList<PieceSlot> WithPylons(
+		IReadOnlyList<PieceSlot> authored, IReadOnlyList<Vector3> route, bool allowed)
+	{
+		if (!allowed || route.Count < 2)
+			return authored;
+
+		if (RouteMidpoint(route) is not { } middle)
+			return authored;
+
+		// Flattened, because a column stands up out of the world rather than out of the road. On
+		// a piece climbing hard the tangent has real pitch in it, and a pylon frame built from
+		// that would lean its tower over the track.
+		var flat = new Vector3(middle.Tangent.X, 0.0f, middle.Tangent.Z);
+		if (flat.LengthSquared() < 0.0001f)
+			// Nothing sensible to be beside: the road is going straight up or down here.
+			return authored;
+
+		flat = flat.Normalized();
+		Vector3 right = flat.Cross(Vector3.Up).Normalized();
+
+		var slots = new List<PieceSlot>(authored);
+
+		// Right of the road first, then left. Fixed order, because the index is the address.
+		slots.Add(PylonSlot(middle.At + right * PylonOffset, -right));
+		slots.Add(PylonSlot(middle.At - right * PylonOffset, right));
+
+		return slots;
+	}
+
+	/// <summary>One pylon frame: standing on the world's up, with local <c>+X</c> pointing back at
+	/// the road, which is the convention <see cref="HazardSlotKind.Pylon"/> declares.</summary>
+	private static PieceSlot PylonSlot(Vector3 at, Vector3 towardRoad) => new()
+	{
+		Local = new Transform3D(
+			new Basis(towardRoad, Vector3.Up, towardRoad.Cross(Vector3.Up)), at),
+		Kind = HazardSlotKind.Pylon,
+	};
+
+	/// <summary>The point half way along a route by arc length, and the direction the road is
+	/// running as it passes through it.</summary>
+	private static (Vector3 At, Vector3 Tangent)? RouteMidpoint(IReadOnlyList<Vector3> route)
+	{
+		var total = 0.0f;
+		for (var i = 1; i < route.Count; i++)
+			total += route[i].DistanceTo(route[i - 1]);
+
+		if (total < 0.001f)
+			return null;
+
+		float wanted = total * PylonAlong;
+		var travelled = 0.0f;
+
+		for (var i = 1; i < route.Count; i++)
+		{
+			float span = route[i].DistanceTo(route[i - 1]);
+			if (span < 0.0001f)
+				continue;
+
+			if (travelled + span < wanted)
+			{
+				travelled += span;
+				continue;
+			}
+
+			Vector3 step = route[i] - route[i - 1];
+			return (route[i - 1] + step * ((wanted - travelled) / span), step / span);
+		}
+
+		Vector3 last = route[^1] - route[^2];
+		return (route[^1], last.LengthSquared() > 0.0001f ? last.Normalized() : Vector3.Forward);
 	}
 
 	/// <summary>
